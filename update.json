@@ -1,0 +1,8 @@
+{
+  "latestVersion": "1.0.2",
+  "minimumSupportedVersion": "1.0.0",
+  "updateTitle": "🚀 New Update Available",
+  "updateMessage": "Bug fixes, AI improvements, dashboard synchronization, and timetable enhancements.",
+  "downloadUrl": "YOUR_APK_DOWNLOAD_LINK",
+  "forceUpdate": false
+}
