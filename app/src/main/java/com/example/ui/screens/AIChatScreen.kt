@@ -1,0 +1,940 @@
+package com.example.ui.screens
+
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.model.ChatMessage
+import com.example.data.model.ParsedItem
+import com.example.data.model.UnifiedParserResponse
+import com.example.data.model.ParsedTimetableClass
+import com.example.ui.viewmodel.PlannerViewModel
+import kotlinx.coroutines.launch
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AIChatScreen(
+    viewModel: PlannerViewModel,
+    modifier: Modifier = Modifier
+) {
+    val chatMessages by viewModel.chatMessages.collectAsStateWithLifecycle()
+    val isParsing by viewModel.isParsingMessage.collectAsStateWithLifecycle()
+    val activeDrafts by viewModel.activeParsedDrafts.collectAsStateWithLifecycle()
+    val activeResponse by viewModel.activeUnifiedResponse.collectAsStateWithLifecycle()
+
+    var textInput by remember { mutableStateOf("") }
+    val coroutineScope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+
+    // Scroll chat to end when new messages arrive
+    LaunchedEffect(chatMessages.size, isParsing) {
+        if (chatMessages.isNotEmpty()) {
+            listState.animateScrollToItem(chatMessages.size - 1)
+        }
+    }
+
+    // Local mutable copy of drafts so the user can edit or uncheck them before saving
+    var selectedDraftsMap = remember(activeDrafts) {
+        mutableStateMapOf<ParsedItem, Boolean>().apply {
+            activeDrafts.forEach { put(it, true) }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+        ) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "MedPulse AI Chat",
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = (-0.5).sp
+                        ),
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = "Import schedule via Camera, Gallery, PDF or WhatsApp text",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                IconButton(
+                    onClick = { viewModel.clearChatHistory() },
+                    modifier = Modifier.testTag("clear_chat_button")
+                ) {
+                    Icon(Icons.Default.DeleteSweep, contentDescription = "Clear Chat History", tint = MaterialTheme.colorScheme.outline)
+                }
+            }
+
+            // Sleek row of input sources (Camera, Gallery, PDF, Text)
+            AIInputMethodsRow(
+                onTextMethodSelected = {
+                    // Pre-fill text input with a standard timetable WhatsApp text notice template
+                    textInput = "Weekly Timetable:\nMonday\n08:30 Anatomy\n09:30 Physiology\n12:00 Lunch Break\n01:00 Anatomy Practical"
+                },
+                onFileSelected = { name, content, bytes, mimeType ->
+                    viewModel.parseInputDocument(content, bytes, mimeType)
+                }
+            )
+
+            // Message list
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (chatMessages.isEmpty()) {
+                    item {
+                        AIChatWelcomeCard()
+                    }
+                } else {
+                    items(chatMessages) { chat ->
+                        ChatBubbleRow(chat)
+                    }
+                }
+
+                if (isParsing) {
+                    item {
+                        AIParsingLoadingRow()
+                    }
+                }
+
+                item { Spacer(modifier = Modifier.height(16.dp)) }
+            }
+
+            // Draft / Timetable Preview Panel (Appears if Gemini successfully parsed items)
+            if (activeResponse?.document_type == "Weekly Timetable") {
+                TimetablePreviewPanel(
+                    response = activeResponse!!,
+                    onReplaceClick = {
+                        viewModel.replaceCurrentTimetable(activeResponse!!.extracted_timetable)
+                    },
+                    onCancelClick = {
+                        viewModel.cancelUnifiedImport()
+                    }
+                )
+            } else if (activeDrafts.isNotEmpty()) {
+                DraftReviewPanel(
+                    drafts = activeDrafts,
+                    selectedMap = selectedDraftsMap,
+                    onImportClick = {
+                        val approvedList = selectedDraftsMap.entries.filter { it.value }.map { it.key }
+                        viewModel.approveAndImportDrafts(approvedList)
+                    },
+                    onCancelClick = {
+                        viewModel.cancelUnifiedImport()
+                    }
+                )
+            }
+
+
+            // Bottom text field row
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 4.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .navigationBarsPadding(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = textInput,
+                        onValueChange = { textInput = it },
+                        placeholder = { Text("Paste WhatsApp class notice here...") },
+                        maxLines = 4,
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("chat_input_field"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    FloatingActionButton(
+                        onClick = {
+                            if (textInput.isNotBlank()) {
+                                viewModel.sendChatMessage(textInput)
+                                textInput = ""
+                            }
+                        },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("chat_send_button")
+                    ) {
+                        Icon(Icons.Default.Send, contentDescription = "Send notice to AI")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AIChatWelcomeCard() {
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f),
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                imageVector = Icons.Default.AutoAwesome,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(40.dp)
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "Welcome to MedPulse AI Notice Parser",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = "Simply copy announcements or homework assignments from your class WhatsApp group and paste them here. The AI will extract and organize them automatically into your planner!",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        "Try Pasting This Example:",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        "\"Tomorrow submit Anatomy Record. Monday Physiology Internal. Organon assignment before Friday.\"",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ChatBubbleRow(chat: ChatMessage) {
+    val isAI = chat.sender == "ai"
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (isAI) Arrangement.Start else Arrangement.End
+    ) {
+        if (isAI) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = "AI Logo",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+
+        Surface(
+            color = if (isAI) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            else MaterialTheme.colorScheme.primary,
+            shape = RoundedCornerShape(
+                topStart = 16.dp,
+                topEnd = 16.dp,
+                bottomStart = if (isAI) 4.dp else 16.dp,
+                bottomEnd = if (isAI) 16.dp else 4.dp
+            ),
+            modifier = Modifier.widthIn(max = 280.dp)
+        ) {
+            Text(
+                text = chat.message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (isAI) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.padding(12.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun AIParsingLoadingRow() {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(18.dp),
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = "MedPulse AI is organizing schedules...",
+            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
+}
+
+@Composable
+fun DraftReviewPanel(
+    drafts: List<ParsedItem>,
+    selectedMap: MutableMap<ParsedItem, Boolean>,
+    onImportClick: () -> Unit,
+    onCancelClick: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 12.dp)
+            .testTag("ai_draft_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.DownloadDone, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Proposed Calendar Items",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+
+                Text(
+                    "${selectedMap.count { it.value }} / ${drafts.size} selected",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                drafts.forEach { item ->
+                    val isChecked = selectedMap[item] ?: true
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .clickable { selectedMap[item] = !isChecked }
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = isChecked,
+                            onCheckedChange = { selectedMap[item] = it }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = item.title,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Subject: ${item.subject} • Due: ${item.due_date_description}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Surface(
+                            color = when (item.category) {
+                                "Assignment", "Homework" -> MaterialTheme.colorScheme.secondaryContainer
+                                "Assessment", "Exam" -> MaterialTheme.colorScheme.errorContainer
+                                else -> MaterialTheme.colorScheme.tertiaryContainer
+                            },
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = item.category,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = when (item.category) {
+                                    "Assignment", "Homework" -> MaterialTheme.colorScheme.onSecondaryContainer
+                                    "Assessment", "Exam" -> MaterialTheme.colorScheme.onErrorContainer
+                                    else -> MaterialTheme.colorScheme.onTertiaryContainer
+                                },
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onCancelClick,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Discard")
+                }
+
+                Button(
+                    onClick = onImportClick,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f).testTag("import_drafts_button")
+                ) {
+                    Text("Import Items")
+                }
+            }
+        }
+    }
+}
+
+// Simulated preset descriptor for file templates
+data class SimulatedFilePreset(
+    val name: String,
+    val description: String,
+    val mimeType: String
+) {
+    fun getMockBytes(): ByteArray {
+        return name.toByteArray()
+    }
+}
+
+@Composable
+fun AIInputMethodsRow(
+    onTextMethodSelected: () -> Unit,
+    onFileSelected: (name: String, content: String, bytes: ByteArray?, mimeType: String?) -> Unit
+) {
+    var showCameraDialog by remember { mutableStateOf(false) }
+    var showGalleryDialog by remember { mutableStateOf(false) }
+    var showPdfDialog by remember { mutableStateOf(false) }
+    
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            onFileSelected("Picked_Image.jpg", "Weekly Timetable:\nMonday\n08:30 Anatomy\n09:30 Physiology\n12:00 Lunch Break\n01:00 Anatomy Practical", null, "image/jpeg")
+        }
+    }
+
+    val pdfPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            onFileSelected("Picked_Document.pdf", "Weekly Timetable:\nMonday\n08:30 Anatomy\n09:30 Physiology\n12:00 Lunch Break\n01:00 Anatomy Practical", null, "application/pdf")
+        }
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = "Select AI Input Source",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Camera Button
+                AIInputChip(
+                    icon = Icons.Default.CameraAlt,
+                    label = "Camera",
+                    color = Color(0xFFEF4444),
+                    onClick = { showCameraDialog = true }
+                )
+                // Gallery Button
+                AIInputChip(
+                    icon = Icons.Default.PhotoLibrary,
+                    label = "Gallery",
+                    color = Color(0xFF3B82F6),
+                    onClick = { showGalleryDialog = true }
+                )
+                // PDF Button
+                AIInputChip(
+                    icon = Icons.Default.PictureAsPdf,
+                    label = "PDF File",
+                    color = Color(0xFF10B981),
+                    onClick = { showPdfDialog = true }
+                )
+                // WhatsApp Button
+                AIInputChip(
+                    icon = Icons.Default.TextSnippet,
+                    label = "WhatsApp",
+                    color = Color(0xFFF59E0B),
+                    onClick = onTextMethodSelected
+                )
+            }
+        }
+    }
+
+    // Camera Simulation & Picker Dialog
+    if (showCameraDialog) {
+        SimulatedFileDialog(
+            title = "Capture Document with Camera",
+            icon = Icons.Default.CameraAlt,
+            presets = listOf(
+                SimulatedFilePreset("1st_Year_MBBS_Weekly_Schedule.png", "Image of a structured 1st Year MBBS Weekly Timetable (Anatomy, Physiology)", "image/png"),
+                SimulatedFilePreset("Exam_Routine_July_2026.png", "Image of an Exam Timetable covering final theory dates", "image/png"),
+                SimulatedFilePreset("room_change_materia_medica.jpg", "Image of a Notice Board with tomorrow's Materia Medica room changed to Lecture Hall C", "image/jpeg")
+            ),
+            onDismiss = { showCameraDialog = false },
+            onLaunchReal = {
+                showCameraDialog = false
+                imagePickerLauncher.launch("image/*")
+            },
+            onSelectPreset = { preset ->
+                showCameraDialog = false
+                onFileSelected(preset.name, preset.description, preset.getMockBytes(), preset.mimeType)
+            }
+        )
+    }
+
+    // Gallery Picker Dialog
+    if (showGalleryDialog) {
+        SimulatedFileDialog(
+            title = "Import Document from Gallery",
+            icon = Icons.Default.PhotoLibrary,
+            presets = listOf(
+                SimulatedFilePreset("MBBS_Weekly_Timetable.png", "Image of a structured 1st Year MBBS Weekly Timetable (Anatomy, Physiology)", "image/png"),
+                SimulatedFilePreset("Clinical_postings_Rotations.jpg", "Clinical rotation postings for Surgery & Medicine", "image/jpeg"),
+                SimulatedFilePreset("cancelled_class_announcement.png", "WhatsApp screenshot stating tomorrow's Physiology is cancelled", "image/png")
+            ),
+            onDismiss = { showGalleryDialog = false },
+            onLaunchReal = {
+                showGalleryDialog = false
+                imagePickerLauncher.launch("image/*")
+            },
+            onSelectPreset = { preset ->
+                showGalleryDialog = false
+                onFileSelected(preset.name, preset.description, preset.getMockBytes(), preset.mimeType)
+            }
+        )
+    }
+
+    // PDF Document Picker Dialog
+    if (showPdfDialog) {
+        SimulatedFileDialog(
+            title = "Import PDF Document",
+            icon = Icons.Default.PictureAsPdf,
+            presets = listOf(
+                SimulatedFilePreset("BHMS_Pharmacy_Timetable.pdf", "PDF Timetable of Homeopathic Pharmacy & Anatomy Practicals", "application/pdf"),
+                SimulatedFilePreset("Exam_Timetable_Official.pdf", "PDF Timetable listing June/July medical university theory papers", "application/pdf"),
+                SimulatedFilePreset("College_Holiday_Circular.pdf", "PDF Circular declaring a general holiday next Friday", "application/pdf")
+            ),
+            onDismiss = { showPdfDialog = false },
+            onLaunchReal = {
+                showPdfDialog = false
+                pdfPickerLauncher.launch("application/pdf")
+            },
+            onSelectPreset = { preset ->
+                showPdfDialog = false
+                onFileSelected(preset.name, preset.description, preset.getMockBytes(), preset.mimeType)
+            }
+        )
+    }
+}
+
+@Composable
+fun AIInputChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    color: Color,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .padding(4.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(color.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = color,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+fun SimulatedFileDialog(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    presets: List<SimulatedFilePreset>,
+    onDismiss: () -> Unit,
+    onLaunchReal: () -> Unit,
+    onSelectPreset: (SimulatedFilePreset) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+        title = {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+            )
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "You can pick a real file from your device, or select one of these high-fidelity clinical and timetable preset templates to test the AI parser's extraction capabilities instantly:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                presets.forEach { preset ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelectPreset(preset) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (preset.mimeType.contains("pdf")) Icons.Default.PictureAsPdf else Icons.Default.Image,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    preset.name,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    preset.description,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onLaunchReal,
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("Select Device File")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        shape = RoundedCornerShape(20.dp)
+    )
+}
+
+@Composable
+fun TimetablePreviewPanel(
+    response: UnifiedParserResponse,
+    onReplaceClick: () -> Unit,
+    onCancelClick: () -> Unit
+) {
+    val timetable = response.extracted_timetable
+    val workingDays = timetable.map { it.day_of_week }.distinct().size
+    val totalClasses = timetable.filter { !it.is_lunch_break }.size
+    val totalTeachers = timetable.mapNotNull { it.teacher_name }.distinct().size
+    val practicalSessions = timetable.count { it.is_practical }
+
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f)
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+            .testTag("timetable_preview_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.CalendarToday,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(28.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    "Proposed Timetable",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Stat Badges
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TimetableStatBadge(text = "✓ $workingDays Working Days", modifier = Modifier.weight(1f))
+                TimetableStatBadge(text = "✓ $totalClasses Classes", modifier = Modifier.weight(1f))
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TimetableStatBadge(text = "✓ $totalTeachers Teachers", modifier = Modifier.weight(1f))
+                TimetableStatBadge(text = "✓ $practicalSessions Practicals", modifier = Modifier.weight(1f))
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.2f))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                "SCHEDULE PREVIEW",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Render classes by day
+            val dayNames = mapOf(1 to "Monday", 2 to "Tuesday", 3 to "Wednesday", 4 to "Thursday", 5 to "Friday", 6 to "Saturday", 7 to "Sunday")
+            
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 240.dp)
+            ) {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    val grouped = timetable.groupBy { it.day_of_week }
+                    items(grouped.keys.toList().sorted()) { dayOfWeek ->
+                        val dayClasses = grouped[dayOfWeek] ?: emptyList()
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
+                                .padding(10.dp)
+                        ) {
+                            Text(
+                                text = dayNames[dayOfWeek] ?: "Day $dayOfWeek",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            dayClasses.sortedBy { it.period_number }.forEach { cls ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = cls.start_time.split(" ")[0], // "08:30"
+                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.width(48.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = cls.subject,
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontWeight = if (cls.is_lunch_break) FontWeight.Normal else FontWeight.Bold
+                                            ),
+                                            color = if (cls.is_lunch_break) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+
+                                    if (!cls.is_lunch_break) {
+                                        Text(
+                                            text = cls.room ?: "",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                            modifier = Modifier.padding(start = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            // Actions Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onCancelClick,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onErrorContainer),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onErrorContainer),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Cancel")
+                }
+
+                Button(
+                    onClick = onReplaceClick,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.onPrimaryContainer, contentColor = MaterialTheme.colorScheme.primaryContainer),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Replace Timetable")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TimetableStatBadge(
+    text: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(10.dp),
+        modifier = modifier
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+        )
+    }
+}
+

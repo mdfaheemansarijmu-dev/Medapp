@@ -1,0 +1,6 @@
+{
+  "name": "MedPulse",
+  "description": "An intelligent academic coordinator for medical students (MBBS, BHMS, BDS, Nursing) to track lectures, exams, assignments, and parse WhatsApp group notifications with AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
