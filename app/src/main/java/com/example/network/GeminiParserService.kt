@@ -4,6 +4,7 @@ import android.util.Base64
 import android.util.Log
 import com.example.BuildConfig
 import com.example.data.model.*
+import com.example.util.BitmapUtils
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
@@ -19,6 +20,9 @@ import retrofit2.http.Body
 import retrofit2.http.POST
 import retrofit2.http.Query
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 @JsonClass(generateAdapter = true)
 data class InlineData(
@@ -101,6 +105,32 @@ object RetrofitClient {
 class GeminiParserService {
     private val apiKey = BuildConfig.GEMINI_API_KEY
 
+    private suspend fun recognizeTextFromBitmap(bitmap: android.graphics.Bitmap): String = suspendCancellableCoroutine { continuation ->
+        try {
+            val image = com.google.mlkit.vision.common.InputImage.fromBitmap(bitmap, 0)
+            val recognizer = com.google.mlkit.vision.text.TextRecognition.getClient(com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS)
+            recognizer.process(image)
+                .addOnSuccessListener { visionText ->
+                    val resultText = StringBuilder()
+                    for (block in visionText.textBlocks) {
+                        for (line in block.lines) {
+                            val frame = line.boundingBox
+                            val text = line.text
+                            resultText.append("Text: \"$text\", Box: [L=${frame?.left}, T=${frame?.top}, R=${frame?.right}, B=${frame?.bottom}]\n")
+                        }
+                    }
+                    recognizer.close()
+                    continuation.resume(resultText.toString())
+                }
+                .addOnFailureListener { exception ->
+                    recognizer.close()
+                    continuation.resumeWithException(exception)
+                }
+        } catch (e: Exception) {
+            continuation.resumeWithException(e)
+        }
+    }
+
     suspend fun parseDocument(
         textInput: String?,
         imageBytes: ByteArray?,
@@ -112,6 +142,23 @@ class GeminiParserService {
         if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
             Log.e("GeminiParser", "Gemini API Key is not configured in .env!")
             return@withContext getLocalFallbackResponse(inputPrompt, hasImage, mimeType)
+        }
+
+        var processedImageBytes = imageBytes
+        var ocrText = ""
+        if (hasImage && imageBytes != null) {
+            try {
+                Log.d("GeminiParser", "Preprocessing image (rotating and enhancing contrast)...")
+                val enhancedBitmap = BitmapUtils.rotateAndEnhanceImage(imageBytes)
+                
+                Log.d("GeminiParser", "Running local high-precision ML Kit OCR...")
+                ocrText = recognizeTextFromBitmap(enhancedBitmap)
+                Log.d("GeminiParser", "OCR Extracted Text:\n$ocrText")
+                
+                processedImageBytes = BitmapUtils.bitmapToByteArray(enhancedBitmap)
+            } catch (e: Exception) {
+                Log.e("GeminiParser", "Error rotating/enhancing or doing OCR: ${e.message}", e)
+            }
         }
 
         val prompt = """
@@ -130,6 +177,7 @@ class GeminiParserService {
             If you detect the schedule is a TEMPORARY override change (e.g. "Tomorrow only", "Today's class cancelled", "Teacher changed", "Room changed" for a specific date), set is_temporary_override = true and extract the details.
 
             For a "Weekly Timetable", you MUST extract all classes/periods into the "extracted_timetable" array.
+            Be extremely thorough! Ensure EVERY SINGLE row and column is detected, and no classes/recess periods are missed.
             For each class:
             - day_of_week: Integer (1 = Monday, 2 = Tuesday, 3 = Wednesday, 4 = Thursday, 5 = Friday, 6 = Saturday, 7 = Sunday)
             - period_number: Integer (1, 2, 3, etc.)
@@ -140,6 +188,9 @@ class GeminiParserService {
             - room: String or null (e.g., "Dissection Hall")
             - is_practical: Boolean (true if it's a lab, practical, dissection, clinical posting)
             - is_lunch_break: Boolean (true if it's a lunch or recess break)
+            - confidence: String ("High", "Medium", or "Low"). Set "Medium" or "Low" if text is blurry, truncated, layout is hard to align, or you had to guess any field.
+            - is_uncertain: Boolean (true if confidence is "Medium" or "Low")
+            - notes: String or null (Reason for low/medium confidence, e.g., "blurry column header", "subject text cut off")
 
             For other notices, or if is_temporary_override is true, extract individual tasks, exams, overrides, or events into the "extracted_items" array.
             Each item:
@@ -149,6 +200,8 @@ class GeminiParserService {
             - due_date_description: Due date description as found in text (e.g., "Tomorrow", "Next Monday", "2026-07-02")
             - priority: "High", "Medium", or "Low"
             - details: Brief notes or additional info
+
+            ${if (ocrText.isNotBlank()) "LOCAL OCR SPATIAL RECONSTRUCTION:\nUse this local high-precision spatial text with coordinates to align and map rows and columns perfectly. Ensure NO row or column is missed:\n$ocrText\n" else ""}
 
             Input to analyze:
             "$inputPrompt"
@@ -168,7 +221,10 @@ class GeminiParserService {
                   "teacher_name": "Dr. Sharma",
                   "room": "Lecture Hall A",
                   "is_practical": false,
-                  "is_lunch_break": false
+                  "is_lunch_break": false,
+                  "confidence": "High",
+                  "is_uncertain": false,
+                  "notes": null
                 }
               ],
               "extracted_items": [
@@ -187,7 +243,7 @@ class GeminiParserService {
         val parts = mutableListOf<GeminiPart>()
         parts.add(GeminiPart(text = prompt))
         if (hasImage) {
-            val base64Data = Base64.encodeToString(imageBytes, Base64.NO_WRAP)
+            val base64Data = Base64.encodeToString(processedImageBytes, Base64.NO_WRAP)
             parts.add(GeminiPart(inlineData = InlineData(mimeType = mimeType!!, data = base64Data)))
         }
 

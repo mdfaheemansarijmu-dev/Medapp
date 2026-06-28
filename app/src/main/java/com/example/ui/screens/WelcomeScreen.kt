@@ -28,6 +28,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.MedicalCourse
 import com.example.ui.viewmodel.PlannerViewModel
 import com.example.ui.viewmodel.LoginMode
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import android.app.Activity
+import android.widget.Toast
 
 @Composable
 fun WelcomeScreen(
@@ -36,16 +44,56 @@ fun WelcomeScreen(
 ) {
     val loginMode by viewModel.loginMode.collectAsStateWithLifecycle()
     var selectedItem by remember { mutableStateOf<MedicalCourse?>(null) }
-    var showGoogleChooser by remember { mutableStateOf(false) }
+    
+    val context = LocalContext.current
+    val isAuthenticating by viewModel.isAuthenticating.collectAsStateWithLifecycle()
+    val authError by viewModel.authError.collectAsStateWithLifecycle()
 
-    if (showGoogleChooser) {
-        GoogleAccountChooserDialog(
-            onAccountSelected = { name, email, dpUrl ->
-                viewModel.signInWithGoogle(name, email, dpUrl)
-                showGoogleChooser = false
-            },
-            onDismiss = { showGoogleChooser = false }
-        )
+    val gso = remember {
+        GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestProfile()
+            .build()
+    }
+    val googleSignInClient = remember(context, gso) {
+        GoogleSignIn.getClient(context, gso)
+    }
+
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+            try {
+                val account = task.getResult(ApiException::class.java)
+                val name = account.displayName ?: "Google User"
+                val email = account.email ?: ""
+                val photoUrl = account.photoUrl?.toString() ?: ""
+                val id = account.id ?: ""
+                
+                viewModel.signInWithGoogle(name, email, photoUrl, id)
+            } catch (e: ApiException) {
+                val errorMsg = when (e.statusCode) {
+                    com.google.android.gms.common.api.CommonStatusCodes.NETWORK_ERROR -> "No internet connection. Please check your network and try again."
+                    com.google.android.gms.common.api.CommonStatusCodes.SIGN_IN_REQUIRED -> "Google sign-in required."
+                    else -> "Authentication failed: ${e.message ?: "Unknown error"}"
+                }
+                viewModel.setAuthError(errorMsg)
+                Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+            }
+        } else if (result.resultCode == Activity.RESULT_CANCELED) {
+            viewModel.setAuthError("Sign-in cancelled")
+            Toast.makeText(context, "Sign-in cancelled", Toast.LENGTH_SHORT).show()
+        } else {
+            viewModel.setAuthError("Sign-in failed (code: ${result.resultCode})")
+            Toast.makeText(context, "Sign-in failed", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun isPlayServicesAvailable(context: android.content.Context): Boolean {
+        val googleApiAvailability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
+        val resultCode = googleApiAvailability.isGooglePlayServicesAvailable(context)
+        return resultCode == com.google.android.gms.common.ConnectionResult.SUCCESS
     }
 
     Box(
@@ -72,8 +120,25 @@ fun WelcomeScreen(
         ) { mode ->
             if (mode == LoginMode.UNDECIDED) {
                 OnboardingLoginChoice(
-                    onGoogleClick = { showGoogleChooser = true },
-                    onGuestClick = { viewModel.setGuestMode() }
+                    isAuthenticating = isAuthenticating,
+                    authError = authError,
+                    onGoogleClick = {
+                        if (!isPlayServicesAvailable(context)) {
+                            viewModel.setAuthError("Google Play Services are unavailable.")
+                            Toast.makeText(context, "Google Play Services are unavailable on this device.", Toast.LENGTH_LONG).show()
+                        } else if (!isAuthenticating) {
+                            viewModel.setAuthenticating(true)
+                            viewModel.setAuthError(null)
+                            googleSignInClient.signOut().addOnCompleteListener {
+                                googleSignInLauncher.launch(googleSignInClient.signInIntent)
+                            }
+                        }
+                    },
+                    onGuestClick = {
+                        if (!isAuthenticating) {
+                            viewModel.setGuestMode()
+                        }
+                    }
                 )
             } else {
                 Column(
@@ -243,6 +308,8 @@ fun WelcomeScreen(
 
 @Composable
 fun OnboardingLoginChoice(
+    isAuthenticating: Boolean,
+    authError: String?,
     onGoogleClick: () -> Unit,
     onGuestClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -302,7 +369,7 @@ fun OnboardingLoginChoice(
             ),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 24.dp)
+                .padding(vertical = 16.dp)
         ) {
             Column(
                 modifier = Modifier.padding(20.dp),
@@ -331,20 +398,53 @@ fun OnboardingLoginChoice(
             }
         }
 
-        // CTAs
+        // CTAs and Errors
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (authError != null) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Error,
+                            contentDescription = "Error",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = authError,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+
             // Google Log-In
             Button(
                 onClick = onGoogleClick,
+                enabled = !isAuthenticating,
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.onBackground,
-                    contentColor = MaterialTheme.colorScheme.background
+                    contentColor = MaterialTheme.colorScheme.background,
+                    disabledContainerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                    disabledContentColor = MaterialTheme.colorScheme.background.copy(alpha = 0.5f)
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -355,24 +455,37 @@ fun OnboardingLoginChoice(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Star,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = "Continue with Google",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
+                    if (isAuthenticating) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.background,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Connecting...",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Star,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Continue with Google",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
                 }
             }
 
             // Guest Mode
             OutlinedButton(
                 onClick = onGuestClick,
+                enabled = !isAuthenticating,
                 shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.outline),
+                border = BorderStroke(1.5.dp, if (isAuthenticating) MaterialTheme.colorScheme.outline.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
@@ -382,7 +495,7 @@ fun OnboardingLoginChoice(
                     text = "Continue without Login (Guest Mode)",
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground
+                        color = if (isAuthenticating) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f) else MaterialTheme.colorScheme.onBackground
                     )
                 )
             }

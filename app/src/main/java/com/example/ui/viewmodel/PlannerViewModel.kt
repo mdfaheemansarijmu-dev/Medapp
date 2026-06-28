@@ -17,6 +17,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.local.PlannerDatabase
 import com.example.data.model.*
 import com.example.data.repository.PlannerRepository
+import com.example.util.AcademicNotificationManager
 import com.example.network.GeminiParserService
 import com.example.network.RetrofitClient
 import com.example.network.UpdateService
@@ -123,7 +124,7 @@ class PlannerViewModel(
     val areNotificationsEnabled: StateFlow<Boolean> = _areNotificationsEnabled.asStateFlow()
 
     // Student Profile state
-    private val _studentName = MutableStateFlow("Med Student")
+    private val _studentName = MutableStateFlow("")
     val studentName: StateFlow<String> = _studentName.asStateFlow()
 
     private val _studentDpUrl = MutableStateFlow("")
@@ -131,6 +132,15 @@ class PlannerViewModel(
 
     private val _studentDpPreset = MutableStateFlow("doctor_male")
     val studentDpPreset: StateFlow<String> = _studentDpPreset.asStateFlow()
+
+    private val _googleUserId = MutableStateFlow("")
+    val googleUserId: StateFlow<String> = _googleUserId.asStateFlow()
+
+    private val _isAuthenticating = MutableStateFlow(false)
+    val isAuthenticating: StateFlow<Boolean> = _isAuthenticating.asStateFlow()
+
+    private val _authError = MutableStateFlow<String?>(null)
+    val authError: StateFlow<String?> = _authError.asStateFlow()
 
     // Login and Account states
     private val _loginMode = MutableStateFlow(LoginMode.UNDECIDED)
@@ -174,20 +184,54 @@ class PlannerViewModel(
         val sharedPrefs = application.getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
         _isDarkTheme.value = sharedPrefs.getBoolean("is_dark_theme", false)
         _areNotificationsEnabled.value = sharedPrefs.getBoolean("are_notifications_enabled", true)
-        _studentName.value = sharedPrefs.getString("student_name", "Med Student") ?: "Med Student"
+        val savedName = sharedPrefs.getString("student_name", "") ?: ""
+        _studentName.value = if (savedName == "Med Student") "" else savedName
         _studentDpUrl.value = sharedPrefs.getString("student_dp_url", "") ?: ""
         _studentDpPreset.value = sharedPrefs.getString("student_dp_preset", "doctor_male") ?: "doctor_male"
         val savedLoginMode = sharedPrefs.getString("login_mode", LoginMode.UNDECIDED.name) ?: LoginMode.UNDECIDED.name
         _loginMode.value = try { LoginMode.valueOf(savedLoginMode) } catch (e: Exception) { LoginMode.UNDECIDED }
         _studentEmail.value = sharedPrefs.getString("student_email", "") ?: ""
+        _googleUserId.value = sharedPrefs.getString("google_user_id", "") ?: ""
+
+        // Verify real Google session if logged in with Google
+        if (savedLoginMode == LoginMode.GOOGLE.name) {
+            val account = com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(application)
+            if (account != null) {
+                _googleUserId.value = account.id ?: ""
+                _studentName.value = account.displayName ?: ""
+                _studentEmail.value = account.email ?: ""
+                _studentDpUrl.value = account.photoUrl?.toString() ?: ""
+                _studentDpPreset.value = "none"
+            } else {
+                // If they are not actually signed in with Google anymore, reset login to UNDECIDED
+                _loginMode.value = LoginMode.UNDECIDED
+                _googleUserId.value = ""
+                _studentName.value = ""
+                _studentEmail.value = ""
+                _studentDpUrl.value = ""
+                _studentDpPreset.value = "doctor_male"
+                sharedPrefs.edit()
+                    .putString("login_mode", LoginMode.UNDECIDED.name)
+                    .putString("google_user_id", "")
+                    .putString("student_name", "")
+                    .putString("student_email", "")
+                    .putString("student_dp_url", "")
+                    .putString("student_dp_preset", "doctor_male")
+                    .putString("selected_course_code", null)
+                    .apply()
+            }
+        }
+
+        val updatedLoginMode = _loginMode.value
         val savedCourseCode = sharedPrefs.getString("selected_course_code", null)
-        if (savedCourseCode != null) {
+        if (savedCourseCode != null && updatedLoginMode != LoginMode.UNDECIDED) {
             try {
                 val course = MedicalCourse.valueOf(savedCourseCode)
                 _selectedCourse.value = course
                 _currentScreen.value = Screen.Dashboard
                 viewModelScope.launch {
                     repository.populateDefaultTimetableIfEmpty(course.code)
+                    com.example.util.AcademicNotificationManager.verifyExistingNotifications(application)
                     generateSmartNotifications()
                 }
             } catch (e: Exception) {
@@ -200,9 +244,18 @@ class PlannerViewModel(
         // Start Clock updates
         viewModelScope.launch {
             val format = SimpleDateFormat("hh:mm a", Locale.getDefault())
+            val dayFormat = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
+            var lastDateStr = dayFormat.format(Date())
             while (true) {
                 _currentTimeOfDay.value = format.format(Date())
                 _currentCalendarDate.value = Calendar.getInstance()
+                
+                val currentDateStr = dayFormat.format(Date())
+                if (currentDateStr != lastDateStr) {
+                    lastDateStr = currentDateStr
+                    // A new day's schedule has become available! Re-schedule notifications
+                    scheduleTimetableClassNotifications()
+                }
                 kotlinx.coroutines.delay(10000) // Update every 10 seconds
             }
         }
@@ -226,7 +279,7 @@ class PlannerViewModel(
             repository.populateDefaultTimetableIfEmpty(course.code)
             
             // Generate nice starter in-app alerts
-            repository.addNotification(
+            addNotificationWithDuplicateCheck(
                 InAppNotification(
                     title = "Course Selected: ${course.displayName}",
                     message = "Your standard weekly medical timetable has been pre-loaded! Go to the 'Timetable' tab to customize it.",
@@ -237,6 +290,7 @@ class PlannerViewModel(
             // Auto navigate to dashboard
             _currentScreen.value = Screen.Dashboard
             generateSmartNotifications()
+            scheduleTimetableClassNotifications()
         }
     }
 
@@ -360,6 +414,7 @@ class PlannerViewModel(
                 )
             )
             generateSmartNotifications()
+            scheduleTimetableClassNotifications()
         }
     }
 
@@ -380,12 +435,15 @@ class PlannerViewModel(
                 )
             )
             generateSmartNotifications()
+            scheduleTimetableClassNotifications()
         }
     }
 
     fun removeTimetableClass(id: Int) {
         viewModelScope.launch {
             repository.deleteClass(id)
+            generateSmartNotifications()
+            scheduleTimetableClassNotifications()
         }
     }
 
@@ -402,21 +460,38 @@ class PlannerViewModel(
                     type = type,
                     notes = notes
                 )
-            repository.addAssignment(assignment)
+            val insertedId = repository.addAssignment(assignment)
             generateSmartNotifications()
-            scheduleReminder(assignment.hashCode(), dueDate, "Assignment Due", "Assignment $title is due soon!")
+            
+            if (_areNotificationsEnabled.value) {
+                AcademicNotificationManager.scheduleNotification(
+                    context = getApplication(),
+                    type = "assignment",
+                    itemId = "asg_$insertedId",
+                    title = "Upcoming Assignment Alert",
+                    message = "Assignment '$title' for $subject is due in less than 24 hours!",
+                    targetTime = dueDate,
+                    subject = subject,
+                    minutesBefore = 24 * 60 // 24 hours before
+                )
+            }
         }
     }
 
     fun toggleAssignment(assignment: Assignment) {
         viewModelScope.launch {
             repository.updateAssignmentStatus(assignment.id, assignment.status != "Completed")
+            if (assignment.status != "Completed") {
+                // If toggled to completed, cancel the notification
+                AcademicNotificationManager.cancelByItemId(getApplication(), "asg_${assignment.id}")
+            }
         }
     }
 
     fun removeAssignment(id: Int) {
         viewModelScope.launch {
             repository.deleteAssignment(id)
+            AcademicNotificationManager.cancelByItemId(getApplication(), "asg_$id")
         }
     }
 
@@ -432,21 +507,37 @@ class PlannerViewModel(
                     status = "Upcoming",
                     syllabus = syllabus
                 )
-            repository.addAssessment(assessment)
+            val insertedId = repository.addAssessment(assessment)
             generateSmartNotifications()
-            scheduleReminder(assessment.hashCode(), date, "Assessment Due", "Assessment $title is due soon!")
+            
+            if (_areNotificationsEnabled.value) {
+                AcademicNotificationManager.scheduleNotification(
+                    context = getApplication(),
+                    type = "assessment",
+                    itemId = "asm_$insertedId",
+                    title = "Upcoming Assessment Reminder",
+                    message = "Assessment '$title' for $subject is scheduled soon!",
+                    targetTime = date,
+                    subject = subject,
+                    minutesBefore = 30
+                )
+            }
         }
     }
 
     fun toggleAssessment(assessment: Assessment) {
         viewModelScope.launch {
             repository.updateAssessmentStatus(assessment.id, assessment.status != "Completed")
+            if (assessment.status != "Completed") {
+                AcademicNotificationManager.cancelByItemId(getApplication(), "asm_${assessment.id}")
+            }
         }
     }
 
     fun removeAssessment(id: Int) {
         viewModelScope.launch {
             repository.deleteAssessment(id)
+            AcademicNotificationManager.cancelByItemId(getApplication(), "asm_$id")
         }
     }
 
@@ -462,20 +553,36 @@ class PlannerViewModel(
                     progress = 0,
                     targetMinutes = minutes
                 )
-            repository.addStudyTask(task)
-            scheduleReminder(task.hashCode(), dueDate, "Study Task Due", "Study Task $title is due soon!")
+            val insertedId = repository.addStudyTask(task)
+            
+            if (_areNotificationsEnabled.value) {
+                AcademicNotificationManager.scheduleNotification(
+                    context = getApplication(),
+                    type = "study",
+                    itemId = "study_$insertedId",
+                    title = "Study Task Due",
+                    message = "Study Task '$title' for $subject is due soon!",
+                    targetTime = dueDate,
+                    subject = subject,
+                    minutesBefore = 30
+                )
+            }
         }
     }
 
     fun updateStudyProgress(id: Int, progress: Int) {
         viewModelScope.launch {
             repository.updateStudyTaskProgress(id, progress)
+            if (progress >= 100) {
+                AcademicNotificationManager.cancelByItemId(getApplication(), "study_$id")
+            }
         }
     }
 
     fun removeStudyTask(id: Int) {
         viewModelScope.launch {
             repository.deleteStudyTask(id)
+            AcademicNotificationManager.cancelByItemId(getApplication(), "study_$id")
         }
     }
 
@@ -606,7 +713,7 @@ class PlannerViewModel(
             _activeParsedDrafts.value = emptyList()
             
             // Create in-app notification of new timetable configuration
-            repository.addNotification(
+            addNotificationWithDuplicateCheck(
                 InAppNotification(
                     title = "New Timetable Configured",
                     message = "Successfully imported ${newClasses.size} recurring classes for ${course.displayName}.",
@@ -624,6 +731,7 @@ class PlannerViewModel(
             
             // Generate smart notification alerts for tomorrow/today
             generateSmartNotifications()
+            scheduleTimetableClassNotifications()
         }
     }
 
@@ -825,6 +933,95 @@ class PlannerViewModel(
         }
     }
 
+    private suspend fun addNotificationWithDuplicateCheck(notification: InAppNotification) {
+        val existing = repository.getNotifications().first()
+        val alreadyExists = existing.any { 
+            it.title == notification.title && 
+            it.message == notification.message &&
+            it.type == notification.type
+        }
+        if (!alreadyExists) {
+            repository.addNotification(notification)
+        }
+    }
+
+    fun scheduleTimetableClassNotifications() {
+        val course = selectedCourse.value ?: return
+        viewModelScope.launch {
+            // Cancel all existing class notifications first
+            AcademicNotificationManager.cancelAllByType(getApplication(), "class")
+            
+            // Fetch current classes
+            val classes = repository.getTimetable(course.code).first()
+            
+            for (cls in classes) {
+                val targetTime = getTimetableClassTimestamp(cls.dayOfWeek, cls.startTime)
+                
+                // Only schedule if notifications are enabled and target time is valid (in future)
+                if (_areNotificationsEnabled.value && targetTime > System.currentTimeMillis()) {
+                    AcademicNotificationManager.scheduleNotification(
+                        context = getApplication(),
+                        type = "class",
+                        itemId = "class_${cls.id}",
+                        title = "Upcoming Class Alert",
+                        message = "${cls.subject} starts at ${cls.startTime} in ${cls.room ?: "the Lecture Hall"}.",
+                        targetTime = targetTime,
+                        subject = cls.subject,
+                        minutesBefore = 30
+                    )
+                }
+            }
+        }
+    }
+
+    private fun getTimetableClassTimestamp(dayOfWeek: Int, startTimeStr: String): Long {
+        val calendar = Calendar.getInstance()
+        val calendarDay = when (dayOfWeek) {
+            1 -> Calendar.MONDAY
+            2 -> Calendar.TUESDAY
+            3 -> Calendar.WEDNESDAY
+            4 -> Calendar.THURSDAY
+            5 -> Calendar.FRIDAY
+            6 -> Calendar.SATURDAY
+            7 -> Calendar.SUNDAY
+            else -> Calendar.MONDAY
+        }
+        
+        val parts = parseTimeToHoursAndMinutes(startTimeStr)
+        calendar.set(Calendar.HOUR_OF_DAY, parts.first)
+        calendar.set(Calendar.MINUTE, parts.second)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
+        
+        val currentDay = calendar.get(Calendar.DAY_OF_WEEK)
+        var diff = calendarDay - currentDay
+        if (diff < 0) {
+            diff += 7
+        } else if (diff == 0) {
+            if (calendar.timeInMillis <= System.currentTimeMillis()) {
+                diff += 7
+            }
+        }
+        calendar.add(Calendar.DAY_OF_YEAR, diff)
+        return calendar.timeInMillis
+    }
+
+    private fun parseTimeToHoursAndMinutes(timeStr: String): Pair<Int, Int> {
+        return try {
+            val clean = timeStr.trim().uppercase()
+            val parts = clean.split(" ")
+            val timeParts = parts[0].split(":")
+            var hour = timeParts[0].toInt()
+            val minute = timeParts[1].toInt()
+            val amPm = parts[1]
+            if (amPm == "PM" && hour != 12) hour += 12
+            if (amPm == "AM" && hour == 12) hour = 0
+            Pair(hour, minute)
+        } catch (e: Exception) {
+            Pair(9, 0) // Default fallback
+        }
+    }
+
     // In-app Notification Alert generator
     private suspend fun generateSmartNotifications() {
         val course = selectedCourse.value ?: return
@@ -836,7 +1033,7 @@ class PlannerViewModel(
         for (asg in pendingAssignments) {
             val diff = asg.dueDate - currentTimestamp
             if (diff in 0..oneDayMs) {
-                repository.addNotification(
+                addNotificationWithDuplicateCheck(
                     InAppNotification(
                         title = "Assignment Due Tomorrow",
                         message = "${asg.subject}: '${asg.title}' is due in less than 24 hours!",
@@ -844,10 +1041,15 @@ class PlannerViewModel(
                     )
                 )
                 if (_areNotificationsEnabled.value) {
-                    triggerBrowserPush(
+                    AcademicNotificationManager.scheduleNotification(
+                        context = getApplication(),
+                        type = "assignment",
+                        itemId = "asg_${asg.id}",
                         title = "Upcoming Assignment Alert",
                         message = "Assignment '${asg.title}' for ${asg.subject} is due in less than 24 hours!",
-                        iconType = "assignment"
+                        targetTime = asg.dueDate,
+                        subject = asg.subject,
+                        minutesBefore = 24 * 60 // 24 hours before
                     )
                 }
             }
@@ -859,13 +1061,25 @@ class PlannerViewModel(
             val diff = asm.date - currentTimestamp
             if (diff in 0..(oneDayMs * 3)) {
                 val daysLeft = (diff / oneDayMs).toInt() + 1
-                repository.addNotification(
+                addNotificationWithDuplicateCheck(
                     InAppNotification(
                         title = "Upcoming Assessment Reminder",
                         message = "${asm.subject}: '${asm.title}' is scheduled in $daysLeft day(s)!",
                         type = "exam"
                     )
                 )
+                if (_areNotificationsEnabled.value) {
+                    AcademicNotificationManager.scheduleNotification(
+                        context = getApplication(),
+                        type = "assessment",
+                        itemId = "asm_${asm.id}",
+                        title = "Upcoming Assessment Reminder",
+                        message = "${asm.subject}: '${asm.title}' is scheduled in $daysLeft day(s)!",
+                        targetTime = asm.date,
+                        subject = asm.subject,
+                        minutesBefore = 30
+                    )
+                }
             }
         }
 
@@ -882,19 +1096,31 @@ class PlannerViewModel(
         if (remainingToday.isNotEmpty()) {
             val nextClass = remainingToday.first()
             if (_areNotificationsEnabled.value) {
-                triggerBrowserPush(
+                val targetTime = getTimetableClassTimestamp(nextClass.dayOfWeek, nextClass.startTime)
+                AcademicNotificationManager.scheduleNotification(
+                    context = getApplication(),
+                    type = "class",
+                    itemId = "class_${nextClass.id}",
                     title = "Upcoming Lecture Today",
                     message = "${nextClass.subject} starts at ${nextClass.startTime} in ${nextClass.room ?: "the Lecture Hall"}.",
-                    iconType = "lecture"
+                    targetTime = targetTime,
+                    subject = nextClass.subject,
+                    minutesBefore = 30
                 )
             }
         } else if (tomorrowClasses.isNotEmpty()) {
             val firstClassTomorrow = tomorrowClasses.sortedBy { parseTimeToMinutes(it.startTime) }.first()
             if (_areNotificationsEnabled.value) {
-                triggerBrowserPush(
+                val targetTime = getTimetableClassTimestamp(firstClassTomorrow.dayOfWeek, firstClassTomorrow.startTime)
+                AcademicNotificationManager.scheduleNotification(
+                    context = getApplication(),
+                    type = "class",
+                    itemId = "class_${firstClassTomorrow.id}",
                     title = "Lecture Scheduled Tomorrow",
                     message = "First class tomorrow is ${firstClassTomorrow.subject} starting at ${firstClassTomorrow.startTime}.",
-                    iconType = "lecture"
+                    targetTime = targetTime,
+                    subject = firstClassTomorrow.subject,
+                    minutesBefore = 30
                 )
             }
         }
@@ -919,13 +1145,13 @@ class PlannerViewModel(
     }
 
     fun updateStudentProfile(name: String, dpUrl: String, dpPreset: String) {
-        _studentName.value = name.ifBlank { "Med Student" }
+        _studentName.value = name
         _studentDpUrl.value = dpUrl
         _studentDpPreset.value = dpPreset
 
         val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
         sharedPrefs.edit()
-            .putString("student_name", name.ifBlank { "Med Student" })
+            .putString("student_name", name)
             .putString("student_dp_url", dpUrl)
             .putString("student_dp_preset", dpPreset)
             .apply()
@@ -939,12 +1165,24 @@ class PlannerViewModel(
             .apply()
     }
 
-    fun signInWithGoogle(name: String, email: String, dpUrl: String) {
+    fun setAuthenticating(authenticating: Boolean) {
+        _isAuthenticating.value = authenticating
+    }
+
+    fun setAuthError(error: String?) {
+        _authError.value = error
+        _isAuthenticating.value = false
+    }
+
+    fun signInWithGoogle(name: String, email: String, dpUrl: String, googleId: String) {
         _loginMode.value = LoginMode.GOOGLE
         _studentName.value = name
         _studentEmail.value = email
         _studentDpUrl.value = dpUrl
         _studentDpPreset.value = "none"
+        _googleUserId.value = googleId
+        _isAuthenticating.value = false
+        _authError.value = null
 
         val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
         sharedPrefs.edit()
@@ -953,10 +1191,11 @@ class PlannerViewModel(
             .putString("student_email", email)
             .putString("student_dp_url", dpUrl)
             .putString("student_dp_preset", "none")
+            .putString("google_user_id", googleId)
             .apply()
 
         viewModelScope.launch {
-            repository.addNotification(
+            addNotificationWithDuplicateCheck(
                 InAppNotification(
                     title = "Signed in as $name",
                     message = "Your account is now securely linked locally. Cloud sync readiness active.",
@@ -967,23 +1206,37 @@ class PlannerViewModel(
     }
 
     fun signOut() {
-        _loginMode.value = LoginMode.GUEST
-        _studentName.value = "Med Student"
+        _loginMode.value = LoginMode.UNDECIDED
+        _studentName.value = ""
         _studentEmail.value = ""
         _studentDpUrl.value = ""
         _studentDpPreset.value = "doctor_male"
+        _googleUserId.value = ""
+        _currentScreen.value = Screen.Welcome
 
         val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
         sharedPrefs.edit()
-            .putString("login_mode", LoginMode.GUEST.name)
-            .putString("student_name", "Med Student")
+            .putString("login_mode", LoginMode.UNDECIDED.name)
+            .putString("student_name", "")
             .putString("student_email", "")
             .putString("student_dp_url", "")
             .putString("student_dp_preset", "doctor_male")
+            .putString("google_user_id", "")
+            .putString("selected_course_code", null) // reset selected course on logout
             .apply()
 
+        try {
+            val gso = com.google.android.gms.auth.api.signin.GoogleSignInOptions.Builder(
+                com.google.android.gms.auth.api.signin.GoogleSignInOptions.DEFAULT_SIGN_IN
+            ).build()
+            val googleSignInClient = com.google.android.gms.auth.api.signin.GoogleSignIn.getClient(getApplication<Application>(), gso)
+            googleSignInClient.signOut()
+        } catch (e: Exception) {
+            Log.e("PlannerViewModel", "Error signing out from Google: ${e.message}", e)
+        }
+
         viewModelScope.launch {
-            repository.addNotification(
+            addNotificationWithDuplicateCheck(
                 InAppNotification(
                     title = "Disconnected Google Account",
                     message = "Google account successfully signed out. All local offline academic planner data was safely preserved.",
@@ -1040,10 +1293,17 @@ class PlannerViewModel(
         viewModelScope.launch {
             if (enabled) {
                 generateSmartNotifications()
+                scheduleTimetableClassNotifications()
                 triggerLocalSystemNotification(
                     "Academic Alerts Enabled", 
                     "You will now receive notifications for assignments and lectures due within 24 hours."
                 )
+            } else {
+                // Cancel all scheduled notifications from AcademicNotificationManager
+                AcademicNotificationManager.cancelAllByType(getApplication(), "class")
+                AcademicNotificationManager.cancelAllByType(getApplication(), "assignment")
+                AcademicNotificationManager.cancelAllByType(getApplication(), "assessment")
+                AcademicNotificationManager.cancelAllByType(getApplication(), "study")
             }
         }
     }
@@ -1078,38 +1338,6 @@ class PlannerViewModel(
         }
     }
 
-    fun scheduleReminder(id: Int, time: Long, title: String, message: String) {
-        val context = getApplication<Application>()
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(context, com.example.receivers.NotificationReceiver::class.java).apply {
-            putExtra("title", title)
-            putExtra("message", message)
-            putExtra("id", id)
-        }
-        val pendingIntent = PendingIntent.getBroadcast(
-            context,
-            id,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Schedule 30 minutes before
-        val triggerTime = time - (30 * 60 * 1000)
-        if (triggerTime > System.currentTimeMillis()) {
-            try {
-                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-            } catch (e: SecurityException) {
-                Log.e("PlannerViewModel", "Failed to schedule alarm", e)
-            }
-        }
-    }
-
-    fun triggerBrowserPush(title: String, message: String, iconType: String) {
-        if (_areNotificationsEnabled.value) {
-            triggerLocalSystemNotification(title, message)
-        }
-    }
-
     fun resetWholeApp() {
         viewModelScope.launch {
             val course = selectedCourse.value
@@ -1134,11 +1362,25 @@ class PlannerViewModel(
             val result = updateService.checkForUpdates(getApplication())
             _updateResult.value = result
             _lastCheckedTime.value = updateService.getLastCheckedTime(getApplication())
-            _cachedUpdateConfig.value = updateService.getCachedUpdateInfo(getApplication())
+            val cached = updateService.getCachedUpdateInfo(getApplication())
+            _cachedUpdateConfig.value = cached
             
             _updateCheckInProgress.value = false
 
-            if (!silent) {
+            if (result is AppUpdateResult.UpdateAvailable) {
+                if (result.isForce) {
+                    _isUpdateDialogDismissed.value = false
+                } else {
+                    // It's optional: check if the user previously dismissed this exact version
+                    val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+                    val dismissedVersion = sharedPrefs.getString("dismissed_update_version", "") ?: ""
+                    if (dismissedVersion == result.config.latestVersion) {
+                        _isUpdateDialogDismissed.value = true
+                    } else {
+                        _isUpdateDialogDismissed.value = false
+                    }
+                }
+            } else {
                 _isUpdateDialogDismissed.value = false
             }
         }
@@ -1146,6 +1388,12 @@ class PlannerViewModel(
 
     fun dismissUpdateDialog() {
         _isUpdateDialogDismissed.value = true
+        // Store dismissed version to avoid repeatedly showing it
+        val config = _cachedUpdateConfig.value
+        if (config != null) {
+            val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+            sharedPrefs.edit().putString("dismissed_update_version", config.latestVersion).apply()
+        }
     }
 
     fun clearUpdateResult() {
@@ -1155,11 +1403,10 @@ class PlannerViewModel(
     fun simulateUpdate(force: Boolean) {
         val mockConfig = AppUpdateConfig(
             latestVersion = "1.0.2",
-            minimumSupportedVersion = if (force) "1.0.2" else "1.0.0",
-            updateTitle = if (force) "🚀 Critical Update Required" else "🚀 New Update Available",
-            updateMessage = "Important security fixes, AI assistant improvements, local database synchronization, and class scheduler enhancements.",
-            downloadUrl = "https://ais-dev-famqmclmfe6gdf3uf2vkyk-1079547613754.asia-southeast1.run.app",
-            forceUpdate = force
+            minimumVersion = if (force) "1.0.2" else "1.0.0",
+            forceUpdate = force,
+            apkUrl = "https://ais-dev-famqmclmfe6gdf3uf2vkyk-1079547613754.asia-southeast1.run.app",
+            releaseNotes = "Important security fixes, AI assistant improvements, local database synchronization, and class scheduler enhancements."
         )
         _updateResult.value = AppUpdateResult.UpdateAvailable(mockConfig, force)
         _cachedUpdateConfig.value = mockConfig

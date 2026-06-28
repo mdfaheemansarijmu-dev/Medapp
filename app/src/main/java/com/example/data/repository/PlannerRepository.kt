@@ -19,7 +19,7 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
     fun getAssignments(courseCode: String): Flow<List<Assignment>> =
         plannerDao.getAssignmentsForCourse(courseCode)
 
-    suspend fun addAssignment(assignment: Assignment) = plannerDao.insertAssignment(assignment)
+    suspend fun addAssignment(assignment: Assignment): Long = plannerDao.insertAssignment(assignment)
     suspend fun deleteAssignment(id: Int) = plannerDao.deleteAssignmentById(id)
     suspend fun updateAssignmentStatus(id: Int, completed: Boolean) {
         val status = if (completed) "Completed" else "Pending"
@@ -30,7 +30,7 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
     fun getAssessments(courseCode: String): Flow<List<Assessment>> =
         plannerDao.getAssessmentsForCourse(courseCode)
 
-    suspend fun addAssessment(assessment: Assessment) = plannerDao.insertAssessment(assessment)
+    suspend fun addAssessment(assessment: Assessment): Long = plannerDao.insertAssessment(assessment)
     suspend fun deleteAssessment(id: Int) = plannerDao.deleteAssessmentById(id)
     suspend fun updateAssessmentStatus(id: Int, completed: Boolean) {
         val status = if (completed) "Completed" else "Upcoming"
@@ -41,7 +41,7 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
     fun getStudyTasks(courseCode: String): Flow<List<StudyTask>> =
         plannerDao.getStudyTasksForCourse(courseCode)
 
-    suspend fun addStudyTask(task: StudyTask) = plannerDao.insertStudyTask(task)
+    suspend fun addStudyTask(task: StudyTask): Long = plannerDao.insertStudyTask(task)
     suspend fun deleteStudyTask(id: Int) = plannerDao.deleteStudyTaskById(id)
     suspend fun updateStudyTaskProgress(id: Int, progress: Int) =
         plannerDao.updateStudyTaskProgress(id, progress)

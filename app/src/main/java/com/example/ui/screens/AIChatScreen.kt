@@ -4,13 +4,17 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -147,8 +151,8 @@ fun AIChatScreen(
             if (activeResponse?.document_type == "Weekly Timetable") {
                 TimetablePreviewPanel(
                     response = activeResponse!!,
-                    onReplaceClick = {
-                        viewModel.replaceCurrentTimetable(activeResponse!!.extracted_timetable)
+                    onReplaceClick = { editedList ->
+                        viewModel.replaceCurrentTimetable(editedList)
                     },
                     onCancelClick = {
                         viewModel.cancelUnifiedImport()
@@ -752,14 +756,23 @@ fun SimulatedFileDialog(
 @Composable
 fun TimetablePreviewPanel(
     response: UnifiedParserResponse,
-    onReplaceClick: () -> Unit,
+    onReplaceClick: (List<ParsedTimetableClass>) -> Unit,
     onCancelClick: () -> Unit
 ) {
-    val timetable = response.extracted_timetable
-    val workingDays = timetable.map { it.day_of_week }.distinct().size
-    val totalClasses = timetable.filter { !it.is_lunch_break }.size
-    val totalTeachers = timetable.mapNotNull { it.teacher_name }.distinct().size
-    val practicalSessions = timetable.count { it.is_practical }
+    val editableTimetable = remember(response.extracted_timetable) {
+        mutableStateListOf<ParsedTimetableClass>().apply {
+            addAll(response.extracted_timetable)
+        }
+    }
+
+    var editingIndex by remember { mutableStateOf<Int?>(null) }
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    val workingDays = editableTimetable.map { it.day_of_week }.distinct().size
+    val totalClasses = editableTimetable.filter { !it.is_lunch_break }.size
+    val totalTeachers = editableTimetable.mapNotNull { it.teacher_name }.distinct().size
+    val practicalSessions = editableTimetable.count { it.is_practical }
+    val hasUncertain = editableTimetable.any { it.is_uncertain == true || it.confidence == "Low" || it.confidence == "Medium" }
 
     Card(
         shape = RoundedCornerShape(24.dp),
@@ -775,20 +788,37 @@ fun TimetablePreviewPanel(
             modifier = Modifier.padding(16.dp)
         ) {
             Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.Default.CalendarToday,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(28.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    "Proposed Timetable",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.CalendarToday,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        "Proposed Timetable",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+
+                // Add proposed period button
+                IconButton(
+                    onClick = { showAddDialog = true },
+                    modifier = Modifier.testTag("add_proposed_period_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AddCircle,
+                        contentDescription = "Add Class",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(14.dp))
@@ -814,8 +844,36 @@ fun TimetablePreviewPanel(
             HorizontalDivider(color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.2f))
             Spacer(modifier = Modifier.height(12.dp))
 
+            if (hasUncertain) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.WarningAmber,
+                            contentDescription = "Warning",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Low OCR confidence detected. Please verify & edit highlighted items.",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
+
             Text(
-                "SCHEDULE PREVIEW",
+                "SCHEDULE PREVIEW (TAP TO EDIT)",
                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
             )
@@ -830,57 +888,148 @@ fun TimetablePreviewPanel(
                     .fillMaxWidth()
                     .heightIn(max = 240.dp)
             ) {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    val grouped = timetable.groupBy { it.day_of_week }
-                    items(grouped.keys.toList().sorted()) { dayOfWeek ->
-                        val dayClasses = grouped[dayOfWeek] ?: emptyList()
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
-                                .padding(10.dp)
-                        ) {
-                            Text(
-                                text = dayNames[dayOfWeek] ?: "Day $dayOfWeek",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            dayClasses.sortedBy { it.period_number }.forEach { cls ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 2.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = cls.start_time.split(" ")[0], // "08:30"
-                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.width(48.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = cls.subject,
-                                            style = MaterialTheme.typography.bodyMedium.copy(
-                                                fontWeight = if (cls.is_lunch_break) FontWeight.Normal else FontWeight.Bold
-                                            ),
-                                            color = if (cls.is_lunch_break) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
+                if (editableTimetable.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "No classes proposed. Tap + to add manually.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        val grouped = editableTimetable.groupBy { it.day_of_week }
+                        items(grouped.keys.toList().sorted()) { dayOfWeek ->
+                            val dayClasses = grouped[dayOfWeek] ?: emptyList()
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
+                                    .padding(10.dp)
+                            ) {
+                                Text(
+                                    text = dayNames[dayOfWeek] ?: "Day $dayOfWeek",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                dayClasses.sortedBy { it.period_number }.forEach { cls ->
+                                    val clsIndexInList = editableTimetable.indexOf(cls)
+                                    val isLowConfidence = cls.is_uncertain == true || cls.confidence == "Low" || cls.confidence == "Medium"
+                                    
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 3.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(
+                                                if (isLowConfidence) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+                                                else Color.Transparent
+                                            )
+                                            .border(
+                                                width = if (isLowConfidence) 1.dp else 0.dp,
+                                                color = if (isLowConfidence) MaterialTheme.colorScheme.error.copy(alpha = 0.5f) else Color.Transparent,
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            .clickable {
+                                                if (clsIndexInList != -1) {
+                                                    editingIndex = clsIndexInList
+                                                }
+                                            }
+                                            .padding(6.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.weight(1f),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = cls.start_time.split(" ")[0], // "08:30"
+                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.width(48.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        text = cls.subject,
+                                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                                            fontWeight = if (cls.is_lunch_break) FontWeight.Normal else FontWeight.Bold
+                                                        ),
+                                                        color = if (cls.is_lunch_break) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    if (isLowConfidence) {
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Icon(
+                                                            imageVector = Icons.Default.Warning,
+                                                            contentDescription = "Uncertain",
+                                                            tint = MaterialTheme.colorScheme.error,
+                                                            modifier = Modifier.size(14.dp)
+                                                        )
+                                                    }
+                                                }
+                                                if (!cls.is_lunch_break && (cls.teacher_name != null || cls.room != null)) {
+                                                    val facultyStr = cls.teacher_name ?: ""
+                                                    val roomStr = if (cls.room != null) " • Room ${cls.room}" else ""
+                                                    Text(
+                                                        text = "$facultyStr$roomStr",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.outline
+                                                    )
+                                                }
+                                                if (isLowConfidence && !cls.notes.isNullOrBlank()) {
+                                                    Text(
+                                                        text = cls.notes,
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
+                                                        color = MaterialTheme.colorScheme.error
+                                                    )
+                                                }
+                                            }
+                                        }
 
-                                    if (!cls.is_lunch_break) {
-                                        Text(
-                                            text = cls.room ?: "",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.outline,
-                                            modifier = Modifier.padding(start = 4.dp)
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            IconButton(
+                                                onClick = {
+                                                    if (clsIndexInList != -1) {
+                                                        editingIndex = clsIndexInList
+                                                    }
+                                                },
+                                                modifier = Modifier.size(24.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Edit,
+                                                    contentDescription = "Edit Period",
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            IconButton(
+                                                onClick = {
+                                                    if (clsIndexInList != -1) {
+                                                        editableTimetable.removeAt(clsIndexInList)
+                                                    }
+                                                },
+                                                modifier = Modifier.size(24.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Delete,
+                                                    contentDescription = "Delete Period",
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -907,7 +1056,7 @@ fun TimetablePreviewPanel(
                 }
 
                 Button(
-                    onClick = onReplaceClick,
+                    onClick = { onReplaceClick(editableTimetable.toList()) },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.onPrimaryContainer, contentColor = MaterialTheme.colorScheme.primaryContainer),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.weight(1f)
@@ -917,6 +1066,243 @@ fun TimetablePreviewPanel(
             }
         }
     }
+
+    // Show Edit Dialog if selected
+    if (editingIndex != null && editingIndex!! < editableTimetable.size) {
+        val targetClass = editableTimetable[editingIndex!!]
+        EditProposedClassDialog(
+            cls = targetClass,
+            onDismiss = { editingIndex = null },
+            onSave = { updatedClass ->
+                editableTimetable[editingIndex!!] = updatedClass
+                editingIndex = null
+            }
+        )
+    }
+
+    // Show Add Dialog if selected
+    if (showAddDialog) {
+        AddProposedClassDialog(
+            onDismiss = { showAddDialog = false },
+            onSave = { newClass ->
+                editableTimetable.add(newClass)
+                showAddDialog = false
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EditProposedClassDialog(
+    cls: ParsedTimetableClass,
+    onDismiss: () -> Unit,
+    onSave: (ParsedTimetableClass) -> Unit
+) {
+    var subject by remember { mutableStateOf(cls.subject) }
+    var dayOfWeek by remember { mutableIntStateOf(cls.day_of_week) }
+    var periodNumber by remember { mutableIntStateOf(cls.period_number) }
+    var startTime by remember { mutableStateOf(cls.start_time) }
+    var endTime by remember { mutableStateOf(cls.end_time) }
+    var teacherName by remember { mutableStateOf(cls.teacher_name ?: "") }
+    var room by remember { mutableStateOf(cls.room ?: "") }
+    var isPractical by remember { mutableStateOf(cls.is_practical) }
+    var isLunchBreak by remember { mutableStateOf(cls.is_lunch_break) }
+    
+    var confidence by remember { mutableStateOf(cls.confidence ?: "High") }
+    var isUncertain by remember { mutableStateOf(cls.is_uncertain ?: false) }
+    var notes by remember { mutableStateOf(cls.notes ?: "") }
+
+    var expandedDayDropdown by remember { mutableStateOf(false) }
+    val dayNames = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(
+                        ParsedTimetableClass(
+                            day_of_week = dayOfWeek,
+                            period_number = periodNumber,
+                            start_time = startTime,
+                            end_time = endTime,
+                            subject = subject,
+                            teacher_name = teacherName.ifBlank { null },
+                            room = room.ifBlank { null },
+                            is_practical = isPractical,
+                            is_lunch_break = isLunchBreak,
+                            confidence = confidence,
+                            is_uncertain = isUncertain,
+                            notes = notes.ifBlank { null }
+                        )
+                    )
+                },
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Save Changes")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        title = {
+            Text(
+                text = "Edit Proposed Class",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = subject,
+                    onValueChange = { subject = it },
+                    label = { Text("Subject / Activity") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Day dropdown
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = dayNames.getOrNull(dayOfWeek - 1) ?: "Select Day",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Day of Week") },
+                        trailingIcon = {
+                            IconButton(onClick = { expandedDayDropdown = true }) {
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = "Select Day")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    DropdownMenu(
+                        expanded = expandedDayDropdown,
+                        onDismissRequest = { expandedDayDropdown = false }
+                    ) {
+                        dayNames.forEachIndexed { index, name ->
+                            DropdownMenuItem(
+                                text = { Text(name) },
+                                onClick = {
+                                    dayOfWeek = index + 1
+                                    expandedDayDropdown = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedTextField(
+                        value = periodNumber.toString(),
+                        onValueChange = { periodNumber = it.toIntOrNull() ?: periodNumber },
+                        label = { Text("Period #") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = room,
+                        onValueChange = { room = it },
+                        label = { Text("Room / Lab") },
+                        modifier = Modifier.weight(1.5f)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedTextField(
+                        value = startTime,
+                        onValueChange = { startTime = it },
+                        label = { Text("Start (e.g., 09:30 AM)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = endTime,
+                        onValueChange = { endTime = it },
+                        label = { Text("End (e.g., 10:30 AM)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                OutlinedTextField(
+                    value = teacherName,
+                    onValueChange = { teacherName = it },
+                    label = { Text("Faculty / Dr. Name") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Checkboxes for Practical & Lunch Break
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = isPractical, onCheckedChange = { isPractical = it })
+                        Text("Practical / Lab", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = isLunchBreak, onCheckedChange = { isLunchBreak = it })
+                        Text("Lunch Break", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+
+                // Confidence adjustment
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = isUncertain,
+                        onCheckedChange = { 
+                            isUncertain = it
+                            confidence = if (it) "Low" else "High"
+                        }
+                    )
+                    Column {
+                        Text("Mark as Uncertain / Low Confidence", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                        Text("This highlights the entry in the list to review later.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                    }
+                }
+
+                if (isUncertain) {
+                    OutlinedTextField(
+                        value = notes,
+                        onValueChange = { notes = it },
+                        label = { Text("Reason / Notes (e.g., text blurry)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    )
+}
+
+@Composable
+fun AddProposedClassDialog(
+    onDismiss: () -> Unit,
+    onSave: (ParsedTimetableClass) -> Unit
+) {
+    val defaultClass = ParsedTimetableClass(
+        day_of_week = 1,
+        period_number = 1,
+        start_time = "09:00 AM",
+        end_time = "10:00 AM",
+        subject = ""
+    )
+    EditProposedClassDialog(
+        cls = defaultClass,
+        onDismiss = onDismiss,
+        onSave = onSave
+    )
 }
 
 @Composable

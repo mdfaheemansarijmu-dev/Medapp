@@ -276,7 +276,7 @@ fun DashboardScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Hello, $studentName! 👋",
+                            text = if (studentName.isNotBlank()) "Hello, $studentName! 👋" else "Hello! 👋",
                             style = MaterialTheme.typography.headlineMedium.copy(
                                 fontWeight = FontWeight.ExtraBold,
                                 letterSpacing = (-0.5).sp,

@@ -60,13 +60,6 @@ class MainActivity : ComponentActivity() {
         val factory = PlannerViewModelFactory(application, repository)
         viewModel = ViewModelProvider(this, factory)[PlannerViewModel::class.java]
 
-        // Request POST_NOTIFICATIONS permission dynamically on Android 13+
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
-            }
-        }
-
         setContent {
             val isDarkTheme by viewModel.isDarkTheme.collectAsStateWithLifecycle()
             MyApplicationTheme(darkTheme = isDarkTheme) {
@@ -95,7 +88,7 @@ class MainActivity : ComponentActivity() {
                                 ForceUpdateScreen(
                                     config = result.config,
                                     onUpdateClick = {
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(result.config.downloadUrl))
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(result.config.apkUrl))
                                         context.startActivity(intent)
                                     }
                                 )
@@ -104,7 +97,7 @@ class MainActivity : ComponentActivity() {
                                 OptionalUpdateDialog(
                                     config = result.config,
                                     onUpdateClick = {
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(result.config.downloadUrl))
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(result.config.apkUrl))
                                         context.startActivity(intent)
                                     },
                                     onDismissClick = {

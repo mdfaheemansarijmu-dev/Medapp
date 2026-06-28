@@ -167,7 +167,10 @@ data class ParsedTimetableClass(
     val teacher_name: String? = null,
     val room: String? = null,
     val is_practical: Boolean = false,
-    val is_lunch_break: Boolean = false
+    val is_lunch_break: Boolean = false,
+    val confidence: String? = "High", // "High", "Medium", "Low"
+    val is_uncertain: Boolean? = false,
+    val notes: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -178,4 +181,17 @@ data class UnifiedParserResponse(
     val extracted_timetable: List<ParsedTimetableClass> = emptyList(),
     val extracted_items: List<ParsedItem> = emptyList()
 )
+
+@JsonClass(generateAdapter = true)
+data class ScheduledNotification(
+    val id: Int,
+    val type: String, // "class", "assignment", "assessment", "study"
+    val itemId: String, // e.g. "asg_1"
+    val title: String,
+    val message: String,
+    val triggerTime: Long,
+    val subject: String,
+    val targetTime: Long
+)
+
 

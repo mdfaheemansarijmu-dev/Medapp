@@ -42,7 +42,7 @@ fun OptionalUpdateDialog(
         },
         title = {
             Text(
-                text = config.updateTitle,
+                text = "🚀 New Update Available",
                 style = MaterialTheme.typography.titleLarge.copy(
                     fontWeight = FontWeight.Bold,
                     fontSize = 20.sp
@@ -115,7 +115,7 @@ fun OptionalUpdateDialog(
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = config.updateMessage,
+                        text = config.releaseNotes,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 20.sp
@@ -285,7 +285,7 @@ fun ForceUpdateScreen(
                         color = MaterialTheme.colorScheme.error
                     )
                     Text(
-                        text = config.updateMessage,
+                        text = config.releaseNotes,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 20.sp

@@ -27,7 +27,7 @@ interface PlannerDao {
     fun getAssignmentsForCourse(courseCode: String): Flow<List<Assignment>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAssignment(assignment: Assignment)
+    suspend fun insertAssignment(assignment: Assignment): Long
 
     @Query("DELETE FROM assignments WHERE id = :id")
     suspend fun deleteAssignmentById(id: Int)
@@ -40,7 +40,7 @@ interface PlannerDao {
     fun getAssessmentsForCourse(courseCode: String): Flow<List<Assessment>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAssessment(assessment: Assessment)
+    suspend fun insertAssessment(assessment: Assessment): Long
 
     @Query("DELETE FROM assessments WHERE id = :id")
     suspend fun deleteAssessmentById(id: Int)
@@ -53,7 +53,7 @@ interface PlannerDao {
     fun getStudyTasksForCourse(courseCode: String): Flow<List<StudyTask>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertStudyTask(task: StudyTask)
+    suspend fun insertStudyTask(task: StudyTask): Long
 
     @Query("DELETE FROM study_tasks WHERE id = :id")
     suspend fun deleteStudyTaskById(id: Int)

@@ -28,6 +28,11 @@ import com.example.BuildConfig
 import com.example.data.model.MedicalCourse
 import com.example.ui.viewmodel.PlannerViewModel
 import com.example.ui.viewmodel.LoginMode
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import android.app.Activity
+import android.widget.Toast
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -44,6 +49,7 @@ fun SettingsScreen(
     val studentDpUrl by viewModel.studentDpUrl.collectAsStateWithLifecycle()
     val studentDpPreset by viewModel.studentDpPreset.collectAsStateWithLifecycle()
     val studentEmail by viewModel.studentEmail.collectAsStateWithLifecycle()
+    val googleUserId by viewModel.googleUserId.collectAsStateWithLifecycle()
     val loginMode by viewModel.loginMode.collectAsStateWithLifecycle()
 
     var showDpDialog by remember { mutableStateOf(false) }
@@ -85,6 +91,16 @@ fun SettingsScreen(
         }
     }
 
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            viewModel.setNotificationsEnabled(true)
+        } else {
+            viewModel.setNotificationsEnabled(false)
+        }
+    }
+
     if (showPhotoSourceChooser) {
         ProfilePictureSourceDialog(
             onDismiss = { showPhotoSourceChooser = false },
@@ -103,14 +119,48 @@ fun SettingsScreen(
         )
     }
 
-    if (showGoogleChooserInSettings) {
-        GoogleAccountChooserDialog(
-            onAccountSelected = { name, email, dpUrl ->
-                viewModel.signInWithGoogle(name, email, dpUrl)
-                showGoogleChooserInSettings = false
-            },
-            onDismiss = { showGoogleChooserInSettings = false }
-        )
+    val isAuthenticating by viewModel.isAuthenticating.collectAsStateWithLifecycle()
+
+    val gso = remember {
+        GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestProfile()
+            .build()
+    }
+    val googleSignInClient = remember(context, gso) {
+        GoogleSignIn.getClient(context, gso)
+    }
+
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+            try {
+                val account = task.getResult(ApiException::class.java)
+                val name = account.displayName ?: "Google User"
+                val email = account.email ?: ""
+                val photoUrl = account.photoUrl?.toString() ?: ""
+                val id = account.id ?: ""
+                
+                viewModel.signInWithGoogle(name, email, photoUrl, id)
+                Toast.makeText(context, "Successfully linked Google account: $name", Toast.LENGTH_SHORT).show()
+            } catch (e: ApiException) {
+                val errorMsg = "Link Google account failed: ${e.message ?: "Unknown error"}"
+                viewModel.setAuthError(errorMsg)
+                Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+            }
+        } else if (result.resultCode == Activity.RESULT_CANCELED) {
+            Toast.makeText(context, "Sign-in cancelled", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Sign-in failed", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun isPlayServicesAvailable(context: android.content.Context): Boolean {
+        val googleApiAvailability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
+        val resultCode = googleApiAvailability.isGooglePlayServicesAvailable(context)
+        return resultCode == com.google.android.gms.common.ConnectionResult.SUCCESS
     }
 
     if (showDpDialog) {
@@ -350,6 +400,7 @@ fun SettingsScreen(
                                     viewModel.updateStudentProfile(it, studentDpUrl, studentDpPreset)
                                 },
                                 label = { Text("Name") },
+                                placeholder = { Text("Med Student") },
                                 singleLine = true,
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier
@@ -368,6 +419,15 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(start = 4.dp)
                                 )
+                                if (googleUserId.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "ID: $googleUserId",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                        modifier = Modifier.padding(start = 4.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -414,7 +474,17 @@ fun SettingsScreen(
                             }
                         } else {
                             Button(
-                                onClick = { showGoogleChooserInSettings = true },
+                                onClick = {
+                                    if (!isPlayServicesAvailable(context)) {
+                                        Toast.makeText(context, "Google Play Services are unavailable on this device.", Toast.LENGTH_LONG).show()
+                                    } else if (!isAuthenticating) {
+                                        viewModel.setAuthenticating(true)
+                                        googleSignInClient.signOut().addOnCompleteListener {
+                                            googleSignInLauncher.launch(googleSignInClient.signInIntent)
+                                        }
+                                    }
+                                },
+                                enabled = !isAuthenticating,
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = MaterialTheme.colorScheme.primary,
                                     contentColor = MaterialTheme.colorScheme.onPrimary
@@ -422,13 +492,22 @@ fun SettingsScreen(
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.weight(1f).testTag("sign_in_google_btn")
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Login,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Sign In with Google", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold))
+                                if (isAuthenticating) {
+                                    CircularProgressIndicator(
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Connecting...", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold))
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Login,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Sign In with Google", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold))
+                                }
                             }
                         }
                     }
@@ -561,7 +640,24 @@ fun SettingsScreen(
 
                     Switch(
                         checked = areNotificationsEnabled,
-                        onCheckedChange = { viewModel.setNotificationsEnabled(it) },
+                        onCheckedChange = { checked ->
+                            if (checked) {
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                                    val hasPermission = context.checkSelfPermission(
+                                        android.Manifest.permission.POST_NOTIFICATIONS
+                                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                    if (hasPermission) {
+                                        viewModel.setNotificationsEnabled(true)
+                                    } else {
+                                        notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                } else {
+                                    viewModel.setNotificationsEnabled(true)
+                                }
+                            } else {
+                                viewModel.setNotificationsEnabled(false)
+                            }
+                        },
                         modifier = Modifier.testTag("notifications_toggle_switch")
                     )
                 }
@@ -812,7 +908,7 @@ fun SettingsScreen(
                     // Dynamic release notes if available, otherwise fallback to static
                     val displayNotes = cachedConfig?.let {
                         listOf(
-                            it.latestVersion to it.updateMessage.split("\n")
+                            it.latestVersion to it.releaseNotes.split("\n")
                         )
                     } ?: listOf(
                         "1.0.1" to listOf(

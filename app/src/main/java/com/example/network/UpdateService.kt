@@ -16,11 +16,10 @@ import java.util.concurrent.TimeUnit
 @JsonClass(generateAdapter = true)
 data class AppUpdateConfig(
     val latestVersion: String,
-    val minimumSupportedVersion: String,
-    val updateTitle: String,
-    val updateMessage: String,
-    val downloadUrl: String,
-    val forceUpdate: Boolean
+    val minimumVersion: String,
+    val forceUpdate: Boolean,
+    val apkUrl: String,
+    val releaseNotes: String
 )
 
 sealed class AppUpdateResult {
@@ -43,10 +42,9 @@ class UpdateServiceImpl : UpdateService {
         private const val KEY_LAST_CHECKED = "last_checked_timestamp"
         private const val KEY_CACHED_VERSION = "cached_latest_version"
         private const val KEY_CACHED_MIN_VERSION = "cached_min_version"
-        private const val KEY_CACHED_TITLE = "cached_update_title"
-        private const val KEY_CACHED_MESSAGE = "cached_update_message"
-        private const val KEY_CACHED_URL = "cached_download_url"
         private const val KEY_CACHED_FORCE = "cached_force_update"
+        private const val KEY_CACHED_APK_URL = "cached_apk_url"
+        private const val KEY_CACHED_RELEASE_NOTES = "cached_release_notes"
 
         const val DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/faheem-ansari/student-planner-app/main/update.json"
     }
@@ -76,7 +74,7 @@ class UpdateServiceImpl : UpdateService {
             okHttpClient.newCall(request).execute().use { response ->
                 if (response.code == 404) {
                     return@withContext AppUpdateResult.Error(
-                        "Update file not found (404). Please upload 'update.json' to your repository (or server) to activate live updates."
+                        "Update file not found (404). Please upload 'update.json' to your repository to activate live updates."
                     )
                 }
                 if (!response.isSuccessful) {
@@ -93,18 +91,17 @@ class UpdateServiceImpl : UpdateService {
                 // Cache the update info
                 sharedPrefs.edit()
                     .putString(KEY_CACHED_VERSION, config.latestVersion)
-                    .putString(KEY_CACHED_MIN_VERSION, config.minimumSupportedVersion)
-                    .putString(KEY_CACHED_TITLE, config.updateTitle)
-                    .putString(KEY_CACHED_MESSAGE, config.updateMessage)
-                    .putString(KEY_CACHED_URL, config.downloadUrl)
+                    .putString(KEY_CACHED_MIN_VERSION, config.minimumVersion)
                     .putBoolean(KEY_CACHED_FORCE, config.forceUpdate)
+                    .putString(KEY_CACHED_APK_URL, config.apkUrl)
+                    .putString(KEY_CACHED_RELEASE_NOTES, config.releaseNotes)
                     .apply()
 
                 val installedVersion = BuildConfig.VERSION_NAME
                 
                 if (isVersionNewer(installedVersion, config.latestVersion)) {
-                    // Check if forced update is required based on forceUpdate flag OR if installed version is below minimumSupportedVersion
-                    val isForce = config.forceUpdate || isVersionNewer(installedVersion, config.minimumSupportedVersion)
+                    // Check if forced update is required based on forceUpdate flag OR if installed version is below minimumVersion
+                    val isForce = config.forceUpdate || isVersionNewer(installedVersion, config.minimumVersion)
                     AppUpdateResult.UpdateAvailable(config, isForce)
                 } else {
                     AppUpdateResult.UpToDate
@@ -118,7 +115,7 @@ class UpdateServiceImpl : UpdateService {
             if (cachedConfig != null) {
                 val installedVersion = BuildConfig.VERSION_NAME
                 if (isVersionNewer(installedVersion, cachedConfig.latestVersion)) {
-                    val isForce = cachedConfig.forceUpdate || isVersionNewer(installedVersion, cachedConfig.minimumSupportedVersion)
+                    val isForce = cachedConfig.forceUpdate || isVersionNewer(installedVersion, cachedConfig.minimumVersion)
                     return@withContext AppUpdateResult.UpdateAvailable(cachedConfig, isForce)
                 }
             }
@@ -131,18 +128,16 @@ class UpdateServiceImpl : UpdateService {
         val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val latestVersion = sharedPrefs.getString(KEY_CACHED_VERSION, null) ?: return null
         val minVersion = sharedPrefs.getString(KEY_CACHED_MIN_VERSION, "1.0.0") ?: "1.0.0"
-        val title = sharedPrefs.getString(KEY_CACHED_TITLE, "New Update Available") ?: "New Update Available"
-        val message = sharedPrefs.getString(KEY_CACHED_MESSAGE, "") ?: ""
-        val url = sharedPrefs.getString(KEY_CACHED_URL, "") ?: ""
         val force = sharedPrefs.getBoolean(KEY_CACHED_FORCE, false)
+        val apkUrl = sharedPrefs.getString(KEY_CACHED_APK_URL, "") ?: ""
+        val releaseNotes = sharedPrefs.getString(KEY_CACHED_RELEASE_NOTES, "") ?: ""
 
         return AppUpdateConfig(
             latestVersion = latestVersion,
-            minimumSupportedVersion = minVersion,
-            updateTitle = title,
-            updateMessage = message,
-            downloadUrl = url,
-            forceUpdate = force
+            minimumVersion = minVersion,
+            forceUpdate = force,
+            apkUrl = apkUrl,
+            releaseNotes = releaseNotes
         )
     }
 
@@ -156,10 +151,9 @@ class UpdateServiceImpl : UpdateService {
         sharedPrefs.edit()
             .remove(KEY_CACHED_VERSION)
             .remove(KEY_CACHED_MIN_VERSION)
-            .remove(KEY_CACHED_TITLE)
-            .remove(KEY_CACHED_MESSAGE)
-            .remove(KEY_CACHED_URL)
             .remove(KEY_CACHED_FORCE)
+            .remove(KEY_CACHED_APK_URL)
+            .remove(KEY_CACHED_RELEASE_NOTES)
             .apply()
     }
 
