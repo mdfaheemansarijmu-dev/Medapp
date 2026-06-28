@@ -22,17 +22,21 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
+import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.room.Room
 import com.example.data.local.PlannerDatabase
 import com.example.data.repository.PlannerRepository
+import com.example.network.AppUpdateResult
+import com.example.ui.components.OptionalUpdateDialog
+import com.example.ui.components.ForceUpdateScreen
 import com.example.ui.screens.*
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.PlannerViewModel
 import com.example.ui.viewmodel.PlannerViewModelFactory
 import com.example.ui.viewmodel.Screen
-import com.example.ui.viewmodel.BrowserPushNotification
 
 class MainActivity : ComponentActivity() {
     private lateinit var database: PlannerDatabase
@@ -56,11 +60,19 @@ class MainActivity : ComponentActivity() {
         val factory = PlannerViewModelFactory(application, repository)
         viewModel = ViewModelProvider(this, factory)[PlannerViewModel::class.java]
 
+        // Request POST_NOTIFICATIONS permission dynamically on Android 13+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
+        }
+
         setContent {
             val isDarkTheme by viewModel.isDarkTheme.collectAsStateWithLifecycle()
             MyApplicationTheme(darkTheme = isDarkTheme) {
                 val currentScreen by viewModel.currentScreen.collectAsStateWithLifecycle()
-                val activeBrowserPush by viewModel.activeBrowserPush.collectAsStateWithLifecycle()
+                val updateResult by viewModel.updateResult.collectAsStateWithLifecycle()
+                val isUpdateDialogDismissed by viewModel.isUpdateDialogDismissed.collectAsStateWithLifecycle()
 
                 Box(modifier = Modifier.fillMaxSize()) {
                     Surface(
@@ -74,22 +86,32 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // Simulated Browser Push Notification Overlay
-                    AnimatedVisibility(
-                        visible = activeBrowserPush != null,
-                        enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-                        exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .statusBarsPadding()
-                            .padding(16.dp)
-                            .zIndex(99f)
-                    ) {
-                        activeBrowserPush?.let { push ->
-                            BrowserPushNotificationToast(
-                                push = push,
-                                onDismiss = { viewModel.dismissBrowserPush() }
-                            )
+                    // Handle In-App Update System Overlays and Dialogs
+                    updateResult?.let { result ->
+                        if (result is AppUpdateResult.UpdateAvailable) {
+                            val context = androidx.compose.ui.platform.LocalContext.current
+                            if (result.isForce) {
+                                // Fullscreen non-dismissible critical force update overlay
+                                ForceUpdateScreen(
+                                    config = result.config,
+                                    onUpdateClick = {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(result.config.downloadUrl))
+                                        context.startActivity(intent)
+                                    }
+                                )
+                            } else if (!isUpdateDialogDismissed) {
+                                // Material 3 optional update dialog
+                                OptionalUpdateDialog(
+                                    config = result.config,
+                                    onUpdateClick = {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(result.config.downloadUrl))
+                                        context.startActivity(intent)
+                                    },
+                                    onDismissClick = {
+                                        viewModel.dismissUpdateDialog()
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -284,107 +306,4 @@ fun BottomNavigationBar(
     }
 }
 
-@Composable
-fun BrowserPushNotificationToast(
-    push: BrowserPushNotification,
-    onDismiss: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("browser_push_toast"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f)
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-        )
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            // Header: Chrome push badge
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Language,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "MedPulse Web Portal (Browser Push)",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.size(24.dp).testTag("dismiss_push_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Dismiss Notification",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(14.dp)
-                    )
-                }
-            }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Body content
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(
-                            if (push.iconType == "assignment") 
-                                MaterialTheme.colorScheme.errorContainer 
-                            else 
-                                MaterialTheme.colorScheme.primaryContainer
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (push.iconType == "assignment") 
-                            Icons.Default.AssignmentLate 
-                        else 
-                            Icons.Default.School,
-                        contentDescription = null,
-                        tint = if (push.iconType == "assignment") 
-                            MaterialTheme.colorScheme.onErrorContainer 
-                        else 
-                            MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                Column {
-                    Text(
-                        text = push.title,
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = push.message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2
-                    )
-                }
-            }
-        }
-    }
-}

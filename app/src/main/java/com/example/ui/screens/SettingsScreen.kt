@@ -22,10 +22,15 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
 import com.example.data.model.MedicalCourse
 import com.example.ui.viewmodel.PlannerViewModel
 import com.example.ui.viewmodel.LoginMode
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun SettingsScreen(
@@ -632,6 +637,228 @@ fun SettingsScreen(
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // About & Updates Group
+            SettingsSectionHeader(title = "About & Updates")
+
+            val updateCheckInProgress by viewModel.updateCheckInProgress.collectAsStateWithLifecycle()
+            val lastCheckedTime by viewModel.lastCheckedTime.collectAsStateWithLifecycle()
+            val cachedConfig by viewModel.cachedUpdateConfig.collectAsStateWithLifecycle()
+            val updateResult by viewModel.updateResult.collectAsStateWithLifecycle()
+
+            val lastCheckedStr = if (lastCheckedTime == 0L) {
+                "Never"
+            } else {
+                val sdf = SimpleDateFormat("MMM dd, yyyy hh:mm a", Locale.getDefault())
+                sdf.format(Date(lastCheckedTime))
+            }
+
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // About Info
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(16.dp))
+
+                        Column {
+                            Text(
+                                text = "MedPulse Student Planner",
+                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Your comprehensive AI-assisted companion",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Version & Status Grid
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Current Version", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("v${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurface)
+                        }
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Latest Version", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = cachedConfig?.let { "v${it.latestVersion}" } ?: "v${BuildConfig.VERSION_NAME}",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = if (cachedConfig != null && cachedConfig!!.latestVersion != BuildConfig.VERSION_NAME) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Last Checked", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(lastCheckedStr, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Check for Updates Button
+                    Button(
+                        onClick = { viewModel.checkForUpdates(silent = false) },
+                        enabled = !updateCheckInProgress,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("settings_check_updates_btn")
+                    ) {
+                        if (updateCheckInProgress) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Checking...", style = MaterialTheme.typography.bodyMedium)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Check Now", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+
+                    // Developer Simulation Tools for Verification
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Text(
+                        text = "🛠️ Developer Simulation Tools",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { viewModel.simulateUpdate(force = false) },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f).height(38.dp).testTag("simulate_optional_btn")
+                        ) {
+                            Text("Simulate Optional", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        }
+                        OutlinedButton(
+                            onClick = { viewModel.simulateUpdate(force = true) },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f).height(38.dp).testTag("simulate_force_btn")
+                        ) {
+                            Text("Simulate Force", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        }
+                    }
+
+                    // Update result feedback message
+                    updateResult?.let { result ->
+                        Spacer(modifier = Modifier.height(14.dp))
+                        val feedbackText = when (result) {
+                            is com.example.network.AppUpdateResult.UpToDate -> "✅ Your application is fully up to date."
+                            is com.example.network.AppUpdateResult.Error -> "❌ Failed to check for updates: ${result.message}"
+                            is com.example.network.AppUpdateResult.UpdateAvailable -> "🎉 New version v${result.config.latestVersion} is available!"
+                        }
+                        Text(
+                            text = feedbackText,
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                            color = when (result) {
+                                is com.example.network.AppUpdateResult.UpToDate -> MaterialTheme.colorScheme.primary
+                                is com.example.network.AppUpdateResult.Error -> MaterialTheme.colorScheme.error
+                                is com.example.network.AppUpdateResult.UpdateAvailable -> MaterialTheme.colorScheme.primary
+                            },
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Update History / Release Notes
+                    Text(
+                        text = "Update History",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Dynamic release notes if available, otherwise fallback to static
+                    val displayNotes = cachedConfig?.let {
+                        listOf(
+                            it.latestVersion to it.updateMessage.split("\n")
+                        )
+                    } ?: listOf(
+                        "1.0.1" to listOf(
+                            "AI timetable import",
+                            "Dashboard synchronization",
+                            "Profile improvements",
+                            "Faster performance",
+                            "Bug fixes"
+                        )
+                    )
+
+                    displayNotes.forEach { (version, notes) ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "Version $version",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            notes.forEach { note ->
+                                if (note.isNotBlank()) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 2.dp),
+                                        verticalAlignment = Alignment.Top
+                                    ) {
+                                        Text("•", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = note.trim().removePrefix("•").trim(),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
 
             Spacer(modifier = Modifier.height(80.dp)) // Padding for bottom navbar
         }

@@ -1,9 +1,12 @@
 package com.example.ui.viewmodel
 
+import android.app.AlarmManager
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -16,6 +19,10 @@ import com.example.data.model.*
 import com.example.data.repository.PlannerRepository
 import com.example.network.GeminiParserService
 import com.example.network.RetrofitClient
+import com.example.network.UpdateService
+import com.example.network.UpdateServiceImpl
+import com.example.network.AppUpdateResult
+import com.example.network.AppUpdateConfig
 import com.squareup.moshi.Types
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -115,10 +122,6 @@ class PlannerViewModel(
     private val _areNotificationsEnabled = MutableStateFlow(true)
     val areNotificationsEnabled: StateFlow<Boolean> = _areNotificationsEnabled.asStateFlow()
 
-    // Active browser push simulation state
-    private val _activeBrowserPush = MutableStateFlow<BrowserPushNotification?>(null)
-    val activeBrowserPush: StateFlow<BrowserPushNotification?> = _activeBrowserPush.asStateFlow()
-
     // Student Profile state
     private val _studentName = MutableStateFlow("Med Student")
     val studentName: StateFlow<String> = _studentName.asStateFlow()
@@ -146,6 +149,23 @@ class PlannerViewModel(
     private val _activeUnifiedResponse = MutableStateFlow<UnifiedParserResponse?>(null)
     val activeUnifiedResponse: StateFlow<UnifiedParserResponse?> = _activeUnifiedResponse.asStateFlow()
 
+    // --- Update System State Flows & Properties ---
+    private val updateService: UpdateService = UpdateServiceImpl()
+
+    private val _updateCheckInProgress = MutableStateFlow(false)
+    val updateCheckInProgress: StateFlow<Boolean> = _updateCheckInProgress.asStateFlow()
+
+    private val _updateResult = MutableStateFlow<AppUpdateResult?>(null)
+    val updateResult: StateFlow<AppUpdateResult?> = _updateResult.asStateFlow()
+
+    private val _lastCheckedTime = MutableStateFlow(0L)
+    val lastCheckedTime: StateFlow<Long> = _lastCheckedTime.asStateFlow()
+
+    private val _cachedUpdateConfig = MutableStateFlow<AppUpdateConfig?>(null)
+    val cachedUpdateConfig: StateFlow<AppUpdateConfig?> = _cachedUpdateConfig.asStateFlow()
+
+    private val _isUpdateDialogDismissed = MutableStateFlow(false)
+    val isUpdateDialogDismissed: StateFlow<Boolean> = _isUpdateDialogDismissed.asStateFlow()
 
     private val geminiService = GeminiParserService()
 
@@ -182,9 +202,17 @@ class PlannerViewModel(
             val format = SimpleDateFormat("hh:mm a", Locale.getDefault())
             while (true) {
                 _currentTimeOfDay.value = format.format(Date())
+                _currentCalendarDate.value = Calendar.getInstance()
                 kotlinx.coroutines.delay(10000) // Update every 10 seconds
             }
         }
+
+        // Load cached update details
+        _lastCheckedTime.value = updateService.getLastCheckedTime(application)
+        _cachedUpdateConfig.value = updateService.getCachedUpdateInfo(application)
+
+        // Automatically check for updates silently on launch
+        checkForUpdates(silent = true)
     }
 
     // Set Course and populate default database values
@@ -364,8 +392,7 @@ class PlannerViewModel(
     fun addAssignment(subject: String, title: String, dueDate: Long, priority: String, type: String, notes: String? = null) {
         val course = selectedCourse.value ?: return
         viewModelScope.launch {
-            repository.addAssignment(
-                Assignment(
+            val assignment = Assignment(
                     courseCode = course.code,
                     subject = subject,
                     title = title,
@@ -375,8 +402,9 @@ class PlannerViewModel(
                     type = type,
                     notes = notes
                 )
-            )
+            repository.addAssignment(assignment)
             generateSmartNotifications()
+            scheduleReminder(assignment.hashCode(), dueDate, "Assignment Due", "Assignment $title is due soon!")
         }
     }
 
@@ -395,8 +423,7 @@ class PlannerViewModel(
     fun addAssessment(subject: String, title: String, date: Long, type: String, syllabus: String? = null) {
         val course = selectedCourse.value ?: return
         viewModelScope.launch {
-            repository.addAssessment(
-                Assessment(
+            val assessment = Assessment(
                     courseCode = course.code,
                     subject = subject,
                     title = title,
@@ -405,8 +432,9 @@ class PlannerViewModel(
                     status = "Upcoming",
                     syllabus = syllabus
                 )
-            )
+            repository.addAssessment(assessment)
             generateSmartNotifications()
+            scheduleReminder(assessment.hashCode(), date, "Assessment Due", "Assessment $title is due soon!")
         }
     }
 
@@ -425,8 +453,7 @@ class PlannerViewModel(
     fun addStudyTask(subject: String, title: String, dueDate: Long, priority: String, minutes: Int = 30) {
         val course = selectedCourse.value ?: return
         viewModelScope.launch {
-            repository.addStudyTask(
-                StudyTask(
+            val task = StudyTask(
                     courseCode = course.code,
                     subject = subject,
                     title = title,
@@ -435,7 +462,8 @@ class PlannerViewModel(
                     progress = 0,
                     targetMinutes = minutes
                 )
-            )
+            repository.addStudyTask(task)
+            scheduleReminder(task.hashCode(), dueDate, "Study Task Due", "Study Task $title is due soon!")
         }
     }
 
@@ -1016,8 +1044,6 @@ class PlannerViewModel(
                     "Academic Alerts Enabled", 
                     "You will now receive notifications for assignments and lectures due within 24 hours."
                 )
-            } else {
-                _activeBrowserPush.value = null
             }
         }
     }
@@ -1052,21 +1078,36 @@ class PlannerViewModel(
         }
     }
 
-    fun triggerBrowserPush(title: String, message: String, iconType: String) {
-        if (_areNotificationsEnabled.value) {
-            _activeBrowserPush.value = BrowserPushNotification(title, message, iconType)
-            viewModelScope.launch {
-                delay(6000)
-                if (_activeBrowserPush.value?.title == title) {
-                    _activeBrowserPush.value = null
-                }
+    fun scheduleReminder(id: Int, time: Long, title: String, message: String) {
+        val context = getApplication<Application>()
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(context, com.example.receivers.NotificationReceiver::class.java).apply {
+            putExtra("title", title)
+            putExtra("message", message)
+            putExtra("id", id)
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            id,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Schedule 30 minutes before
+        val triggerTime = time - (30 * 60 * 1000)
+        if (triggerTime > System.currentTimeMillis()) {
+            try {
+                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            } catch (e: SecurityException) {
+                Log.e("PlannerViewModel", "Failed to schedule alarm", e)
             }
-            triggerLocalSystemNotification(title, message)
         }
     }
 
-    fun dismissBrowserPush() {
-        _activeBrowserPush.value = null
+    fun triggerBrowserPush(title: String, message: String, iconType: String) {
+        if (_areNotificationsEnabled.value) {
+            triggerLocalSystemNotification(title, message)
+        }
     }
 
     fun resetWholeApp() {
@@ -1082,6 +1123,47 @@ class PlannerViewModel(
             _selectedCourse.value = null
             _currentScreen.value = Screen.Welcome
         }
+    }
+
+    // --- Update System Functions ---
+    fun checkForUpdates(silent: Boolean = false) {
+        viewModelScope.launch {
+            if (_updateCheckInProgress.value) return@launch
+            _updateCheckInProgress.value = true
+            
+            val result = updateService.checkForUpdates(getApplication())
+            _updateResult.value = result
+            _lastCheckedTime.value = updateService.getLastCheckedTime(getApplication())
+            _cachedUpdateConfig.value = updateService.getCachedUpdateInfo(getApplication())
+            
+            _updateCheckInProgress.value = false
+
+            if (!silent) {
+                _isUpdateDialogDismissed.value = false
+            }
+        }
+    }
+
+    fun dismissUpdateDialog() {
+        _isUpdateDialogDismissed.value = true
+    }
+
+    fun clearUpdateResult() {
+        _updateResult.value = null
+    }
+
+    fun simulateUpdate(force: Boolean) {
+        val mockConfig = AppUpdateConfig(
+            latestVersion = "1.0.2",
+            minimumSupportedVersion = if (force) "1.0.2" else "1.0.0",
+            updateTitle = if (force) "🚀 Critical Update Required" else "🚀 New Update Available",
+            updateMessage = "Important security fixes, AI assistant improvements, local database synchronization, and class scheduler enhancements.",
+            downloadUrl = "https://ais-dev-famqmclmfe6gdf3uf2vkyk-1079547613754.asia-southeast1.run.app",
+            forceUpdate = force
+        )
+        _updateResult.value = AppUpdateResult.UpdateAvailable(mockConfig, force)
+        _cachedUpdateConfig.value = mockConfig
+        _isUpdateDialogDismissed.value = false
     }
 }
 
@@ -1100,12 +1182,6 @@ enum class LoginMode {
     GUEST,
     GOOGLE
 }
-
-data class BrowserPushNotification(
-    val title: String,
-    val message: String,
-    val iconType: String
-)
 
 class PlannerViewModelFactory(
     private val application: Application,

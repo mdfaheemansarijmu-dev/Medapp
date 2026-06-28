@@ -115,50 +115,76 @@ fun DashboardScreen(
     val today = remember(liveClock) { Calendar.getInstance() }
 
     val todayPendingItems = remember(assignments, assessments, studyTasks, today) {
-        val list = mutableListOf<TodayPendingItem>()
+        val combined = mutableListOf<Pair<TodayPendingItem, Long>>()
 
-        assignments.filter {
-            isSameDay(it.dueDate, today.timeInMillis) && it.status == "Pending"
-        }.forEach {
-            list.add(
-                TodayPendingItem(
-                    id = "assignment_${it.id}",
-                    title = it.title,
-                    subtitle = "${it.subject} • ${it.type}",
-                    priority = it.priority,
-                    onToggle = { viewModel.toggleAssignment(it) }
+        assignments.filter { it.status == "Pending" }.forEach { asg ->
+            val daysRemaining = getDaysRemaining(asg.dueDate)
+            val dueLabel = when {
+                daysRemaining < 0 -> "Overdue by ${-daysRemaining}d"
+                daysRemaining == 0 -> "Due Today"
+                daysRemaining == 1 -> "Due Tomorrow"
+                else -> "Due in $daysRemaining days"
+            }
+            combined.add(
+                Pair(
+                    TodayPendingItem(
+                        id = "assignment_${asg.id}",
+                        title = asg.title,
+                        subtitle = "${asg.subject} • ${asg.type} • $dueLabel",
+                        priority = asg.priority,
+                        onToggle = { viewModel.toggleAssignment(asg) }
+                    ),
+                    asg.dueDate
                 )
             )
         }
 
-        assessments.filter {
-            isSameDay(it.date, today.timeInMillis) && it.status != "Completed"
-        }.forEach {
-            list.add(
-                TodayPendingItem(
-                    id = "assessment_${it.id}",
-                    title = it.title,
-                    subtitle = "${it.subject} • ${it.type}",
-                    priority = "High",
-                    onToggle = { viewModel.toggleAssessment(it) }
+        assessments.filter { it.status != "Completed" }.forEach { ass ->
+            val daysRemaining = getDaysRemaining(ass.date)
+            val dueLabel = when {
+                daysRemaining < 0 -> "Overdue by ${-daysRemaining}d"
+                daysRemaining == 0 -> "Today"
+                daysRemaining == 1 -> "Tomorrow"
+                else -> "In $daysRemaining days"
+            }
+            combined.add(
+                Pair(
+                    TodayPendingItem(
+                        id = "assessment_${ass.id}",
+                        title = ass.title,
+                        subtitle = "${ass.subject} • ${ass.type} • $dueLabel",
+                        priority = "High",
+                        onToggle = { viewModel.toggleAssessment(ass) }
+                    ),
+                    ass.date
                 )
             )
         }
 
-        studyTasks.filter {
-            isSameDay(it.dueDate, today.timeInMillis) && it.progress < 100
-        }.forEach {
-            list.add(
-                TodayPendingItem(
-                    id = "study_${it.id}",
-                    title = it.title,
-                    subtitle = "${it.subject} • Revision Goal: ${it.targetMinutes}m",
-                    priority = it.priority,
-                    onToggle = { viewModel.updateStudyProgress(it.id, 100) }
+        studyTasks.filter { it.progress < 100 }.forEach { task ->
+            val daysRemaining = getDaysRemaining(task.dueDate)
+            val dueLabel = when {
+                daysRemaining < 0 -> "Overdue by ${-daysRemaining}d"
+                daysRemaining == 0 -> "Today"
+                daysRemaining == 1 -> "Tomorrow"
+                else -> "In $daysRemaining days"
+            }
+            combined.add(
+                Pair(
+                    TodayPendingItem(
+                        id = "study_${task.id}",
+                        title = task.title,
+                        subtitle = "${task.subject} • Revision Goal: ${task.targetMinutes}m • $dueLabel",
+                        priority = task.priority,
+                        onToggle = { viewModel.updateStudyProgress(task.id, 100) }
+                    ),
+                    task.dueDate
                 )
             )
         }
-        list
+
+        combined.sortBy { it.second }
+        combined.map { it.first }
     }
 
     val nearestEvent = remember(exams, assessments, today) {
@@ -205,7 +231,7 @@ fun DashboardScreen(
 
     var showNotificationsTray by remember { mutableStateOf(false) }
 
-    val todayDateStr = remember {
+    val todayDateStr = remember(liveClock) {
         val format = SimpleDateFormat("EEEE, MMMM dd", Locale.getDefault())
         format.format(Date())
     }
@@ -338,14 +364,14 @@ fun DashboardScreen(
 
                 // Today's Assignments Section
                 item {
-                    SectionHeader(title = "Today's Focus & Assignments", icon = Icons.Default.Assignment)
+                    SectionHeader(title = "Active Focus & Assignments", icon = Icons.Default.Assignment)
                 }
 
                 if (todayPendingItems.isEmpty()) {
                     item {
                         EmptyStateCard(
-                            title = "No assignments due today.",
-                            desc = "Keep studying to stay ahead of your schedule.",
+                            title = "No pending focus items or assignments.",
+                            desc = "You are fully caught up with your schedule! 🎉",
                             icon = Icons.Default.CheckCircle
                         )
                     }
