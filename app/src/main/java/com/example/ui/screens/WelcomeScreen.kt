@@ -36,6 +36,13 @@ import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import android.app.Activity
 import android.widget.Toast
+import android.app.AlarmManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import android.os.PowerManager
+import android.os.Build
 
 @Composable
 fun WelcomeScreen(
@@ -44,6 +51,7 @@ fun WelcomeScreen(
 ) {
     val loginMode by viewModel.loginMode.collectAsStateWithLifecycle()
     var selectedItem by remember { mutableStateOf<MedicalCourse?>(null) }
+    var showNotificationOnboarding by remember { mutableStateOf(false) }
     
     val context = LocalContext.current
     val isAuthenticating by viewModel.isAuthenticating.collectAsStateWithLifecycle()
@@ -110,199 +118,235 @@ fun WelcomeScreen(
             )
             .padding(24.dp)
     ) {
+    val currentStep = when {
+        showNotificationOnboarding -> WelcomeStep.NOTIFICATIONS_SETUP
+        loginMode == LoginMode.UNDECIDED -> WelcomeStep.LOGIN
+        else -> WelcomeStep.COURSE_SELECTION
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        MaterialTheme.colorScheme.background,
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f),
+                        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.1f)
+                    )
+                )
+            )
+            .padding(24.dp)
+    ) {
         AnimatedContent(
-            targetState = loginMode,
+            targetState = currentStep,
             transitionSpec = {
                 slideInHorizontally { width -> width } + fadeIn() togetherWith
                         slideOutHorizontally { width -> -width } + fadeOut()
             },
-            label = "LoginTransition"
-        ) { mode ->
-            if (mode == LoginMode.UNDECIDED) {
-                OnboardingLoginChoice(
-                    isAuthenticating = isAuthenticating,
-                    authError = authError,
-                    onGoogleClick = {
-                        if (!isPlayServicesAvailable(context)) {
-                            viewModel.setAuthError("Google Play Services are unavailable.")
-                            Toast.makeText(context, "Google Play Services are unavailable on this device.", Toast.LENGTH_LONG).show()
-                        } else if (!isAuthenticating) {
-                            viewModel.setAuthenticating(true)
-                            viewModel.setAuthError(null)
-                            googleSignInClient.signOut().addOnCompleteListener {
-                                googleSignInLauncher.launch(googleSignInClient.signInIntent)
+            label = "WelcomeTransition"
+        ) { step ->
+            when (step) {
+                WelcomeStep.LOGIN -> {
+                    OnboardingLoginChoice(
+                        isAuthenticating = isAuthenticating,
+                        authError = authError,
+                        onGoogleClick = {
+                            if (!isPlayServicesAvailable(context)) {
+                                viewModel.setAuthError("Google Play Services are unavailable.")
+                                Toast.makeText(context, "Google Play Services are unavailable on this device.", Toast.LENGTH_LONG).show()
+                            } else if (!isAuthenticating) {
+                                viewModel.setAuthenticating(true)
+                                viewModel.setAuthError(null)
+                                googleSignInClient.signOut().addOnCompleteListener {
+                                    googleSignInLauncher.launch(googleSignInClient.signInIntent)
+                                }
+                            }
+                        },
+                        onGuestClick = {
+                            if (!isAuthenticating) {
+                                viewModel.setGuestMode()
                             }
                         }
-                    },
-                    onGuestClick = {
-                        if (!isAuthenticating) {
-                            viewModel.setGuestMode()
-                        }
-                    }
-                )
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.SpaceBetween
-                ) {
-                    // Header
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(top = 20.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Favorite,
-                            contentDescription = "MedPulse icon",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .size(64.dp)
-                                .padding(bottom = 12.dp)
-                        )
-                        Text(
-                            text = "MedPulse",
-                            style = MaterialTheme.typography.headlineLarge.copy(
-                                fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = (-1).sp
-                            ),
-                            color = MaterialTheme.colorScheme.onBackground,
-                            textAlign = TextAlign.Center
-                        )
-                        Text(
-                            text = "Smart Medical Student Companion",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.SemiBold
-                            ),
-                            color = MaterialTheme.colorScheme.primary,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                        Text(
-                            text = "Replace scattered WhatsApp announcements and messy notes with an intelligent dashboard.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(top = 12.dp, start = 12.dp, end = 12.dp)
-                        )
-                    }
-
-                    // Selection section
+                    )
+                }
+                WelcomeStep.COURSE_SELECTION -> {
                     Column(
                         modifier = Modifier
-                            .weight(1f)
-                            .padding(vertical = 24.dp),
-                        verticalArrangement = Arrangement.Center
+                            .fillMaxSize()
+                            .statusBarsPadding(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = "Select Your Specialization",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onBackground,
-                            modifier = Modifier.padding(bottom = 16.dp, start = 4.dp)
-                        )
-
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(2),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        // Header
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(top = 20.dp)
                         ) {
-                            items(MedicalCourse.values()) { course ->
-                                val isSelected = selectedItem == course
-                                Card(
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = if (isSelected) {
-                                            MaterialTheme.colorScheme.primaryContainer
-                                        } else {
-                                            MaterialTheme.colorScheme.surface
-                                        }
-                                    ),
-                                    border = BorderStroke(
-                                        width = 1.5.dp,
-                                        color = if (isSelected) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                                        }
-                                    ),
-                                    shape = RoundedCornerShape(16.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(110.dp)
-                                        .clickable { selectedItem = course }
-                                        .testTag("course_card_${course.code}")
-                                ) {
-                                    Box(
+                            Icon(
+                                imageVector = Icons.Default.Favorite,
+                                contentDescription = "MedPulse icon",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .padding(bottom = 12.dp)
+                            )
+                            Text(
+                                text = "MedPulse",
+                                style = MaterialTheme.typography.headlineLarge.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    letterSpacing = (-1).sp
+                                ),
+                                color = MaterialTheme.colorScheme.onBackground,
+                                textAlign = TextAlign.Center
+                            )
+                            Text(
+                                text = "Smart Medical Student Companion",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                color = MaterialTheme.colorScheme.primary,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                            Text(
+                                text = "Replace scattered WhatsApp announcements and messy notes with an intelligent dashboard.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(top = 12.dp, start = 12.dp, end = 12.dp)
+                            )
+                        }
+
+                        // Selection section
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(vertical = 24.dp),
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = "Select Your Specialization",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.padding(bottom = 16.dp, start = 4.dp)
+                            )
+
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(2),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                items(MedicalCourse.values()) { course ->
+                                    val isSelected = selectedItem == course
+                                    Card(
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = if (isSelected) {
+                                                MaterialTheme.colorScheme.primaryContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.surface
+                                            }
+                                        ),
+                                        border = BorderStroke(
+                                            width = 1.5.dp,
+                                            color = if (isSelected) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                            }
+                                        ),
+                                        shape = RoundedCornerShape(16.dp),
                                         modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(16.dp),
-                                        contentAlignment = Alignment.Center
+                                            .fillMaxWidth()
+                                            .height(110.dp)
+                                            .clickable { selectedItem = course }
+                                            .testTag("course_card_${course.code}")
                                     ) {
-                                        Column(
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            verticalArrangement = Arrangement.Center
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(16.dp),
+                                            contentAlignment = Alignment.Center
                                         ) {
-                                            Text(
-                                                text = course.code,
-                                                style = MaterialTheme.typography.headlineSmall.copy(
-                                                    fontWeight = FontWeight.Bold,
-                                                    letterSpacing = 0.sp
-                                                ),
-                                                color = if (isSelected) {
-                                                    MaterialTheme.colorScheme.primary
-                                                } else {
-                                                    MaterialTheme.colorScheme.onSurface
-                                                }
-                                            )
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            Text(
-                                                text = course.displayName.split(" ").first(),
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontWeight = FontWeight.Medium
-                                                ),
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                textAlign = TextAlign.Center
-                                            )
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.Center
+                                            ) {
+                                                Text(
+                                                    text = course.code,
+                                                    style = MaterialTheme.typography.headlineSmall.copy(
+                                                        fontWeight = FontWeight.Bold,
+                                                        letterSpacing = 0.sp
+                                                    ),
+                                                    color = if (isSelected) {
+                                                        MaterialTheme.colorScheme.primary
+                                                    } else {
+                                                        MaterialTheme.colorScheme.onSurface
+                                                    }
+                                                )
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(
+                                                    text = course.displayName.split(" ").first(),
+                                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                                        fontWeight = FontWeight.Medium
+                                                    ),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    textAlign = TextAlign.Center
+                                                )
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    // Bottom CTA
-                    Button(
-                        onClick = {
-                            selectedItem?.let { viewModel.selectCourse(it) }
-                        },
-                        enabled = selectedItem != null,
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .navigationBarsPadding()
-                            .testTag("get_started_button"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                        )
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Text(
-                                text = "Get Started",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.5.sp
-                                )
+                        // Bottom CTA
+                        Button(
+                            onClick = {
+                                if (selectedItem != null) {
+                                    showNotificationOnboarding = true
+                                }
+                            },
+                            enabled = selectedItem != null,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .navigationBarsPadding()
+                                .testTag("get_started_button"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                             )
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = "Get Started",
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.5.sp
+                                    )
+                                )
+                            }
                         }
                     }
                 }
+                WelcomeStep.NOTIFICATIONS_SETUP -> {
+                    OnboardingNotificationsSetup(
+                        onFinish = {
+                            selectedItem?.let { viewModel.selectCourse(it) }
+                        },
+                        onBack = {
+                            showNotificationOnboarding = false
+                        }
+                    )
+                }
             }
         }
+    }
     }
 }
 
@@ -655,5 +699,343 @@ fun GoogleAccountChooserDialog(
             }
         }
     )
+}
+
+enum class WelcomeStep {
+    LOGIN,
+    COURSE_SELECTION,
+    NOTIFICATIONS_SETUP
+}
+
+@Composable
+fun OnboardingNotificationsSetup(
+    onFinish: () -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val powerManager = remember(context) { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
+    val alarmManager = remember(context) { context.getSystemService(Context.ALARM_SERVICE) as AlarmManager }
+
+    var hasNotificationPermission by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        )
+    }
+
+    var isIgnoringBatteryOptimizations by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                powerManager.isIgnoringBatteryOptimizations(context.packageName)
+            } else {
+                true
+            }
+        )
+    }
+
+    var canScheduleExact by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                alarmManager.canScheduleExactAlarms()
+            } else {
+                true
+            }
+        )
+    }
+
+    val notificationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasNotificationPermission = isGranted
+        if (isGranted) {
+            Toast.makeText(context, "Notifications permission granted!", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Notifications are disabled. Reminders won't show in your status bar.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    val batteryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            isIgnoringBatteryOptimizations = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+        }
+    }
+
+    val exactAlarmLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            canScheduleExact = alarmManager.canScheduleExactAlarms()
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        // Top Header
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(top = 16.dp)
+        ) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .align(Alignment.Start)
+                    .testTag("notification_onboarding_back_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ArrowBack,
+                    contentDescription = "Back"
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.NotificationsActive,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(40.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "Never Miss a Class or Exam",
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.5).sp
+                ),
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "To deliver class reminders and assignment deadlines precisely on time (exactly like Google Calendar), please configure the background permissions below.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            )
+        }
+
+        // Checklist of setup tasks
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Task 1: Notifications
+            PermissionSetupRow(
+                title = "System Notifications",
+                description = "Enables alerts on your lock screen and heads-up banner notifications.",
+                isConfigured = hasNotificationPermission,
+                buttonText = "Grant Permission",
+                onConfigure = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        notificationLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                },
+                testTag = "onboarding_grant_notifs_button"
+            )
+
+            // Task 2: Battery Optimizations
+            PermissionSetupRow(
+                title = "Battery Saver Whitelist",
+                description = "Bypasses system sleep restrictions to ensure alerts arrive even when you haven't opened the app for several days.",
+                isConfigured = isIgnoringBatteryOptimizations,
+                buttonText = "Configure",
+                onConfigure = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        batteryLauncher.launch(intent)
+                        Toast.makeText(context, "Scroll to MedPulse and set to 'Unrestricted' or 'Don't Optimize'.", Toast.LENGTH_LONG).show()
+                    }
+                },
+                testTag = "onboarding_grant_battery_button"
+            )
+
+            // Task 3: Exact Alarm Permission (Android 12+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PermissionSetupRow(
+                    title = "Precise Alarms",
+                    description = "Enables reminders to wake up the phone at the exact minute of a scheduled lecture or submission.",
+                    isConfigured = canScheduleExact,
+                    buttonText = "Enable",
+                    onConfigure = {
+                        val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        exactAlarmLauncher.launch(intent)
+                    },
+                    testTag = "onboarding_grant_exact_alarms_button"
+                )
+            }
+        }
+
+        // Bottom CTAs
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = onFinish,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .testTag("onboarding_finish_button"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary
+                )
+            ) {
+                Text(
+                    text = "Finish Setup & Launch",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            }
+
+            TextButton(
+                onClick = onFinish,
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .testTag("onboarding_skip_button")
+            ) {
+                Text(
+                    text = "Skip for Now",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun PermissionSetupRow(
+    title: String,
+    description: String,
+    isConfigured: Boolean,
+    buttonText: String,
+    onConfigure: () -> Unit,
+    testTag: String,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isConfigured) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+            }
+        ),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (isConfigured) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            }
+        ),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isConfigured) Icons.Default.CheckCircle else Icons.Default.Error,
+                        contentDescription = null,
+                        tint = if (isConfigured) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        },
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            if (!isConfigured) {
+                Button(
+                    onClick = onConfigure,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .testTag(testTag)
+                        .height(36.dp)
+                ) {
+                    Text(
+                        text = buttonText,
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            } else {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                    modifier = Modifier.height(36.dp),
+                    contentColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Active",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 

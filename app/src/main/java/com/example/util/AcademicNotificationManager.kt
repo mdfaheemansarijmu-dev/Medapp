@@ -89,6 +89,10 @@ object AcademicNotificationManager {
             putExtra("title", title)
             putExtra("message", message)
             putExtra("id", uniqueId)
+            putExtra("item_id", itemId)
+            putExtra("type", type)
+            putExtra("subject", subject)
+            putExtra("target_time", targetTime)
         }
         val pendingIntent = PendingIntent.getBroadcast(
             context,
@@ -100,10 +104,12 @@ object AcademicNotificationManager {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (alarmManager.canScheduleExactAlarms()) {
-                    alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
                 } else {
-                    alarmManager.set(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
                 }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
             } else {
                 alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
             }
@@ -252,6 +258,10 @@ object AcademicNotificationManager {
                 putExtra("title", item.title)
                 putExtra("message", item.message)
                 putExtra("id", item.id)
+                putExtra("item_id", item.itemId)
+                putExtra("type", item.type)
+                putExtra("subject", item.subject)
+                putExtra("target_time", item.targetTime)
             }
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
@@ -262,10 +272,12 @@ object AcademicNotificationManager {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     if (alarmManager.canScheduleExactAlarms()) {
-                        alarmManager.setExact(AlarmManager.RTC_WAKEUP, item.triggerTime, pendingIntent)
+                        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, item.triggerTime, pendingIntent)
                     } else {
-                        alarmManager.set(AlarmManager.RTC_WAKEUP, item.triggerTime, pendingIntent)
+                        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, item.triggerTime, pendingIntent)
                     }
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, item.triggerTime, pendingIntent)
                 } else {
                     alarmManager.setExact(AlarmManager.RTC_WAKEUP, item.triggerTime, pendingIntent)
                 }

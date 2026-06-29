@@ -33,6 +33,11 @@ import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import android.app.Activity
 import android.widget.Toast
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -663,6 +668,118 @@ fun SettingsScreen(
                 }
             }
 
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Notification Diagnostics Panel
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Diagnostics & Troubleshooting",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Verify that background reminders and precise lock screen alarms deliver reliably on your device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Diagnostic row 1: Test alarm
+                    DiagnosticItem(
+                        title = "Test Alarm Delivery",
+                        description = "Fires a real system heads-up notification in 5 seconds to test lockscreeen & channels.",
+                        icon = Icons.Default.BugReport,
+                        actionLabel = "Test Now",
+                        onClick = {
+                            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                            val intent = Intent(context, com.example.receivers.NotificationReceiver::class.java).apply {
+                                putExtra("title", "Test Reminder Alert 🔔")
+                                putExtra("message", "This is a real-time high-importance heads-up notification testing lockscreen & channels.")
+                                putExtra("id", 99999)
+                                putExtra("type", "general")
+                            }
+                            val pendingIntent = PendingIntent.getBroadcast(
+                                context,
+                                99999,
+                                intent,
+                                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                            )
+                            val triggerTime = System.currentTimeMillis() + 5000L // 5 seconds
+                            
+                            try {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                    if (alarmManager.canScheduleExactAlarms()) {
+                                        alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                                    } else {
+                                        alarmManager.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                                    }
+                                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                    alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                                } else {
+                                    alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                                }
+                                Toast.makeText(context, "Test alarm scheduled! Close the app or lock your screen to test.", Toast.LENGTH_LONG).show()
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Failed to schedule test alarm: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                            }
+                        },
+                        tag = "diagnostic_test_alarm"
+                    )
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                    // Diagnostic row 2: System notifications channels settings
+                    DiagnosticItem(
+                        title = "Notification Channel Settings",
+                        description = "Configure custom sounds, lock screen visibility, and vibration priorities.",
+                        icon = Icons.Default.Settings,
+                        actionLabel = "Configure",
+                        onClick = {
+                            val intent = Intent().apply {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    action = Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                                    putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                } else {
+                                    action = "android.settings.APP_NOTIFICATION_SETTINGS"
+                                    putExtra("app_package", context.packageName)
+                                    putExtra("app_uid", context.applicationInfo.uid)
+                                }
+                            }
+                            context.startActivity(intent)
+                        },
+                        tag = "diagnostic_notif_channels"
+                    )
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                    // Diagnostic row 3: Battery optimizer settings
+                    DiagnosticItem(
+                        title = "Battery Saver Exclusion",
+                        description = "Exclude MedPulse from Android battery restrictions to guarantee 100% notification reliability.",
+                        icon = Icons.Default.BatteryChargingFull,
+                        actionLabel = "Exclude",
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                context.startActivity(intent)
+                                Toast.makeText(context, "Scroll to MedPulse and set to 'Unrestricted' or 'Don't Optimize'.", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, "Battery saver whitelisting not required on this Android version.", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        tag = "diagnostic_battery_exclusion"
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(20.dp))
 
             // Sync Database Group
@@ -1161,4 +1278,52 @@ fun ProfilePictureSourceDialog(
             }
         }
     )
+}
+
+@Composable
+fun DiagnosticItem(
+    title: String,
+    description: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    actionLabel: String,
+    onClick: () -> Unit,
+    tag: String,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp)
+        )
+        
+        Spacer(modifier = Modifier.width(12.dp))
+        
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = description,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        
+        Spacer(modifier = Modifier.width(8.dp))
+        
+        TextButton(
+            onClick = onClick,
+            modifier = Modifier.testTag(tag),
+            contentPadding = PaddingValues(horizontal = 8.dp)
+        ) {
+            Text(text = actionLabel, style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+        }
+    }
 }

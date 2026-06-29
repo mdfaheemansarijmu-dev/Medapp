@@ -781,9 +781,17 @@ class PlannerViewModel(
                     }
                 }
 
-                when (item.category) {
-                    "Class Cancellation", "Room Change", "Teacher Change", "Schedule Change" -> {
-                        val isCancelled = item.category == "Class Cancellation"
+                val categoryNormalized = item.category.trim().lowercase()
+                val titleNormalized = item.title.trim().lowercase()
+                val detailsNormalized = (item.details ?: "").trim().lowercase()
+
+                when {
+                    categoryNormalized.contains("cancellation") || 
+                    categoryNormalized.contains("room change") || 
+                    categoryNormalized.contains("teacher change") || 
+                    categoryNormalized.contains("schedule change") || 
+                    categoryNormalized.contains("override") -> {
+                        val isCancelled = categoryNormalized.contains("cancellation")
                         repository.addOverride(
                             ScheduleOverride(
                                 courseCode = course.code,
@@ -791,8 +799,8 @@ class PlannerViewModel(
                                 subject = item.subject,
                                 startTime = "09:00 AM", // Proposed slot
                                 endTime = "10:00 AM",
-                                room = if (item.category == "Room Change") item.details?.substringAfter("to ")?.substringBefore(" ")?.trim() else "Lecture Hall B",
-                                teacherName = if (item.category == "Teacher Change") item.details?.substringAfter("Dr. ")?.substringBefore(" ")?.trim()?.let { "Dr. $it" } else null,
+                                room = if (categoryNormalized.contains("room")) item.details?.substringAfter("to ")?.substringBefore(" ")?.trim() else "Lecture Hall B",
+                                teacherName = if (categoryNormalized.contains("teacher")) item.details?.substringAfter("Dr. ")?.substringBefore(" ")?.trim()?.let { "Dr. $it" } else null,
                                 isCancelled = isCancelled
                             )
                         )
@@ -805,8 +813,18 @@ class PlannerViewModel(
                                 category = "Schedule Override"
                             )
                         )
+
+                        // In-App Notification
+                        addNotificationWithDuplicateCheck(
+                            InAppNotification(
+                                title = "Schedule Override Detected",
+                                message = "${item.subject}: ${item.title} on $dateStr.",
+                                type = "class"
+                            )
+                        )
                     }
-                    "Exam" -> {
+                    categoryNormalized == "exam" || 
+                    categoryNormalized.contains("university exam") -> {
                         repository.addExam(
                             Exam(
                                 courseCode = course.code,
@@ -818,6 +836,20 @@ class PlannerViewModel(
                                 syllabus = item.details
                             )
                         )
+
+                        // Also save to assessments table so it appears in Planner -> Exams/Vivas and Calendar
+                        val asmId = repository.addAssessment(
+                            Assessment(
+                                courseCode = course.code,
+                                subject = item.subject,
+                                title = item.title,
+                                date = itemTimestamp,
+                                type = "University Exam",
+                                status = "Upcoming",
+                                syllabus = item.details
+                            )
+                        )
+
                         // Add companion planner task
                         repository.addPlannerTask(
                             PlannerTask(
@@ -827,38 +859,56 @@ class PlannerViewModel(
                                 category = "Exam"
                             )
                         )
-                    }
-                    "Assignment", "Homework", "Practical", "Lab", "Seminar" -> {
-                        repository.addAssignment(
-                            Assignment(
-                                courseCode = course.code,
+
+                        // In-App Notification
+                        addNotificationWithDuplicateCheck(
+                            InAppNotification(
+                                title = "New Exam Imported",
+                                message = "Exam '${item.title}' for ${item.subject} has been added to your schedule.",
+                                type = "exam"
+                            )
+                        )
+
+                        // Schedule system notification immediately
+                        if (_areNotificationsEnabled.value) {
+                            AcademicNotificationManager.scheduleNotification(
+                                context = getApplication(),
+                                type = "assessment",
+                                itemId = "asm_$asmId",
+                                title = "Upcoming Exam Reminder",
+                                message = "Exam '${item.title}' for ${item.subject} is scheduled soon!",
+                                targetTime = itemTimestamp,
                                 subject = item.subject,
-                                title = item.title,
-                                dueDate = itemTimestamp,
-                                priority = item.priority,
-                                status = "Pending",
-                                type = item.category,
-                                notes = item.details
+                                minutesBefore = 30
                             )
-                        )
-                        // Add companion planner task
-                        repository.addPlannerTask(
-                            PlannerTask(
-                                courseCode = course.code,
-                                title = item.title,
-                                date = itemTimestamp,
-                                category = "Assignment"
-                            )
-                        )
+                        }
                     }
-                    "Assessment", "Viva" -> {
-                        repository.addAssessment(
+                    categoryNormalized == "assessment" || 
+                    categoryNormalized == "viva" ||
+                    categoryNormalized.contains("assessment") || 
+                    categoryNormalized.contains("viva") || 
+                    categoryNormalized.contains("test") || 
+                    categoryNormalized.contains("internal") || 
+                    categoryNormalized.contains("midterm") ||
+                    categoryNormalized.contains("quiz") ||
+                    titleNormalized.contains("assessment") ||
+                    titleNormalized.contains("viva") ||
+                    titleNormalized.contains("test") ||
+                    titleNormalized.contains("quiz") ||
+                    titleNormalized.contains("internal") ||
+                    titleNormalized.contains("midterm") ||
+                    titleNormalized.contains("exam") ||
+                    detailsNormalized.contains("assessment") ||
+                    detailsNormalized.contains("viva") ||
+                    detailsNormalized.contains("test") ||
+                    detailsNormalized.contains("internal") -> {
+                        val asmId = repository.addAssessment(
                             Assessment(
                                 courseCode = course.code,
                                 subject = item.subject,
                                 title = item.title,
                                 date = itemTimestamp,
-                                type = item.category,
+                                type = if (categoryNormalized.contains("viva") || titleNormalized.contains("viva")) "Viva" else if (categoryNormalized.contains("exam") || titleNormalized.contains("exam")) "University Exam" else "Class Test",
                                 syllabus = item.details
                             )
                         )
@@ -871,9 +921,92 @@ class PlannerViewModel(
                                 category = "Assessment"
                             )
                         )
+
+                        // In-App Notification
+                        addNotificationWithDuplicateCheck(
+                            InAppNotification(
+                                title = "New Assessment Imported",
+                                message = "Assessment '${item.title}' for ${item.subject} has been added.",
+                                type = "exam"
+                            )
+                        )
+
+                        // Schedule system notification immediately
+                        if (_areNotificationsEnabled.value) {
+                            AcademicNotificationManager.scheduleNotification(
+                                context = getApplication(),
+                                type = "assessment",
+                                itemId = "asm_$asmId",
+                                title = "Upcoming Assessment Reminder",
+                                message = "Assessment '${item.title}' for ${item.subject} is scheduled soon!",
+                                targetTime = itemTimestamp,
+                                subject = item.subject,
+                                minutesBefore = 30
+                            )
+                        }
                     }
-                    "Study Task" -> {
-                        repository.addStudyTask(
+                    categoryNormalized == "assignment" || 
+                    categoryNormalized == "homework" ||
+                    categoryNormalized.contains("assignment") || 
+                    categoryNormalized.contains("homework") || 
+                    categoryNormalized.contains("practical") || 
+                    categoryNormalized.contains("lab") || 
+                    categoryNormalized.contains("seminar") || 
+                    categoryNormalized.contains("record") ||
+                    titleNormalized.contains("assignment") ||
+                    titleNormalized.contains("homework") ||
+                    titleNormalized.contains("record") ||
+                    titleNormalized.contains("practical") -> {
+                        val asgId = repository.addAssignment(
+                            Assignment(
+                                courseCode = course.code,
+                                subject = item.subject,
+                                title = item.title,
+                                dueDate = itemTimestamp,
+                                priority = item.priority,
+                                status = "Pending",
+                                type = if (categoryNormalized.contains("homework") || titleNormalized.contains("homework")) "Homework" else "Assignment",
+                                notes = item.details
+                            )
+                        )
+                        // Add companion planner task
+                        repository.addPlannerTask(
+                            PlannerTask(
+                                courseCode = course.code,
+                                title = item.title,
+                                date = itemTimestamp,
+                                category = "Assignment"
+                            )
+                        )
+
+                        // In-App Notification
+                        addNotificationWithDuplicateCheck(
+                            InAppNotification(
+                                title = "New Assignment Imported",
+                                message = "Assignment '${item.title}' for ${item.subject} has been added.",
+                                type = "assignment"
+                            )
+                        )
+
+                        // Schedule system notification immediately
+                        if (_areNotificationsEnabled.value) {
+                            AcademicNotificationManager.scheduleNotification(
+                                context = getApplication(),
+                                type = "assignment",
+                                itemId = "asg_$asgId",
+                                title = "Upcoming Assignment Alert",
+                                message = "Assignment '${item.title}' for ${item.subject} is due soon!",
+                                targetTime = itemTimestamp,
+                                subject = item.subject,
+                                minutesBefore = 60
+                            )
+                        }
+                    }
+                    categoryNormalized.contains("study") || 
+                    categoryNormalized.contains("goal") ||
+                    titleNormalized.contains("study") ||
+                    titleNormalized.contains("revise") -> {
+                        val studyId = repository.addStudyTask(
                             StudyTask(
                                 courseCode = course.code,
                                 subject = item.subject,
@@ -884,10 +1017,33 @@ class PlannerViewModel(
                                 notes = item.details
                             )
                         )
+
+                        // In-App Notification
+                        addNotificationWithDuplicateCheck(
+                            InAppNotification(
+                                title = "New Study Goal Imported",
+                                message = "Study Goal '${item.title}' for ${item.subject} has been added.",
+                                type = "study"
+                            )
+                        )
+
+                        // Schedule system notification immediately
+                        if (_areNotificationsEnabled.value) {
+                            AcademicNotificationManager.scheduleNotification(
+                                context = getApplication(),
+                                type = "study",
+                                itemId = "study_$studyId",
+                                title = "Study Revision Alert",
+                                message = "Time to revise ${item.title} for ${item.subject}!",
+                                targetTime = itemTimestamp,
+                                subject = item.subject,
+                                minutesBefore = 15
+                            )
+                        }
                     }
                     else -> {
                         // General Reminders/Notices mapped as a pending general Assignment or Notification alert
-                        repository.addAssignment(
+                        val asgId = repository.addAssignment(
                             Assignment(
                                 courseCode = course.code,
                                 subject = item.subject,
@@ -899,6 +1055,29 @@ class PlannerViewModel(
                                 notes = item.details
                             )
                         )
+
+                        // In-App Notification
+                        addNotificationWithDuplicateCheck(
+                            InAppNotification(
+                                title = "New Alert Imported",
+                                message = "${item.title} has been added to your general assignments.",
+                                type = "assignment"
+                            )
+                        )
+
+                        // Schedule system notification immediately
+                        if (_areNotificationsEnabled.value) {
+                            AcademicNotificationManager.scheduleNotification(
+                                context = getApplication(),
+                                type = "assignment",
+                                itemId = "asg_$asgId",
+                                title = "Upcoming Reminder",
+                                message = "'${item.title}' is scheduled/due soon!",
+                                targetTime = itemTimestamp,
+                                subject = item.subject,
+                                minutesBefore = 60
+                            )
+                        }
                     }
                 }
             }

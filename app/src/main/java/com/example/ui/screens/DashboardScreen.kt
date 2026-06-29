@@ -226,7 +226,10 @@ fun DashboardScreen(
             )
         }
 
-        (examCandidates + assessmentCandidates).sortedBy { it.date }.firstOrNull()
+        (examCandidates + assessmentCandidates)
+            .distinctBy { it.title.lowercase().trim() + "_" + it.subject.lowercase().trim() + "_" + it.date }
+            .sortedBy { it.date }
+            .firstOrNull()
     }
 
     var showNotificationsTray by remember { mutableStateOf(false) }
