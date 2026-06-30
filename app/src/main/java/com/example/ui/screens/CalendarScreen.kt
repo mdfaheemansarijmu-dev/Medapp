@@ -44,6 +44,8 @@ fun CalendarScreen(
     val assessments by viewModel.assessments.collectAsStateWithLifecycle()
     val studyTasks by viewModel.studyTasks.collectAsStateWithLifecycle()
     val timetable by viewModel.timetable.collectAsStateWithLifecycle()
+    val attendanceRecords by viewModel.allAttendanceRecords.collectAsStateWithLifecycle()
+    val revisions by viewModel.allRevisions.collectAsStateWithLifecycle()
 
     // Months and years state
     var activeMonth by remember { mutableStateOf(selectedCalendar.get(Calendar.MONTH)) }
@@ -112,6 +114,20 @@ fun CalendarScreen(
     }
 
     val selectedDateItems = getItemsForDate(selectedDayInMonth)
+
+    val dateString = remember(selectedCalendar) {
+        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(selectedCalendar.time)
+    }
+
+    val dayAttendance = remember(attendanceRecords, dateString) {
+        attendanceRecords.filter { it.dateString == dateString }
+    }
+
+    val dayRevisions = remember(revisions, dateString) {
+        revisions.filter { it.dateString == dateString }
+    }
+
+    val isDiaryEmpty = selectedDateItems.isEmpty() && dayAttendance.isEmpty() && dayRevisions.isEmpty()
 
     Box(
         modifier = modifier
@@ -247,7 +263,7 @@ fun CalendarScreen(
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                if (selectedDateItems.isEmpty()) {
+                if (isDiaryEmpty) {
                     item {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f),
@@ -259,7 +275,7 @@ fun CalendarScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "No classes, exams or assignments due on this date. 🎉",
+                                    text = "No classes, exams, attendance or AI revisions recorded on this date. 🎉",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = TextAlign.Center
@@ -270,8 +286,8 @@ fun CalendarScreen(
                 } else {
                     // Render exams
                     if (selectedDateItems.assessments.isNotEmpty()) {
-                        item { Text("Exams & Tests", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.error) }
-                        items(selectedDateItems.assessments) { exam ->
+                        item { Text("Assessments", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.error) }
+                        items(selectedDateItems.assessments, key = { "calendar_assessment_${it.id}" }) { exam ->
                             AgendaRow(title = exam.title, subtitle = "${exam.subject} • ${exam.type}", icon = Icons.Default.Warning, color = MaterialTheme.colorScheme.error)
                         }
                     }
@@ -279,7 +295,7 @@ fun CalendarScreen(
                     // Render assignments
                     if (selectedDateItems.assignments.isNotEmpty()) {
                         item { Text("Assignments Due", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary) }
-                        items(selectedDateItems.assignments) { asg ->
+                        items(selectedDateItems.assignments, key = { "calendar_assignment_${it.id}" }) { asg ->
                             AgendaRow(title = asg.title, subtitle = "${asg.subject} • ${asg.type}", icon = Icons.Default.Assignment, color = MaterialTheme.colorScheme.primary)
                         }
                     }
@@ -287,7 +303,7 @@ fun CalendarScreen(
                     // Render study goals
                     if (selectedDateItems.studyTasks.isNotEmpty()) {
                         item { Text("Study Goals", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.secondary) }
-                        items(selectedDateItems.studyTasks) { goal ->
+                        items(selectedDateItems.studyTasks, key = { "calendar_study_${it.id}" }) { goal ->
                             AgendaRow(title = goal.title, subtitle = "${goal.subject} • Target: ${goal.targetMinutes}m", icon = Icons.Default.MenuBook, color = MaterialTheme.colorScheme.secondary)
                         }
                     }
@@ -295,8 +311,108 @@ fun CalendarScreen(
                     // Render classes
                     if (selectedDateItems.classes.isNotEmpty()) {
                         item { Text("Classes Scheduled", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onBackground) }
-                        items(selectedDateItems.classes.sortedBy { it.periodNumber }) { cls ->
+                        items(selectedDateItems.classes.sortedBy { it.periodNumber }, key = { "calendar_class_${it.id}" }) { cls ->
                             AgendaRow(title = cls.subject, subtitle = "Period ${cls.periodNumber} • ${cls.startTime} - ${cls.endTime} • Room ${cls.room ?: "LT"}", icon = Icons.Default.School, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+
+                    // Render Attendance Records (Academic Journal)
+                    if (dayAttendance.isNotEmpty()) {
+                        item { Text("Daily Attendance", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = Color(0xFF2E7D32)) }
+                        items(dayAttendance, key = { "calendar_att_${it.id}" }) { att ->
+                            AgendaRow(
+                                title = att.subject,
+                                subtitle = "Marked ${if (att.isPresent) "PRESENT" else "ABSENT"} • Time: ${att.classTime ?: "Scheduled Time"}",
+                                icon = if (att.isPresent) Icons.Default.CheckCircle else Icons.Default.Cancel,
+                                color = if (att.isPresent) Color(0xFF2E7D32) else Color(0xFFC62828)
+                            )
+                        }
+                    }
+
+                    // Render AI Class Revisions (Academic Journal)
+                    if (dayRevisions.isNotEmpty()) {
+                        item { Text("AI Lecture Revisions & Smart Notes", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.secondary) }
+                        items(dayRevisions, key = { "calendar_rev_${it.id}" }) { rev ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = Icons.Default.AutoAwesome,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.secondary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = rev.subject,
+                                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                                            )
+                                        }
+                                    }
+
+                                    Divider(color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.1f))
+
+                                    Text(
+                                        text = "Clinical Summary",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                    Text(
+                                        text = rev.aiSummary,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+
+                                    if (rev.keyPoints.isNotBlank()) {
+                                        Text(
+                                            text = "Key Concepts Extracted",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.secondary
+                                        )
+                                        rev.keyPoints.split("|").forEach { pt ->
+                                            if (pt.isNotBlank()) {
+                                                Text(
+                                                    text = "• ${pt.trim()}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    if (rev.revisionQuestions.isNotBlank()) {
+                                        Text(
+                                            text = "Rapid-Fire Test Questions",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.secondary
+                                        )
+                                        rev.revisionQuestions.split("|").forEach { q ->
+                                            if (q.isNotBlank()) {
+                                                Text(
+                                                    text = "❓ ${q.trim()}",
+                                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

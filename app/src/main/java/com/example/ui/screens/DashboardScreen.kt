@@ -5,6 +5,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -114,7 +117,7 @@ fun DashboardScreen(
 
     val today = remember(liveClock) { Calendar.getInstance() }
 
-    val todayPendingItems = remember(assignments, assessments, studyTasks, today) {
+    val todayPendingItems = remember(assignments, today) {
         val combined = mutableListOf<Pair<TodayPendingItem, Long>>()
 
         assignments.filter { it.status == "Pending" }.forEach { asg ->
@@ -139,55 +142,11 @@ fun DashboardScreen(
             )
         }
 
-        assessments.filter { it.status != "Completed" }.forEach { ass ->
-            val daysRemaining = getDaysRemaining(ass.date)
-            val dueLabel = when {
-                daysRemaining < 0 -> "Overdue by ${-daysRemaining}d"
-                daysRemaining == 0 -> "Today"
-                daysRemaining == 1 -> "Tomorrow"
-                else -> "In $daysRemaining days"
-            }
-            combined.add(
-                Pair(
-                    TodayPendingItem(
-                        id = "assessment_${ass.id}",
-                        title = ass.title,
-                        subtitle = "${ass.subject} • ${ass.type} • $dueLabel",
-                        priority = "High",
-                        onToggle = { viewModel.toggleAssessment(ass) }
-                    ),
-                    ass.date
-                )
-            )
-        }
-
-        studyTasks.filter { it.progress < 100 }.forEach { task ->
-            val daysRemaining = getDaysRemaining(task.dueDate)
-            val dueLabel = when {
-                daysRemaining < 0 -> "Overdue by ${-daysRemaining}d"
-                daysRemaining == 0 -> "Today"
-                daysRemaining == 1 -> "Tomorrow"
-                else -> "In $daysRemaining days"
-            }
-            combined.add(
-                Pair(
-                    TodayPendingItem(
-                        id = "study_${task.id}",
-                        title = task.title,
-                        subtitle = "${task.subject} • Revision Goal: ${task.targetMinutes}m • $dueLabel",
-                        priority = task.priority,
-                        onToggle = { viewModel.updateStudyProgress(task.id, 100) }
-                    ),
-                    task.dueDate
-                )
-            )
-        }
-
         combined.sortBy { it.second }
         combined.map { it.first }
     }
 
-    val nearestEvent = remember(exams, assessments, today) {
+    val upcomingEvents = remember(exams, assessments, today) {
         val todayStart = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
@@ -229,10 +188,12 @@ fun DashboardScreen(
         (examCandidates + assessmentCandidates)
             .distinctBy { it.title.lowercase().trim() + "_" + it.subject.lowercase().trim() + "_" + it.date }
             .sortedBy { it.date }
-            .firstOrNull()
     }
 
     var showNotificationsTray by remember { mutableStateOf(false) }
+    var showPendingDialog by remember { mutableStateOf(false) }
+    var showUpcomingDialog by remember { mutableStateOf(false) }
+    var showRemainingDialog by remember { mutableStateOf(false) }
 
     val todayDateStr = remember(liveClock) {
         val format = SimpleDateFormat("EEEE, MMMM dd", Locale.getDefault())
@@ -362,19 +323,28 @@ fun DashboardScreen(
 
                 // Stats Dashboard summary cards
                 item {
-                    StatsMetricsGrid(assignments, assessments, liveSchedule.remainingClasses.size)
+                    val overallAttendance = viewModel.getOverallAttendancePercentage()
+                    StatsMetricsGrid(
+                        assignments = assignments,
+                        assessments = assessments,
+                        remainingClassesCount = liveSchedule.remainingClasses.size,
+                        overallAttendance = overallAttendance,
+                        onPendingClick = { showPendingDialog = true },
+                        onUpcomingClick = { showUpcomingDialog = true },
+                        onRemainingClick = { showRemainingDialog = true }
+                    )
                 }
 
                 // Today's Assignments Section
                 item {
-                    SectionHeader(title = "Active Focus & Assignments", icon = Icons.Default.Assignment)
+                    SectionHeader(title = "Active Assignments", icon = Icons.Default.Assignment)
                 }
 
                 if (todayPendingItems.isEmpty()) {
                     item {
                         EmptyStateCard(
-                            title = "No pending focus items or assignments.",
-                            desc = "You are fully caught up with your schedule! 🎉",
+                            title = "No pending assignments.",
+                            desc = "No assignments due for now.",
                             icon = Icons.Default.CheckCircle
                         )
                     }
@@ -392,20 +362,20 @@ fun DashboardScreen(
 
                 // Upcoming Assessments & Exams Section
                 item {
-                    SectionHeader(title = "Upcoming Exams & Vivas", icon = Icons.Default.EventNote)
+                    SectionHeader(title = "Upcoming Assessments", icon = Icons.Default.EventNote)
                 }
 
-                if (nearestEvent == null) {
+                if (upcomingEvents.isEmpty()) {
                     item {
                         EmptyStateCard(
-                            title = "No upcoming exams.",
+                            title = "No upcoming assessments.",
                             desc = "No assessments or tests registered for now.",
                             icon = Icons.Default.SentimentSatisfiedAlt
                         )
                     }
                 } else {
-                    item {
-                        UpcomingExamCard(event = nearestEvent)
+                    items(upcomingEvents) { event ->
+                        UpcomingExamCard(event = event)
                     }
                 }
 
@@ -414,7 +384,7 @@ fun DashboardScreen(
                     SectionHeader(title = "Daily Revision Goals", icon = Icons.Default.TrackChanges)
                 }
 
-                val activeStudyTasks = studyTasks.filter { it.progress < 100 }.take(3)
+                val activeStudyTasks = studyTasks.filter { it.progress < 100 }
 
                 if (activeStudyTasks.isEmpty()) {
                     item {
@@ -425,7 +395,7 @@ fun DashboardScreen(
                         )
                     }
                 } else {
-                    items(activeStudyTasks) { task ->
+                    items(activeStudyTasks, key = { it.id }) { task ->
                         StudyTaskDashboardCard(task, onProgressChanged = { progress ->
                             viewModel.updateStudyProgress(task.id, progress)
                         })
@@ -550,6 +520,35 @@ fun DashboardScreen(
                 }
             }
         }
+
+        if (showPendingDialog) {
+            PendingAssignmentsDialog(
+                assignments = assignments,
+                onDismiss = { showPendingDialog = false },
+                onToggle = { asg ->
+                    viewModel.toggleAssignment(asg)
+                    showPendingDialog = false
+                }
+            )
+        }
+
+        if (showUpcomingDialog) {
+            UpcomingAssessmentsDialog(
+                assessments = assessments,
+                onDismiss = { showUpcomingDialog = false },
+                onToggle = { ass ->
+                    viewModel.toggleAssessment(ass)
+                    showUpcomingDialog = false
+                }
+            )
+        }
+
+        if (showRemainingDialog) {
+            RemainingClassesDialog(
+                classes = liveSchedule.remainingClasses,
+                onDismiss = { showRemainingDialog = false }
+            )
+        }
     }
 }
 
@@ -558,6 +557,135 @@ fun LiveTimetableWidget(
     schedule: PlannerViewModel.DayClassSchedule,
     viewModel: PlannerViewModel
 ) {
+    val attendanceRecords by viewModel.allAttendanceRecords.collectAsStateWithLifecycle()
+    val sdf = remember { java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()) }
+    val todayStr = remember { sdf.format(java.util.Date()) }
+
+    val todayAttendance = remember(attendanceRecords, todayStr) {
+        attendanceRecords.filter { it.dateString == todayStr }
+    }
+
+    var selectedClassForRevision by remember { mutableStateOf<TimetableClass?>(null) }
+    var explanationText by remember { mutableStateOf("") }
+    
+    val isGeneratingRevision by viewModel.isGeneratingRevision.collectAsStateWithLifecycle()
+    val lastGeneratedRevision by viewModel.lastGeneratedRevision.collectAsStateWithLifecycle()
+
+    if (selectedClassForRevision != null) {
+        AlertDialog(
+            onDismissRequest = { selectedClassForRevision = null },
+            title = {
+                Text(
+                    text = "AI Revision: ${selectedClassForRevision?.subject}",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Dictate or explain what you learned in this lecture. MedPulse AI will analyze your notes, summarize them into a clinical textbook-style guide, and generate study revision questions.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = explanationText,
+                        onValueChange = { explanationText = it },
+                        label = { Text("Your Explanation / Lecture Notes") },
+                        placeholder = { Text("Today we studied the pathogenesis of atherosclerosis, LDL accumulation, foam cell formation, and fibrous plaque build up...") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                            .testTag("revision_explanation_input"),
+                        maxLines = 10
+                    )
+
+                    if (isGeneratingRevision) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "AI is analyzing medical concepts & generating revision questions...",
+                                style = MaterialTheme.typography.labelSmall,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+
+                    if (lastGeneratedRevision != null) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("✨ AI CLINICAL NOTES SUMMARY", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
+                                Text(lastGeneratedRevision!!.aiSummary, style = MaterialTheme.typography.bodySmall)
+                                
+                                Text("📌 KEY POINTS EXTRACTED", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
+                                lastGeneratedRevision!!.keyPoints.split("|").forEach { pt ->
+                                    if (pt.isNotBlank()) {
+                                        Text("• ${pt.trim()}", style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+
+                                Text("❓ REVISION QUESTIONS", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
+                                lastGeneratedRevision!!.revisionQuestions.split("|").forEach { q ->
+                                    if (q.isNotBlank()) {
+                                        Text("❓ ${q.trim()}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (lastGeneratedRevision == null) {
+                        Button(
+                            onClick = {
+                                if (explanationText.isNotBlank()) {
+                                    viewModel.generateClassRevision(selectedClassForRevision!!.subject, explanationText)
+                                }
+                            },
+                            enabled = explanationText.isNotBlank() && !isGeneratingRevision,
+                            modifier = Modifier.testTag("generate_ai_revision_btn")
+                        ) {
+                            Text("Generate AI Notes")
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                selectedClassForRevision = null
+                                explanationText = ""
+                            }
+                        ) {
+                            Text("Save & Close")
+                        }
+                    }
+                }
+            },
+            dismissButton = {
+                if (lastGeneratedRevision == null) {
+                    TextButton(onClick = { selectedClassForRevision = null }) {
+                        Text("Cancel")
+                    }
+                }
+            }
+        )
+    }
+
     Card(
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
@@ -604,112 +732,148 @@ fun LiveTimetableWidget(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // 1. Current Class
-            if (schedule.currentClass != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surface,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(android.graphics.Color.parseColor(schedule.currentClass.colorHex)))
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.School,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .align(Alignment.Center)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(16.dp))
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "NOW RUNNING",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = schedule.currentClass.subject,
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = "${schedule.currentClass.startTime} - ${schedule.currentClass.endTime} • Room: ${schedule.currentClass.room ?: "Lab"}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            } else {
+            if (schedule.todayClasses.isEmpty()) {
                 Text(
-                    text = "No class is currently in session.",
+                    text = "No classes scheduled for today.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                 )
-            }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    schedule.todayClasses.forEach { cls ->
+                        val isLunch = cls.subject.contains("lunch", ignoreCase = true)
+                        val attendance = if (isLunch) null else todayAttendance.find { it.subject.lowercase() == cls.subject.lowercase() }
+                        
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(
+                                                if (isLunch) MaterialTheme.colorScheme.tertiaryContainer 
+                                                else Color(android.graphics.Color.parseColor(cls.colorHex ?: "#4CAF50"))
+                                            )
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isLunch) Icons.Default.Restaurant else Icons.Default.School,
+                                            contentDescription = null,
+                                            tint = if (isLunch) MaterialTheme.colorScheme.onTertiaryContainer else Color.White,
+                                            modifier = Modifier
+                                                .size(18.dp)
+                                                .align(Alignment.Center)
+                                        )
+                                    }
 
-            Spacer(modifier = Modifier.height(12.dp))
+                                    Spacer(modifier = Modifier.width(12.dp))
 
-            // 2. Next Class
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (schedule.nextClass != null) {
-                    Column {
-                        Text(
-                            text = "Next Class",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.ArrowForward,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "${schedule.nextClass.subject} (${schedule.nextClass.startTime})",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = cls.subject,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${cls.startTime} - ${cls.endTime} • Room: ${cls.room ?: "L-1"}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    // Attendance State Indicator
+                                    if (attendance != null && !isLunch) {
+                                        val badgeColor = if (attendance.isPresent) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
+                                        val badgeTextColor = if (attendance.isPresent) Color(0xFF2E7D32) else Color(0xFFC62828)
+                                        val label = if (attendance.isPresent) "Present" else "Absent"
+
+                                        Surface(
+                                            color = badgeColor,
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = badgeTextColor,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (isLunch) {
+                                    // Lunch is a break, show cozy break description or text
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Break Time ☕",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.secondary
+                                        )
+                                    }
+                                } else if (attendance == null) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        TextButton(
+                                            onClick = { viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}") },
+                                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                        ) {
+                                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Mark Absent", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        FilledTonalButton(
+                                            onClick = { viewModel.markAttendance(cls.subject, isPresent = true, classTime = "${cls.startTime}-${cls.endTime}") },
+                                            colors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                                        ) {
+                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Mark Present", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                    }
+                                } else if (attendance.isPresent) {
+                                    // Present means can explain class and get AI summary
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        Button(
+                                            onClick = {
+                                                selectedClassForRevision = cls
+                                                explanationText = ""
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                                            shape = RoundedCornerShape(10.dp)
+                                        ) {
+                                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("AI Revision Notes ✨", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                } else {
-                    Text(
-                        text = "All classes done for today!",
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
                 }
-
-                val totalRemaining = schedule.remainingClasses.size
-                Text(
-                    text = "$totalRemaining Class(es) Left",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.primary
-                )
             }
         }
     }
@@ -719,14 +883,18 @@ fun LiveTimetableWidget(
 fun StatsMetricsGrid(
     assignments: List<Assignment>,
     assessments: List<Assessment>,
-    remainingClassesCount: Int
+    remainingClassesCount: Int,
+    overallAttendance: Float,
+    onPendingClick: () -> Unit,
+    onUpcomingClick: () -> Unit,
+    onRemainingClick: () -> Unit
 ) {
     val pendingAsg = assignments.count { it.status == "Pending" }
     val upcomingExm = assessments.count { it.status == "Upcoming" }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         StatCard(
             title = "Assignments",
@@ -735,7 +903,9 @@ fun StatsMetricsGrid(
             color = MaterialTheme.colorScheme.errorContainer,
             textColor = MaterialTheme.colorScheme.onErrorContainer,
             icon = Icons.Default.Assignment,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .clickable { onPendingClick() }
         )
         StatCard(
             title = "Assessments",
@@ -744,16 +914,20 @@ fun StatsMetricsGrid(
             color = MaterialTheme.colorScheme.tertiaryContainer,
             textColor = MaterialTheme.colorScheme.onTertiaryContainer,
             icon = Icons.Default.Assessment,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .clickable { onUpcomingClick() }
         )
         StatCard(
-            title = "Classes",
-            value = remainingClassesCount.toString(),
-            subtitle = "Remaining Today",
+            title = "Attendance",
+            value = String.format("%.0f%%", overallAttendance),
+            subtitle = "Overall Rate",
             color = MaterialTheme.colorScheme.secondaryContainer,
             textColor = MaterialTheme.colorScheme.onSecondaryContainer,
-            icon = Icons.Default.Schedule,
-            modifier = Modifier.weight(1f)
+            icon = Icons.Default.CheckCircle,
+            modifier = Modifier
+                .weight(1f)
+                .clickable { onRemainingClick() }
         )
     }
 }
@@ -890,9 +1064,13 @@ fun AssignmentDashboardRow(
 @Composable
 fun AssessmentDashboardCard(assessment: Assessment) {
     val countdownDays = remember(assessment.date) {
-        val diff = assessment.date - System.currentTimeMillis()
-        val days = (diff / (24 * 60 * 60 * 1000L)).toInt()
-        if (days < 0) "Expired" else if (days == 0) "Today" else "In $days day(s)"
+        val days = getDaysRemaining(assessment.date)
+        when {
+            days < 0 -> "Expired"
+            days == 0 -> "Today"
+            days == 1 -> "In 1 day"
+            else -> "In $days days"
+        }
     }
 
     Surface(
@@ -1302,4 +1480,279 @@ private fun getDaysRemaining(targetTimeMs: Long): Int {
     }
     val diffMs = targetCal.timeInMillis - todayCal.timeInMillis
     return (diffMs / (24 * 60 * 60 * 1000L)).toInt()
+}
+
+@Composable
+fun PendingAssignmentsDialog(
+    assignments: List<Assignment>,
+    onDismiss: () -> Unit,
+    onToggle: (Assignment) -> Unit
+) {
+    val pending = remember(assignments) { assignments.filter { it.status == "Pending" } }
+    val dateFormat = remember { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Assignment,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+                Text("Pending Assignments", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+        text = {
+            if (pending.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "No pending assignments!",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(pending, key = { it.id }) { asg ->
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = false,
+                                    onCheckedChange = { onToggle(asg) }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = asg.title,
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                    Text(
+                                        text = "${asg.subject} • ${asg.type}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "Due: ${dateFormat.format(Date(asg.dueDate))}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        shape = RoundedCornerShape(24.dp)
+    )
+}
+
+@Composable
+fun UpcomingAssessmentsDialog(
+    assessments: List<Assessment>,
+    onDismiss: () -> Unit,
+    onToggle: (Assessment) -> Unit
+) {
+    val upcoming = remember(assessments) { assessments.filter { it.status == "Upcoming" } }
+    val dateFormat = remember { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Assessment,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text("Upcoming Assessments", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+        text = {
+            if (upcoming.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "No upcoming assessments!",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(upcoming, key = { it.id }) { ass ->
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = false,
+                                    onCheckedChange = { onToggle(ass) }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = ass.title,
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                    Text(
+                                        text = "${ass.subject} • ${ass.type}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "Date: ${dateFormat.format(Date(ass.date))}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    if (!ass.syllabus.isNullOrEmpty()) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "Syllabus: ${ass.syllabus}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        shape = RoundedCornerShape(24.dp)
+    )
+}
+
+@Composable
+fun RemainingClassesDialog(
+    classes: List<TimetableClass>,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Schedule,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary
+                )
+                Text("Remaining Classes Today", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+        text = {
+            if (classes.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "No remaining classes for today!",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(classes, key = { it.id }) { cls ->
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp).fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Period ${cls.periodNumber}",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                    Text(
+                                        text = "${cls.startTime} - ${cls.endTime}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = cls.subject,
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold)
+                                )
+                                if (!cls.teacherName.isNullOrEmpty() || !cls.room.isNullOrEmpty()) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = listOfNotNull(
+                                            cls.teacherName?.let { "Dr. $it" },
+                                            cls.room?.let { "Room: $it" }
+                                        ).joinToString(" • "),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        shape = RoundedCornerShape(24.dp)
+    )
 }

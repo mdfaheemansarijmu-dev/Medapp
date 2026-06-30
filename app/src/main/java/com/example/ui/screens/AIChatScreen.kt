@@ -52,6 +52,32 @@ fun AIChatScreen(
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val speechRecognizerLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val spokenText: String? =
+                result.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.get(0)
+            if (!spokenText.isNullOrBlank()) {
+                textInput = spokenText
+            }
+        }
+    }
+
+    val triggerSpeechRecognition = {
+        try {
+            val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.getDefault().language)
+                putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Speak to schedule a task or class...")
+            }
+            speechRecognizerLauncher.launch(intent)
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(context, "Speech recognition is not supported on this device.", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
     // Scroll chat to end when new messages arrive
     LaunchedEffect(chatMessages.size, isParsing) {
         if (chatMessages.isNotEmpty()) {
@@ -189,7 +215,7 @@ fun AIChatScreen(
                     OutlinedTextField(
                         value = textInput,
                         onValueChange = { textInput = it },
-                        placeholder = { Text("Paste WhatsApp class notice here...") },
+                        placeholder = { Text("Ask Gemini, speak, or paste text...") },
                         maxLines = 4,
                         shape = RoundedCornerShape(20.dp),
                         modifier = Modifier
@@ -198,7 +224,19 @@ fun AIChatScreen(
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = MaterialTheme.colorScheme.primary,
                             unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
-                        )
+                        ),
+                        leadingIcon = {
+                            IconButton(
+                                onClick = { triggerSpeechRecognition() },
+                                modifier = Modifier.testTag("mic_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = "Speak directly to Gemini",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
                     )
 
                     Spacer(modifier = Modifier.width(8.dp))

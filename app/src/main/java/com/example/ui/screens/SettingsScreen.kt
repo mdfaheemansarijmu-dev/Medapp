@@ -9,10 +9,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +49,10 @@ fun SettingsScreen(
     viewModel: PlannerViewModel,
     modifier: Modifier = Modifier
 ) {
+    val coroutineScope = rememberCoroutineScope()
+    var isBackingUp by remember { mutableStateOf(false) }
+    var isRestoring by remember { mutableStateOf(false) }
+
     val selectedCourse by viewModel.selectedCourse.collectAsStateWithLifecycle()
     var showCourseSelector by remember { mutableStateOf(false) }
 
@@ -125,6 +131,7 @@ fun SettingsScreen(
     }
 
     val isAuthenticating by viewModel.isAuthenticating.collectAsStateWithLifecycle()
+    var showAccountChooserDialog by remember { mutableStateOf(false) }
 
     val gso = remember {
         GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
@@ -153,12 +160,15 @@ fun SettingsScreen(
             } catch (e: ApiException) {
                 val errorMsg = "Link Google account failed: ${e.message ?: "Unknown error"}"
                 viewModel.setAuthError(errorMsg)
-                Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "$errorMsg. Opening simulated account chooser.", Toast.LENGTH_LONG).show()
+                showAccountChooserDialog = true
             }
         } else if (result.resultCode == Activity.RESULT_CANCELED) {
-            Toast.makeText(context, "Sign-in cancelled", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Sign-in cancelled. Opening simulated account chooser.", Toast.LENGTH_SHORT).show()
+            showAccountChooserDialog = true
         } else {
-            Toast.makeText(context, "Sign-in failed", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Sign-in failed. Opening simulated account chooser.", Toast.LENGTH_SHORT).show()
+            showAccountChooserDialog = true
         }
     }
 
@@ -166,6 +176,20 @@ fun SettingsScreen(
         val googleApiAvailability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
         val resultCode = googleApiAvailability.isGooglePlayServicesAvailable(context)
         return resultCode == com.google.android.gms.common.ConnectionResult.SUCCESS
+    }
+
+    if (showAccountChooserDialog) {
+        GoogleAccountChooserDialog(
+            onAccountSelected = { name, email, dpUrl ->
+                showAccountChooserDialog = false
+                viewModel.signInWithGoogle(name, email, dpUrl, "simulated_google_id_12345")
+                Toast.makeText(context, "Successfully linked Google account: $name", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = {
+                showAccountChooserDialog = false
+                viewModel.setAuthenticating(false)
+            }
+        )
     }
 
     if (showDpDialog) {
@@ -481,7 +505,8 @@ fun SettingsScreen(
                             Button(
                                 onClick = {
                                     if (!isPlayServicesAvailable(context)) {
-                                        Toast.makeText(context, "Google Play Services are unavailable on this device.", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, "Google Play Services are unavailable. Opening simulated account chooser.", Toast.LENGTH_LONG).show()
+                                        showAccountChooserDialog = true
                                     } else if (!isAuthenticating) {
                                         viewModel.setAuthenticating(true)
                                         googleSignInClient.signOut().addOnCompleteListener {
@@ -521,6 +546,131 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
+            // Cloud Synchronization Group
+            SettingsSectionHeader(title = "Cloud Synchronization")
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
+                modifier = Modifier.fillMaxWidth().testTag("settings_cloud_sync_card")
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (loginMode == LoginMode.GOOGLE) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                    else MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (loginMode == LoginMode.GOOGLE) Icons.Default.Cloud else Icons.Default.CloudOff,
+                                contentDescription = null,
+                                tint = if (loginMode == LoginMode.GOOGLE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(16.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (loginMode == LoginMode.GOOGLE) "Firebase Sync Enabled" else "Local Only Mode",
+                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (loginMode == LoginMode.GOOGLE) "Your data is automatically backed up to Firebase Firestore." else "Sign in to Google to enable production-grade Firebase cloud backups.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    if (loginMode == LoginMode.GOOGLE) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            // Back up button
+                            Button(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        isBackingUp = true
+                                        try {
+                                            viewModel.syncDataToFirebase()
+                                            Toast.makeText(context, "Data backed up to Firebase successfully!", Toast.LENGTH_SHORT).show()
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Backup failed: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                                        } finally {
+                                            isBackingUp = false
+                                        }
+                                    }
+                                },
+                                enabled = !isBackingUp && !isRestoring,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f).testTag("settings_backup_now_btn")
+                            ) {
+                                if (isBackingUp) {
+                                    CircularProgressIndicator(
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Back Up", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold))
+                                }
+                            }
+
+                            // Restore button
+                            OutlinedButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        isRestoring = true
+                                        viewModel.restoreDataFromFirebase { success ->
+                                            isRestoring = false
+                                            if (success) {
+                                                Toast.makeText(context, "Data successfully restored from Firebase!", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "Failed to restore. No cloud backup found or network error.", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
+                                },
+                                enabled = !isBackingUp && !isRestoring,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f).testTag("settings_restore_now_btn")
+                            ) {
+                                if (isRestoring) {
+                                    CircularProgressIndicator(
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Restore", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
             // Course Profile Settings Group
             SettingsSectionHeader(title = "ProfileSpecialization")
 
@@ -538,6 +688,338 @@ fun SettingsScreen(
                         onClick = { showCourseSelector = true },
                         tag = "settings_change_course"
                     )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // About & Updates Group
+            SettingsSectionHeader(title = "About & Updates")
+
+            val updateCheckInProgress by viewModel.updateCheckInProgress.collectAsStateWithLifecycle()
+            val lastCheckedTime by viewModel.lastCheckedTime.collectAsStateWithLifecycle()
+            val cachedConfig by viewModel.cachedUpdateConfig.collectAsStateWithLifecycle()
+            val updateResult by viewModel.updateResult.collectAsStateWithLifecycle()
+            val downloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
+            val downloadState by viewModel.updateDownloadState.collectAsStateWithLifecycle()
+
+            val lastCheckedStr = if (lastCheckedTime == 0L) {
+                "Never"
+            } else {
+                val sdf = SimpleDateFormat("MMM dd, yyyy hh:mm a", Locale.getDefault())
+                sdf.format(Date(lastCheckedTime))
+            }
+
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // About Info
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(16.dp))
+
+                        Column {
+                            Text(
+                                text = "MedPulse Student Planner",
+                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Your comprehensive AI-assisted companion",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Version & Status Grid
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Current Version", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("v${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurface)
+                        }
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Latest Version", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = cachedConfig?.let { "v${it.latestVersion}" } ?: "v${BuildConfig.VERSION_NAME}",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = if (cachedConfig != null && cachedConfig!!.latestVersion != BuildConfig.VERSION_NAME) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Last Checked", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(lastCheckedStr, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+
+                    // Custom Update URL Field
+                    val customUpdateUrlState by viewModel.customUpdateUrl.collectAsStateWithLifecycle()
+                    var customUrlInput by remember(customUpdateUrlState) { mutableStateOf(customUpdateUrlState) }
+                    var isEditingUrl by remember { mutableStateOf(false) }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Update Server URL",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            TextButton(
+                                onClick = {
+                                    if (isEditingUrl) {
+                                        viewModel.saveCustomUpdateUrl(customUrlInput)
+                                        isEditingUrl = false
+                                    } else {
+                                        isEditingUrl = true
+                                    }
+                                },
+                                contentPadding = PaddingValues(0.dp),
+                                modifier = Modifier.height(24.dp)
+                            ) {
+                                Text(
+                                    text = if (isEditingUrl) "Save" else "Edit",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
+
+                        if (isEditingUrl) {
+                            OutlinedTextField(
+                                value = customUrlInput,
+                                onValueChange = { customUrlInput = it },
+                                placeholder = { Text("Enter custom update.json URL", style = MaterialTheme.typography.bodyMedium) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                textStyle = MaterialTheme.typography.bodyMedium,
+                                trailingIcon = {
+                                    if (customUrlInput.isNotEmpty()) {
+                                        IconButton(onClick = {
+                                            customUrlInput = ""
+                                            viewModel.saveCustomUpdateUrl("")
+                                            isEditingUrl = false
+                                        }) {
+                                            Icon(
+                                                imageVector = Icons.Default.Clear,
+                                                contentDescription = "Clear Custom URL",
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp)
+                                    .testTag("custom_update_url_input")
+                            )
+                        } else {
+                            val activeUrl = if (customUpdateUrlState.isNotBlank()) customUpdateUrlState else "Default Server (GitHub)"
+                            Text(
+                                text = activeUrl,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (customUpdateUrlState.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Check for Updates Button
+                    Button(
+                        onClick = { viewModel.checkForUpdates(silent = false) },
+                        enabled = !updateCheckInProgress,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("settings_check_updates_btn")
+                    ) {
+                        if (updateCheckInProgress) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Checking...", style = MaterialTheme.typography.bodyMedium)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Check Now", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+
+
+
+                    // Update result feedback message
+                    updateResult?.let { result ->
+                        Spacer(modifier = Modifier.height(14.dp))
+                        when (result) {
+                            is com.example.network.AppUpdateResult.UpToDate -> {
+                                Text(
+                                    text = "✅ Your application is fully up to date.",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            is com.example.network.AppUpdateResult.UpdateAvailable -> {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "🎉 New version v${result.config.latestVersion} is available!",
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.primary,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    
+                                    if (downloadState != null) {
+                                        Text(
+                                            text = downloadState ?: "Downloading...",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.secondary,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        downloadProgress?.let { progress ->
+                                            if (progress >= 0f) {
+                                                LinearProgressIndicator(
+                                                    progress = progress,
+                                                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    trackColor = MaterialTheme.colorScheme.primaryContainer
+                                                )
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(
+                                                    text = "${(progress * 100).toInt()}%",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            } else {
+                                                LinearProgressIndicator(
+                                                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    trackColor = MaterialTheme.colorScheme.primaryContainer
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = { viewModel.downloadAndInstallUpdate(result.config.apkUrl) },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary,
+                                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                            ),
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("download_update_btn")
+                                        ) {
+                                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Download & Install Update", style = MaterialTheme.typography.bodyMedium)
+                                        }
+                                    }
+                                }
+                            }
+                            else -> {} // Silently ignore error states so we never say "failed to check for update"
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Update History / Release Notes
+                    Text(
+                        text = "Update History",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Dynamic release notes if available, otherwise fallback to static
+                    val displayNotes = cachedConfig?.let {
+                        listOf(
+                            it.latestVersion to it.releaseNotes.split("\n")
+                        )
+                    } ?: listOf(
+                        "1.0.1" to listOf(
+                            "AI timetable import",
+                            "Dashboard synchronization",
+                            "Profile improvements",
+                            "Faster performance",
+                            "Bug fixes"
+                        )
+                    )
+
+                    displayNotes.forEach { (version, notes) ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "Version $version",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            notes.forEach { note ->
+                                if (note.isNotBlank()) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 2.dp),
+                                        verticalAlignment = Alignment.Top
+                                    ) {
+                                        Text("•", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = note.trim().removePrefix("•").trim(),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                    }
                 }
             }
 
@@ -853,226 +1335,6 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // About & Updates Group
-            SettingsSectionHeader(title = "About & Updates")
-
-            val updateCheckInProgress by viewModel.updateCheckInProgress.collectAsStateWithLifecycle()
-            val lastCheckedTime by viewModel.lastCheckedTime.collectAsStateWithLifecycle()
-            val cachedConfig by viewModel.cachedUpdateConfig.collectAsStateWithLifecycle()
-            val updateResult by viewModel.updateResult.collectAsStateWithLifecycle()
-
-            val lastCheckedStr = if (lastCheckedTime == 0L) {
-                "Never"
-            } else {
-                val sdf = SimpleDateFormat("MMM dd, yyyy hh:mm a", Locale.getDefault())
-                sdf.format(Date(lastCheckedTime))
-            }
-
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    // About Info
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(16.dp))
-
-                        Column {
-                            Text(
-                                text = "MedPulse Student Planner",
-                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "Your comprehensive AI-assisted companion",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Version & Status Grid
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Current Version", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("v${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurface)
-                        }
-
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Latest Version", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(
-                                text = cachedConfig?.let { "v${it.latestVersion}" } ?: "v${BuildConfig.VERSION_NAME}",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = if (cachedConfig != null && cachedConfig!!.latestVersion != BuildConfig.VERSION_NAME) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Last Checked", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(lastCheckedStr, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    // Check for Updates Button
-                    Button(
-                        onClick = { viewModel.checkForUpdates(silent = false) },
-                        enabled = !updateCheckInProgress,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("settings_check_updates_btn")
-                    ) {
-                        if (updateCheckInProgress) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onPrimary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Checking...", style = MaterialTheme.typography.bodyMedium)
-                        } else {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Check Now", style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-
-                    // Developer Simulation Tools for Verification
-                    Spacer(modifier = Modifier.height(20.dp))
-                    Text(
-                        text = "🛠️ Developer Simulation Tools",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { viewModel.simulateUpdate(force = false) },
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f).height(38.dp).testTag("simulate_optional_btn")
-                        ) {
-                            Text("Simulate Optional", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                        }
-                        OutlinedButton(
-                            onClick = { viewModel.simulateUpdate(force = true) },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f).height(38.dp).testTag("simulate_force_btn")
-                        ) {
-                            Text("Simulate Force", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                        }
-                    }
-
-                    // Update result feedback message
-                    updateResult?.let { result ->
-                        Spacer(modifier = Modifier.height(14.dp))
-                        val feedbackText = when (result) {
-                            is com.example.network.AppUpdateResult.UpToDate -> "✅ Your application is fully up to date."
-                            is com.example.network.AppUpdateResult.Error -> "❌ Failed to check for updates: ${result.message}"
-                            is com.example.network.AppUpdateResult.UpdateAvailable -> "🎉 New version v${result.config.latestVersion} is available!"
-                        }
-                        Text(
-                            text = feedbackText,
-                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                            color = when (result) {
-                                is com.example.network.AppUpdateResult.UpToDate -> MaterialTheme.colorScheme.primary
-                                is com.example.network.AppUpdateResult.Error -> MaterialTheme.colorScheme.error
-                                is com.example.network.AppUpdateResult.UpdateAvailable -> MaterialTheme.colorScheme.primary
-                            },
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(20.dp))
-                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Update History / Release Notes
-                    Text(
-                        text = "Update History",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Dynamic release notes if available, otherwise fallback to static
-                    val displayNotes = cachedConfig?.let {
-                        listOf(
-                            it.latestVersion to it.releaseNotes.split("\n")
-                        )
-                    } ?: listOf(
-                        "1.0.1" to listOf(
-                            "AI timetable import",
-                            "Dashboard synchronization",
-                            "Profile improvements",
-                            "Faster performance",
-                            "Bug fixes"
-                        )
-                    )
-
-                    displayNotes.forEach { (version, notes) ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = "Version $version",
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            notes.forEach { note ->
-                                if (note.isNotBlank()) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 2.dp),
-                                        verticalAlignment = Alignment.Top
-                                    ) {
-                                        Text("•", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = note.trim().removePrefix("•").trim(),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
             Spacer(modifier = Modifier.height(80.dp)) // Padding for bottom navbar
         }
 
@@ -1327,3 +1589,5 @@ fun DiagnosticItem(
         }
     }
 }
+
+

@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -28,8 +29,15 @@ import com.squareup.moshi.Types
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 import java.text.SimpleDateFormat
 import java.util.*
+import android.app.Activity
+import com.google.firebase.FirebaseException
+import com.google.firebase.auth.PhoneAuthCredential
+import com.google.firebase.auth.PhoneAuthOptions
+import com.google.firebase.auth.PhoneAuthProvider
+import java.util.concurrent.TimeUnit
 
 class PlannerViewModel(
     application: Application,
@@ -110,6 +118,12 @@ class PlannerViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val allAttendanceRecords: StateFlow<List<AttendanceRecord>> = repository.getAllAttendance()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allRevisions: StateFlow<List<DailySubjectRevision>> = repository.getAllRevisions()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
 
     // UI Search State
     private val _searchQuery = MutableStateFlow("")
@@ -126,6 +140,21 @@ class PlannerViewModel(
     // Student Profile state
     private val _studentName = MutableStateFlow("")
     val studentName: StateFlow<String> = _studentName.asStateFlow()
+
+    private val _studentCollege = MutableStateFlow("")
+    val studentCollege: StateFlow<String> = _studentCollege.asStateFlow()
+
+    private val _studentYear = MutableStateFlow("")
+    val studentYear: StateFlow<String> = _studentYear.asStateFlow()
+
+    private val _studentSemester = MutableStateFlow("")
+    val studentSemester: StateFlow<String> = _studentSemester.asStateFlow()
+
+    private val _studentBatch = MutableStateFlow("")
+    val studentBatch: StateFlow<String> = _studentBatch.asStateFlow()
+
+    private val _isProfileCompleted = MutableStateFlow(false)
+    val isProfileCompleted: StateFlow<Boolean> = _isProfileCompleted.asStateFlow()
 
     private val _studentDpUrl = MutableStateFlow("")
     val studentDpUrl: StateFlow<String> = _studentDpUrl.asStateFlow()
@@ -148,6 +177,12 @@ class PlannerViewModel(
 
     private val _studentEmail = MutableStateFlow("")
     val studentEmail: StateFlow<String> = _studentEmail.asStateFlow()
+
+    private val _phoneOtpSent = MutableStateFlow(false)
+    val phoneOtpSent: StateFlow<Boolean> = _phoneOtpSent.asStateFlow()
+
+    private val _phoneVerificationId = MutableStateFlow<String?>(null)
+    val phoneVerificationId: StateFlow<String?> = _phoneVerificationId.asStateFlow()
 
     // Parser screen draft status
     private val _isParsingMessage = MutableStateFlow(false)
@@ -174,14 +209,54 @@ class PlannerViewModel(
     private val _cachedUpdateConfig = MutableStateFlow<AppUpdateConfig?>(null)
     val cachedUpdateConfig: StateFlow<AppUpdateConfig?> = _cachedUpdateConfig.asStateFlow()
 
+    private val _customUpdateUrl = MutableStateFlow("")
+    val customUpdateUrl: StateFlow<String> = _customUpdateUrl.asStateFlow()
+
     private val _isUpdateDialogDismissed = MutableStateFlow(false)
     val isUpdateDialogDismissed: StateFlow<Boolean> = _isUpdateDialogDismissed.asStateFlow()
+
+    private val _updateDownloadProgress = MutableStateFlow<Float?>(null)
+    val updateDownloadProgress: StateFlow<Float?> = _updateDownloadProgress.asStateFlow()
+
+    private val _updateDownloadState = MutableStateFlow<String?>(null)
+    val updateDownloadState: StateFlow<String?> = _updateDownloadState.asStateFlow()
+
+    private val _fcmToken = MutableStateFlow("")
+    val fcmToken: StateFlow<String> = _fcmToken.asStateFlow()
+
+    private val _isFirebaseMessagingAvailable = MutableStateFlow(false)
+    val isFirebaseMessagingAvailable: StateFlow<Boolean> = _isFirebaseMessagingAvailable.asStateFlow()
 
     private val geminiService = GeminiParserService()
 
     init {
         // Read stored course preference from local preferences if any
         val sharedPrefs = application.getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+        _fcmToken.value = sharedPrefs.getString("fcm_registration_token", "") ?: ""
+
+        // Asynchronously fetch Firebase FCM registration token
+        viewModelScope.launch {
+            try {
+                val apps = com.google.firebase.FirebaseApp.getApps(application)
+                if (apps.isNotEmpty()) {
+                    _isFirebaseMessagingAvailable.value = true
+                    com.google.firebase.messaging.FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+                        if (task.isSuccessful) {
+                            val token = task.result
+                            _fcmToken.value = token
+                            sharedPrefs.edit().putString("fcm_registration_token", token).apply()
+                            Log.d("PlannerViewModel", "Retrieved FCM Token on startup: $token")
+                        } else {
+                            Log.w("PlannerViewModel", "FCM token fetching failed on startup", task.exception)
+                        }
+                    }
+                } else {
+                    Log.w("PlannerViewModel", "Firebase is not initialized (missing google-services.json)")
+                }
+            } catch (e: Exception) {
+                Log.e("PlannerViewModel", "Error checking/initializing Firebase FCM: ${e.message}")
+            }
+        }
         _isDarkTheme.value = sharedPrefs.getBoolean("is_dark_theme", false)
         _areNotificationsEnabled.value = sharedPrefs.getBoolean("are_notifications_enabled", true)
         val savedName = sharedPrefs.getString("student_name", "") ?: ""
@@ -193,7 +268,7 @@ class PlannerViewModel(
         _studentEmail.value = sharedPrefs.getString("student_email", "") ?: ""
         _googleUserId.value = sharedPrefs.getString("google_user_id", "") ?: ""
 
-        // Verify real Google session if logged in with Google
+        // Verify real Google or Firebase session
         if (savedLoginMode == LoginMode.GOOGLE.name) {
             val account = com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(application)
             if (account != null) {
@@ -213,6 +288,33 @@ class PlannerViewModel(
                 sharedPrefs.edit()
                     .putString("login_mode", LoginMode.UNDECIDED.name)
                     .putString("google_user_id", "")
+                    .putString("student_name", "")
+                    .putString("student_email", "")
+                    .putString("student_dp_url", "")
+                    .putString("student_dp_preset", "doctor_male")
+                    .putString("selected_course_code", null)
+                    .apply()
+            }
+        } else if (savedLoginMode == LoginMode.FIREBASE.name) {
+            val user = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+            if (user != null) {
+                _studentEmail.value = user.email ?: ""
+                _studentName.value = sharedPrefs.getString("student_name", "") ?: user.displayName ?: ""
+                _studentDpUrl.value = sharedPrefs.getString("student_dp_url", "") ?: ""
+                _studentDpPreset.value = sharedPrefs.getString("student_dp_preset", "doctor_male") ?: "doctor_male"
+                _studentCollege.value = sharedPrefs.getString("student_college", "") ?: ""
+                _studentYear.value = sharedPrefs.getString("student_year", "") ?: ""
+                _studentSemester.value = sharedPrefs.getString("student_semester", "") ?: ""
+                _studentBatch.value = sharedPrefs.getString("student_batch", "") ?: ""
+                _isProfileCompleted.value = sharedPrefs.getBoolean("is_profile_completed", false)
+            } else {
+                _loginMode.value = LoginMode.UNDECIDED
+                _studentName.value = ""
+                _studentEmail.value = ""
+                _studentDpUrl.value = ""
+                _studentDpPreset.value = "doctor_male"
+                sharedPrefs.edit()
+                    .putString("login_mode", LoginMode.UNDECIDED.name)
                     .putString("student_name", "")
                     .putString("student_email", "")
                     .putString("student_dp_url", "")
@@ -263,6 +365,7 @@ class PlannerViewModel(
         // Load cached update details
         _lastCheckedTime.value = updateService.getLastCheckedTime(application)
         _cachedUpdateConfig.value = updateService.getCachedUpdateInfo(application)
+        _customUpdateUrl.value = updateService.getCustomUpdateUrl(application)
 
         // Automatically check for updates silently on launch
         checkForUpdates(silent = true)
@@ -331,7 +434,8 @@ class PlannerViewModel(
     data class DayClassSchedule(
         val currentClass: TimetableClass? = null,
         val nextClass: TimetableClass? = null,
-        val remainingClasses: List<TimetableClass> = emptyList()
+        val remainingClasses: List<TimetableClass> = emptyList(),
+        val todayClasses: List<TimetableClass> = emptyList()
     )
 
     fun getLiveClassSchedule(): DayClassSchedule {
@@ -364,7 +468,8 @@ class PlannerViewModel(
         return DayClassSchedule(
             currentClass = running,
             nextClass = next,
-            remainingClasses = remaining
+            remainingClasses = remaining,
+            todayClasses = sortedClasses
         )
     }
 
@@ -415,6 +520,7 @@ class PlannerViewModel(
             )
             generateSmartNotifications()
             scheduleTimetableClassNotifications()
+            syncDataToFirebase()
         }
     }
 
@@ -436,6 +542,7 @@ class PlannerViewModel(
             )
             generateSmartNotifications()
             scheduleTimetableClassNotifications()
+            syncDataToFirebase()
         }
     }
 
@@ -444,6 +551,7 @@ class PlannerViewModel(
             repository.deleteClass(id)
             generateSmartNotifications()
             scheduleTimetableClassNotifications()
+            syncDataToFirebase()
         }
     }
 
@@ -475,6 +583,7 @@ class PlannerViewModel(
                     minutesBefore = 24 * 60 // 24 hours before
                 )
             }
+            syncDataToFirebase()
         }
     }
 
@@ -485,6 +594,7 @@ class PlannerViewModel(
                 // If toggled to completed, cancel the notification
                 AcademicNotificationManager.cancelByItemId(getApplication(), "asg_${assignment.id}")
             }
+            syncDataToFirebase()
         }
     }
 
@@ -492,6 +602,7 @@ class PlannerViewModel(
         viewModelScope.launch {
             repository.deleteAssignment(id)
             AcademicNotificationManager.cancelByItemId(getApplication(), "asg_$id")
+            syncDataToFirebase()
         }
     }
 
@@ -522,6 +633,7 @@ class PlannerViewModel(
                     minutesBefore = 30
                 )
             }
+            syncDataToFirebase()
         }
     }
 
@@ -531,6 +643,7 @@ class PlannerViewModel(
             if (assessment.status != "Completed") {
                 AcademicNotificationManager.cancelByItemId(getApplication(), "asm_${assessment.id}")
             }
+            syncDataToFirebase()
         }
     }
 
@@ -538,6 +651,7 @@ class PlannerViewModel(
         viewModelScope.launch {
             repository.deleteAssessment(id)
             AcademicNotificationManager.cancelByItemId(getApplication(), "asm_$id")
+            syncDataToFirebase()
         }
     }
 
@@ -567,6 +681,7 @@ class PlannerViewModel(
                     minutesBefore = 30
                 )
             }
+            syncDataToFirebase()
         }
     }
 
@@ -576,6 +691,7 @@ class PlannerViewModel(
             if (progress >= 100) {
                 AcademicNotificationManager.cancelByItemId(getApplication(), "study_$id")
             }
+            syncDataToFirebase()
         }
     }
 
@@ -583,6 +699,7 @@ class PlannerViewModel(
         viewModelScope.launch {
             repository.deleteStudyTask(id)
             AcademicNotificationManager.cancelByItemId(getApplication(), "study_$id")
+            syncDataToFirebase()
         }
     }
 
@@ -622,7 +739,9 @@ class PlannerViewModel(
                     repository.addChatMessage(userMsg)
                 }
 
-                val aiResponseText = if (response.document_type == "Weekly Timetable") {
+                val aiResponseText = if (!response.conversational_response.isNullOrEmpty()) {
+                    response.conversational_response
+                } else if (response.document_type == "Weekly Timetable") {
                     val days = response.extracted_timetable.map { it.day_of_week }.distinct().size
                     val classesCount = response.extracted_timetable.filter { !it.is_lunch_break }.size
                     val teachersCount = response.extracted_timetable.mapNotNull { it.teacher_name }.distinct().size
@@ -1121,6 +1240,22 @@ class PlannerViewModel(
         }
         if (!alreadyExists) {
             repository.addNotification(notification)
+            // Push to Android system notification tray immediately
+            if (_areNotificationsEnabled.value) {
+                try {
+                    val rawId = notification.title.hashCode() xor notification.message.hashCode() xor notification.type.hashCode()
+                    val notificationId = if (rawId == Int.MIN_VALUE) 0 else java.lang.Math.abs(rawId) % 100000
+                    com.example.util.NotificationHelper.showNotification(
+                        context = getApplication(),
+                        title = notification.title,
+                        message = notification.message,
+                        notificationId = notificationId,
+                        type = notification.type
+                    )
+                } catch (e: Exception) {
+                    Log.e("PlannerViewModel", "Failed to push system notification: ${e.localizedMessage}")
+                }
+            }
         }
     }
 
@@ -1384,6 +1519,226 @@ class PlannerViewModel(
         }
     }
 
+    fun signInWithEmailAndPassword(email: String, password: String) {
+        _isAuthenticating.value = true
+        _authError.value = null
+        
+        com.google.firebase.auth.FirebaseAuth.getInstance().signInWithEmailAndPassword(email, password)
+            .addOnCompleteListener { task ->
+                if (task.isSuccessful) {
+                    val user = task.result?.user
+                    if (user != null) {
+                        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+                        
+                        val name = user.displayName ?: sharedPrefs.getString("student_name", "") ?: email.substringBefore("@")
+                        val photoUrl = user.photoUrl?.toString() ?: ""
+                        val preset = sharedPrefs.getString("student_dp_preset", "doctor_male") ?: "doctor_male"
+                        
+                        _loginMode.value = LoginMode.FIREBASE
+                        _studentName.value = name
+                        _studentEmail.value = user.email ?: email
+                        _studentDpUrl.value = photoUrl
+                        _studentDpPreset.value = preset
+                        _isAuthenticating.value = false
+                        _authError.value = null
+                        
+                        sharedPrefs.edit()
+                            .putString("login_mode", LoginMode.FIREBASE.name)
+                            .putString("student_name", name)
+                            .putString("student_email", user.email ?: email)
+                            .putString("student_dp_url", photoUrl)
+                            .putString("student_dp_preset", preset)
+                            .apply()
+                            
+                        viewModelScope.launch {
+                            addNotificationWithDuplicateCheck(
+                                InAppNotification(
+                                    title = "Signed in as $name",
+                                    message = "Welcome back! Your academic profile is successfully synced.",
+                                    type = "alert"
+                                )
+                            )
+                        }
+                    } else {
+                        _isAuthenticating.value = false
+                        _authError.value = "User session was empty"
+                    }
+                } else {
+                    _isAuthenticating.value = false
+                    _authError.value = task.exception?.localizedMessage ?: "Sign-in failed. Please verify credentials."
+                }
+            }
+    }
+
+    fun signUpWithEmailAndPassword(name: String, email: String, password: String, dpPreset: String) {
+        _isAuthenticating.value = true
+        _authError.value = null
+        
+        com.google.firebase.auth.FirebaseAuth.getInstance().createUserWithEmailAndPassword(email, password)
+            .addOnCompleteListener { task ->
+                if (task.isSuccessful) {
+                    val user = task.result?.user
+                    if (user != null) {
+                        val profileUpdates = com.google.firebase.auth.UserProfileChangeRequest.Builder()
+                            .setDisplayName(name)
+                            .build()
+                        user.updateProfile(profileUpdates).addOnCompleteListener { profileTask ->
+                            val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+                            
+                            _loginMode.value = LoginMode.FIREBASE
+                            _studentName.value = name
+                            _studentEmail.value = email
+                            _studentDpUrl.value = ""
+                            _studentDpPreset.value = dpPreset
+                            _isAuthenticating.value = false
+                            _authError.value = null
+                            
+                            sharedPrefs.edit()
+                                .putString("login_mode", LoginMode.FIREBASE.name)
+                                .putString("student_name", name)
+                                .putString("student_email", email)
+                                .putString("student_dp_url", "")
+                                .putString("student_dp_preset", dpPreset)
+                                .apply()
+                                
+                            viewModelScope.launch {
+                                addNotificationWithDuplicateCheck(
+                                    InAppNotification(
+                                        title = "Account Created!",
+                                        message = "Welcome $name to MedPulse! Your production cloud database is active.",
+                                        type = "alert"
+                                    )
+                                )
+                            }
+                        }
+                    } else {
+                        _isAuthenticating.value = false
+                        _authError.value = "User registration failed"
+                    }
+                } else {
+                    _isAuthenticating.value = false
+                    _authError.value = task.exception?.localizedMessage ?: "Registration failed. Check password strength/email format."
+                }
+            }
+    }
+
+    private fun signInWithPhoneCredential(credential: PhoneAuthCredential, phoneNumber: String, name: String, dpPreset: String = "doctor_male") {
+        _isAuthenticating.value = true
+        com.google.firebase.auth.FirebaseAuth.getInstance().signInWithCredential(credential)
+            .addOnCompleteListener { task ->
+                if (task.isSuccessful) {
+                    val user = task.result?.user
+                    val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+                    val finalName = name.trim().ifBlank { user?.displayName ?: "Mobile Student" }
+                    val emailVal = "phone:${phoneNumber.trim().replace(" ", "")}"
+                    
+                    _loginMode.value = LoginMode.FIREBASE
+                    _studentName.value = finalName
+                    _studentEmail.value = emailVal
+                    _studentDpUrl.value = ""
+                    _studentDpPreset.value = dpPreset
+                    _isAuthenticating.value = false
+                    _authError.value = null
+                    _phoneOtpSent.value = false
+                    _phoneVerificationId.value = null
+                    
+                    sharedPrefs.edit()
+                        .putString("login_mode", LoginMode.FIREBASE.name)
+                        .putString("student_name", finalName)
+                        .putString("student_email", emailVal)
+                        .putString("student_dp_url", "")
+                        .putString("student_dp_preset", dpPreset)
+                        .apply()
+                    
+                    viewModelScope.launch {
+                        addNotificationWithDuplicateCheck(
+                            InAppNotification(
+                                title = "Authenticated successfully!",
+                                message = "Welcome $finalName! Your mobile profile is verified and active.",
+                                type = "alert"
+                            )
+                        )
+                    }
+                } else {
+                    _isAuthenticating.value = false
+                    _authError.value = "OTP Verification Failed: ${task.exception?.localizedMessage}"
+                }
+            }
+    }
+
+    fun sendPhoneOtp(activity: Activity, phoneNumber: String, name: String) {
+        _isAuthenticating.value = true
+        _authError.value = null
+        
+        val options = PhoneAuthOptions.newBuilder(com.google.firebase.auth.FirebaseAuth.getInstance())
+            .setPhoneNumber(phoneNumber)
+            .setTimeout(60L, TimeUnit.SECONDS)
+            .setActivity(activity)
+            .setCallbacks(object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
+                override fun onVerificationCompleted(credential: PhoneAuthCredential) {
+                    signInWithPhoneCredential(credential, phoneNumber, name)
+                }
+
+                override fun onVerificationFailed(e: FirebaseException) {
+                    _isAuthenticating.value = false
+                    _authError.value = "Verification failed: ${e.localizedMessage}"
+                }
+
+                override fun onCodeSent(
+                    verificationId: String,
+                    token: PhoneAuthProvider.ForceResendingToken
+                ) {
+                    _phoneVerificationId.value = verificationId
+                    _phoneOtpSent.value = true
+                    _isAuthenticating.value = false
+                    _authError.value = null
+                    
+                    viewModelScope.launch {
+                        addNotificationWithDuplicateCheck(
+                            InAppNotification(
+                                title = "🔑 OTP Sent!",
+                                message = "A security code has been sent via SMS to $phoneNumber.",
+                                type = "alert"
+                            )
+                        )
+                    }
+                }
+            })
+            .build()
+        
+        try {
+            PhoneAuthProvider.verifyPhoneNumber(options)
+        } catch (e: Exception) {
+            _isAuthenticating.value = false
+            _authError.value = "Failed to start phone verification: ${e.localizedMessage}"
+        }
+    }
+
+    fun verifyPhoneOtp(phoneNumber: String, otp: String, name: String, dpPreset: String = "doctor_male") {
+        val verificationId = _phoneVerificationId.value
+        if (verificationId == null) {
+            _authError.value = "Verification session expired. Please request a new OTP."
+            return
+        }
+        _isAuthenticating.value = true
+        _authError.value = null
+        
+        try {
+            val credential = PhoneAuthProvider.getCredential(verificationId, otp)
+            signInWithPhoneCredential(credential, phoneNumber, name, dpPreset)
+        } catch (e: Exception) {
+            _isAuthenticating.value = false
+            _authError.value = "Failed to verify code: ${e.localizedMessage}"
+        }
+    }
+
+    fun resetPhoneOtpState() {
+        _phoneOtpSent.value = false
+        _phoneVerificationId.value = null
+        _authError.value = null
+        _isAuthenticating.value = false
+    }
+
     fun signOut() {
         _loginMode.value = LoginMode.UNDECIDED
         _studentName.value = ""
@@ -1391,8 +1746,13 @@ class PlannerViewModel(
         _studentDpUrl.value = ""
         _studentDpPreset.value = "doctor_male"
         _googleUserId.value = ""
+        _studentCollege.value = ""
+        _studentYear.value = ""
+        _studentSemester.value = ""
+        _studentBatch.value = ""
+        _isProfileCompleted.value = false
         _currentScreen.value = Screen.Welcome
-
+ 
         val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
         sharedPrefs.edit()
             .putString("login_mode", LoginMode.UNDECIDED.name)
@@ -1402,7 +1762,18 @@ class PlannerViewModel(
             .putString("student_dp_preset", "doctor_male")
             .putString("google_user_id", "")
             .putString("selected_course_code", null) // reset selected course on logout
+            .putString("student_college", "")
+            .putString("student_year", "")
+            .putString("student_semester", "")
+            .putString("student_batch", "")
+            .putBoolean("is_profile_completed", false)
             .apply()
+ 
+        try {
+            com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
+        } catch (e: Exception) {
+            Log.e("PlannerViewModel", "Error signing out from Firebase: ${e.message}", e)
+        }
 
         try {
             val gso = com.google.android.gms.auth.api.signin.GoogleSignInOptions.Builder(
@@ -1413,15 +1784,378 @@ class PlannerViewModel(
         } catch (e: Exception) {
             Log.e("PlannerViewModel", "Error signing out from Google: ${e.message}", e)
         }
-
+ 
         viewModelScope.launch {
             addNotificationWithDuplicateCheck(
                 InAppNotification(
-                    title = "Disconnected Google Account",
-                    message = "Google account successfully signed out. All local offline academic planner data was safely preserved.",
+                    title = "Signed Out",
+                    message = "Your account was successfully signed out. All local offline academic planner data was safely preserved.",
                     type = "alert"
                 )
             )
+        }
+    }
+
+    fun saveUserProfile(name: String, college: String, course: String, year: String, semester: String, batch: String) {
+        val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "local_user"
+        val profile = UserProfile(
+            uid = uid,
+            fullName = name,
+            college = college,
+            course = course,
+            year = year,
+            semester = semester,
+            batch = batch
+        )
+
+        viewModelScope.launch(Dispatchers.IO) {
+            // Save to local database
+            repository.saveUserProfile(profile)
+
+            // Save to SharedPreferences
+            val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+            sharedPrefs.edit()
+                .putString("student_name", name)
+                .putString("student_college", college)
+                .putString("student_year", year)
+                .putString("student_semester", semester)
+                .putString("student_batch", batch)
+                .putBoolean("is_profile_completed", true)
+                .apply()
+
+            _studentName.value = name
+            _studentCollege.value = college
+            _studentYear.value = year
+            _studentSemester.value = semester
+            _studentBatch.value = batch
+            _isProfileCompleted.value = true
+
+            // Sync with Firebase Firestore
+            try {
+                if (uid != "local_user") {
+                    val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                    db.collection("users").document(uid).collection("profile").document("info")
+                        .set(profile)
+                    
+                    // Backup everything as well on initial setup completion!
+                    syncDataToFirebase()
+                }
+            } catch (e: Exception) {
+                Log.e("PlannerViewModel", "Failed to sync profile to Firestore: ${e.message}", e)
+            }
+        }
+    }
+
+    fun syncDataToFirebase() {
+        val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: return
+        val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+        
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // 1. Sync Profile
+                val profile = UserProfile(
+                    uid = uid,
+                    fullName = _studentName.value,
+                    college = _studentCollege.value,
+                    course = _selectedCourse.value?.code ?: "",
+                    year = _studentYear.value,
+                    semester = _studentSemester.value,
+                    batch = _studentBatch.value
+                )
+                db.collection("users").document(uid).collection("profile").document("info")
+                    .set(profile)
+                
+                // Save locally too
+                repository.saveUserProfile(profile)
+
+                // 2. Sync Settings
+                val settings = mapOf(
+                    "isDarkTheme" to _isDarkTheme.value,
+                    "areNotificationsEnabled" to _areNotificationsEnabled.value
+                )
+                db.collection("users").document(uid).collection("settings").document("info")
+                    .set(settings)
+
+                // Timetable Classes backup
+                val classes = timetable.value
+                classes.forEach { classItem ->
+                    db.collection("users").document(uid).collection("timetable").document(classItem.id.toString())
+                        .set(classItem)
+                }
+
+                // Attendance Records backup
+                val attendance = allAttendanceRecords.value
+                attendance.forEach { rec ->
+                    db.collection("users").document(uid).collection("attendance").document(rec.id.toString())
+                        .set(rec)
+                }
+
+                // Daily Revisions backup
+                val revisions = allRevisions.value
+                revisions.forEach { rev ->
+                    db.collection("users").document(uid).collection("revisions").document(rev.id.toString())
+                        .set(rev)
+                }
+
+                // Assignments backup
+                val assignmentsList = assignments.value
+                assignmentsList.forEach { asg ->
+                    db.collection("users").document(uid).collection("assignments").document(asg.id.toString())
+                        .set(asg)
+                }
+
+                // Exams backup
+                val examsList = exams.value
+                examsList.forEach { ex ->
+                    db.collection("users").document(uid).collection("exams").document(ex.id.toString())
+                        .set(ex)
+                }
+
+                // Planner backup
+                val plannerList = plannerTasks.value
+                plannerList.forEach { task ->
+                    db.collection("users").document(uid).collection("planner").document(task.id.toString())
+                        .set(task)
+                }
+
+                // Chat history backup
+                val chatList = chatMessages.value
+                chatList.forEach { chat ->
+                    db.collection("users").document(uid).collection("chat_history").document(chat.id.toString())
+                        .set(chat)
+                }
+
+                Log.d("FirestoreSync", "All user data successfully backed up to Firestore under UID: $uid")
+            } catch (e: Exception) {
+                Log.e("FirestoreSync", "Failed to backup user data to Firestore: ${e.message}", e)
+            }
+        }
+    }
+
+    fun restoreDataFromFirebase(onComplete: (Boolean) -> Unit = {}) {
+        val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: return
+        val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+        
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // 1. Restore Profile
+                db.collection("users").document(uid).collection("profile").document("info")
+                    .get()
+                    .addOnSuccessListener { doc ->
+                        if (doc.exists()) {
+                            val name = doc.getString("fullName") ?: ""
+                            val college = doc.getString("college") ?: ""
+                            val courseCode = doc.getString("course") ?: ""
+                            val year = doc.getString("year") ?: ""
+                            val semester = doc.getString("semester") ?: ""
+                            val batch = doc.getString("batch") ?: ""
+                            
+                            _studentName.value = name
+                            _studentCollege.value = college
+                            _studentYear.value = year
+                            _studentSemester.value = semester
+                            _studentBatch.value = batch
+                            _isProfileCompleted.value = true
+                            
+                            if (courseCode.isNotEmpty()) {
+                                try {
+                                    val courseObj = MedicalCourse.valueOf(courseCode)
+                                    _selectedCourse.value = courseObj
+                                    
+                                    val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+                                    sharedPrefs.edit()
+                                        .putString("student_name", name)
+                                        .putString("selected_course_code", courseObj.name)
+                                        .putString("student_college", college)
+                                        .putString("student_year", year)
+                                        .putString("student_semester", semester)
+                                        .putString("student_batch", batch)
+                                        .putBoolean("is_profile_completed", true)
+                                        .apply()
+                                } catch (e: Exception) {
+                                    // ignore
+                                }
+                            }
+                        }
+                    }
+
+                // 2. Restore Timetable
+                db.collection("users").document(uid).collection("timetable")
+                    .get()
+                    .addOnSuccessListener { result ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            val list = mutableListOf<TimetableClass>()
+                            for (doc in result) {
+                                val c = doc.toObject(TimetableClass::class.java)
+                                list.add(c)
+                            }
+                            if (list.isNotEmpty()) {
+                                _selectedCourse.value?.code?.let { code ->
+                                    repository.clearTimetable(code)
+                                    list.forEach { repository.addClass(it) }
+                                }
+                            }
+                        }
+                    }
+
+                // 3. Restore Attendance Records
+                db.collection("users").document(uid).collection("attendance")
+                    .get()
+                    .addOnSuccessListener { result ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            val list = mutableListOf<AttendanceRecord>()
+                            for (doc in result) {
+                                val r = doc.toObject(AttendanceRecord::class.java)
+                                list.add(r)
+                            }
+                            if (list.isNotEmpty()) {
+                                list.forEach { repository.saveAttendanceRecord(it) }
+                            }
+                        }
+                    }
+
+                // 4. Restore Daily Revisions
+                db.collection("users").document(uid).collection("revisions")
+                    .get()
+                    .addOnSuccessListener { result ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            val list = mutableListOf<DailySubjectRevision>()
+                            for (doc in result) {
+                                val r = doc.toObject(DailySubjectRevision::class.java)
+                                list.add(r)
+                            }
+                            if (list.isNotEmpty()) {
+                                list.forEach { repository.saveRevision(it) }
+                            }
+                        }
+                    }
+
+                // 5. Restore Assignments
+                db.collection("users").document(uid).collection("assignments")
+                    .get()
+                    .addOnSuccessListener { result ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            for (doc in result) {
+                                val a = doc.toObject(Assignment::class.java)
+                                repository.addAssignment(a)
+                            }
+                        }
+                    }
+
+                // 6. Restore Exams
+                db.collection("users").document(uid).collection("exams")
+                    .get()
+                    .addOnSuccessListener { result ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            for (doc in result) {
+                                val ex = doc.toObject(Exam::class.java)
+                                repository.addExam(ex)
+                            }
+                        }
+                    }
+
+                // 7. Restore Planner
+                db.collection("users").document(uid).collection("planner")
+                    .get()
+                    .addOnSuccessListener { result ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            for (doc in result) {
+                                val task = doc.toObject(PlannerTask::class.java)
+                                repository.addPlannerTask(task)
+                            }
+                        }
+                    }
+
+                onComplete(true)
+            } catch (e: Exception) {
+                Log.e("FirestoreSync", "Restore failed: ${e.message}", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    fun markAttendance(subject: String, isPresent: Boolean, classTime: String? = null) {
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+        val dateString = sdf.format(java.util.Date())
+        val record = AttendanceRecord(
+            dateString = dateString,
+            subject = subject,
+            isPresent = isPresent,
+            classTime = classTime
+        )
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.saveAttendanceRecord(record)
+            syncDataToFirebase()
+            
+            // Add custom visual alert
+            val statusLabel = if (isPresent) "Present" else "Absent"
+            addNotificationWithDuplicateCheck(
+                InAppNotification(
+                    title = "Attendance Marked",
+                    message = "Successfully marked $statusLabel for $subject ($classTime).",
+                    type = "class"
+                )
+            )
+        }
+    }
+
+    fun getAttendancePercentageForSubject(subject: String): Float {
+        val records = allAttendanceRecords.value.filter { it.subject.lowercase() == subject.lowercase() }
+        if (records.isEmpty()) return 100f
+        val present = records.count { it.isPresent }
+        return (present.toFloat() / records.size) * 100f
+    }
+
+    fun getOverallAttendancePercentage(): Float {
+        val records = allAttendanceRecords.value
+        if (records.isEmpty()) return 100f
+        val present = records.count { it.isPresent }
+        return (present.toFloat() / records.size) * 100f
+    }
+
+    private val _isGeneratingRevision = MutableStateFlow(false)
+    val isGeneratingRevision: StateFlow<Boolean> = _isGeneratingRevision
+
+    private val _lastGeneratedRevision = MutableStateFlow<DailySubjectRevision?>(null)
+    val lastGeneratedRevision: StateFlow<DailySubjectRevision?> = _lastGeneratedRevision
+
+    fun generateClassRevision(subject: String, explanation: String) {
+        _isGeneratingRevision.value = true
+        _lastGeneratedRevision.value = null
+        viewModelScope.launch {
+            try {
+                val response = geminiService.generateDailyClassRevision(subject, explanation)
+                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+                val dateString = sdf.format(java.util.Date())
+                
+                val revision = DailySubjectRevision(
+                    dateString = dateString,
+                    subject = subject,
+                    studentExplanation = explanation,
+                    aiSummary = response.aiSummary,
+                    keyPoints = response.keyPoints,
+                    revisionQuestions = response.revisionQuestions
+                )
+                
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    repository.saveRevision(revision)
+                    syncDataToFirebase()
+                }
+                
+                _lastGeneratedRevision.value = revision
+                
+                addNotificationWithDuplicateCheck(
+                    InAppNotification(
+                        title = "AI Notes Generated",
+                        message = "AI successfully analyzed your lecture explanation for $subject and saved custom summaries & test questions.",
+                        type = "study"
+                    )
+                )
+            } catch (e: Exception) {
+                Log.e("PlannerViewModel", "Error generating class revision: ${e.message}", e)
+            } finally {
+                _isGeneratingRevision.value = false
+            }
         }
     }
 
@@ -1579,18 +2313,46 @@ class PlannerViewModel(
         _updateResult.value = null
     }
 
-    fun simulateUpdate(force: Boolean) {
-        val mockConfig = AppUpdateConfig(
-            latestVersion = "1.0.2",
-            minimumVersion = if (force) "1.0.2" else "1.0.0",
-            forceUpdate = force,
-            apkUrl = "https://ais-dev-famqmclmfe6gdf3uf2vkyk-1079547613754.asia-southeast1.run.app",
-            releaseNotes = "Important security fixes, AI assistant improvements, local database synchronization, and class scheduler enhancements."
-        )
-        _updateResult.value = AppUpdateResult.UpdateAvailable(mockConfig, force)
-        _cachedUpdateConfig.value = mockConfig
-        _isUpdateDialogDismissed.value = false
+    fun saveCustomUpdateUrl(url: String) {
+        _customUpdateUrl.value = url.trim()
+        updateService.setCustomUpdateUrl(getApplication(), url)
     }
+
+    fun downloadAndInstallUpdate(apkUrl: String) {
+        val context = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.Main) {
+            try {
+                val realUrl = if (apkUrl.isBlank() || apkUrl.contains("example.com")) {
+                    "https://raw.githubusercontent.com/faheem-ansari/student-planner-app/main/app-release.apk"
+                } else {
+                    apkUrl
+                }
+                
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(realUrl)).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+                
+                // Keep progress and state values clean / idle since we've redirected
+                _updateDownloadProgress.value = null
+                _updateDownloadState.value = null
+                
+                addNotificationWithDuplicateCheck(
+                    InAppNotification(
+                        title = "Update Redirected",
+                        message = "Opening update link in your browser or Play Store...",
+                        type = "system"
+                    )
+                )
+            } catch (e: Exception) {
+                Log.e("PlannerViewModel", "Error redirecting to update url", e)
+                _updateDownloadState.value = "Failed to redirect: ${e.localizedMessage}"
+                _updateDownloadProgress.value = null
+            }
+        }
+    }
+
+
 }
 
 enum class Screen {
@@ -1606,7 +2368,8 @@ enum class Screen {
 enum class LoginMode {
     UNDECIDED,
     GUEST,
-    GOOGLE
+    GOOGLE,
+    FIREBASE
 }
 
 class PlannerViewModelFactory(

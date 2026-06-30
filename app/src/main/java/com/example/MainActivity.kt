@@ -66,6 +66,8 @@ class MainActivity : ComponentActivity() {
                 val currentScreen by viewModel.currentScreen.collectAsStateWithLifecycle()
                 val updateResult by viewModel.updateResult.collectAsStateWithLifecycle()
                 val isUpdateDialogDismissed by viewModel.isUpdateDialogDismissed.collectAsStateWithLifecycle()
+                val downloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
+                val downloadState by viewModel.updateDownloadState.collectAsStateWithLifecycle()
 
                 Box(modifier = Modifier.fillMaxSize()) {
                     Surface(
@@ -82,23 +84,24 @@ class MainActivity : ComponentActivity() {
                     // Handle In-App Update System Overlays and Dialogs
                     updateResult?.let { result ->
                         if (result is AppUpdateResult.UpdateAvailable) {
-                            val context = androidx.compose.ui.platform.LocalContext.current
                             if (result.isForce) {
                                 // Fullscreen non-dismissible critical force update overlay
                                 ForceUpdateScreen(
                                     config = result.config,
+                                    downloadProgress = downloadProgress,
+                                    downloadState = downloadState,
                                     onUpdateClick = {
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(result.config.apkUrl))
-                                        context.startActivity(intent)
+                                        viewModel.downloadAndInstallUpdate(result.config.apkUrl)
                                     }
                                 )
                             } else if (!isUpdateDialogDismissed) {
                                 // Material 3 optional update dialog
                                 OptionalUpdateDialog(
                                     config = result.config,
+                                    downloadProgress = downloadProgress,
+                                    downloadState = downloadState,
                                     onUpdateClick = {
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(result.config.apkUrl))
-                                        context.startActivity(intent)
+                                        viewModel.downloadAndInstallUpdate(result.config.apkUrl)
                                     },
                                     onDismissClick = {
                                         viewModel.dismissUpdateDialog()

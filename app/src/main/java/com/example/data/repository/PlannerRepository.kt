@@ -86,6 +86,24 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
     suspend fun deleteOverride(id: Int) = plannerDao.deleteOverrideById(id)
     suspend fun clearOverrides(courseCode: String) = plannerDao.clearOverridesForCourse(courseCode)
 
+    // User Profile API
+    fun getUserProfile(uid: String): Flow<UserProfile?> = plannerDao.getUserProfile(uid)
+    suspend fun saveUserProfile(profile: UserProfile) = plannerDao.insertUserProfile(profile)
+    suspend fun clearUserProfile() = plannerDao.clearUserProfiles()
+
+    // Attendance Records API
+    fun getAttendanceForDate(dateString: String): Flow<List<AttendanceRecord>> = plannerDao.getAttendanceForDate(dateString)
+    fun getAllAttendance(): Flow<List<AttendanceRecord>> = plannerDao.getAllAttendance()
+    suspend fun saveAttendanceRecord(record: AttendanceRecord) = plannerDao.insertAttendanceRecord(record)
+    suspend fun saveAttendanceRecords(records: List<AttendanceRecord>) = plannerDao.insertAttendanceRecords(records)
+    suspend fun deleteAttendanceForDate(dateString: String) = plannerDao.deleteAttendanceForDate(dateString)
+
+    // Daily Subject Revisions API
+    fun getRevisionsForDate(dateString: String): Flow<List<DailySubjectRevision>> = plannerDao.getRevisionsForDate(dateString)
+    fun getAllRevisions(): Flow<List<DailySubjectRevision>> = plannerDao.getAllRevisions()
+    suspend fun saveRevision(revision: DailySubjectRevision) = plannerDao.insertRevision(revision)
+    suspend fun deleteRevision(id: Int) = plannerDao.deleteRevisionById(id)
+
 
     // Pre-populate realistic weekly schedules for different courses
     suspend fun populateDefaultTimetableIfEmpty(courseCode: String) {

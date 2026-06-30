@@ -142,6 +142,45 @@ interface PlannerDao {
 
     @Query("DELETE FROM schedule_overrides WHERE courseCode = :courseCode")
     suspend fun clearOverridesForCourse(courseCode: String)
+
+    // User Profile
+    @Query("SELECT * FROM user_profiles WHERE uid = :uid LIMIT 1")
+    fun getUserProfile(uid: String): Flow<UserProfile?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertUserProfile(profile: UserProfile)
+
+    @Query("DELETE FROM user_profiles")
+    suspend fun clearUserProfiles()
+
+    // Attendance Records
+    @Query("SELECT * FROM attendance_records WHERE dateString = :dateString")
+    fun getAttendanceForDate(dateString: String): Flow<List<AttendanceRecord>>
+
+    @Query("SELECT * FROM attendance_records ORDER BY dateString DESC")
+    fun getAllAttendance(): Flow<List<AttendanceRecord>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAttendanceRecord(record: AttendanceRecord)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAttendanceRecords(records: List<AttendanceRecord>)
+
+    @Query("DELETE FROM attendance_records WHERE dateString = :dateString")
+    suspend fun deleteAttendanceForDate(dateString: String)
+
+    // Daily Subject Revisions
+    @Query("SELECT * FROM daily_subject_revisions WHERE dateString = :dateString")
+    fun getRevisionsForDate(dateString: String): Flow<List<DailySubjectRevision>>
+
+    @Query("SELECT * FROM daily_subject_revisions ORDER BY dateString DESC")
+    fun getAllRevisions(): Flow<List<DailySubjectRevision>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRevision(revision: DailySubjectRevision)
+
+    @Query("DELETE FROM daily_subject_revisions WHERE id = :id")
+    suspend fun deleteRevisionById(id: Int)
 }
 
 @Database(
@@ -156,9 +195,12 @@ interface PlannerDao {
         Teacher::class,
         RoomEntity::class,
         PlannerTask::class,
-        ScheduleOverride::class
+        ScheduleOverride::class,
+        UserProfile::class,
+        AttendanceRecord::class,
+        DailySubjectRevision::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class PlannerDatabase : RoomDatabase() {

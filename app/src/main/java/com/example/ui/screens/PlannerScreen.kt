@@ -139,7 +139,7 @@ fun PlannerScreen(
                 Tab(
                     selected = selectedTabIdx == 1,
                     onClick = { selectedTabIdx = 1 },
-                    text = { Text("Exams / Vivas") },
+                    text = { Text("Assessments") },
                     modifier = Modifier.testTag("tab_exams")
                 )
                 Tab(
@@ -217,7 +217,7 @@ fun AssignmentsSubList(
                 item {
                     Text("Overdue Items", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
                 }
-                items(overdue) { asg ->
+                items(overdue, key = { it.id }) { asg ->
                     AssignmentCardRow(asg, formatter, onDelete, onToggle)
                 }
             }
@@ -226,7 +226,7 @@ fun AssignmentsSubList(
                 item {
                     Text("Active Assignments", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), modifier = Modifier.padding(top = 8.dp))
                 }
-                items(pending) { asg ->
+                items(pending, key = { it.id }) { asg ->
                     AssignmentCardRow(asg, formatter, onDelete, onToggle)
                 }
             }
@@ -235,7 +235,7 @@ fun AssignmentsSubList(
                 item {
                     Text("Completed", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), modifier = Modifier.padding(top = 8.dp))
                 }
-                items(completed) { asg ->
+                items(completed, key = { it.id }) { asg ->
                     AssignmentCardRow(asg, formatter, onDelete, onToggle)
                 }
             }
@@ -330,18 +330,18 @@ fun AssessmentsSubList(
 
             if (upcoming.isNotEmpty()) {
                 item {
-                    Text("Upcoming Exams", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+                    Text("Upcoming Assessments", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
                 }
-                items(upcoming) { exam ->
+                items(upcoming, key = { it.id }) { exam ->
                     AssessmentCardRow(exam, formatter, onDelete, onToggle)
                 }
             }
 
             if (completed.isNotEmpty()) {
                 item {
-                    Text("Completed Exams", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), modifier = Modifier.padding(top = 8.dp))
+                    Text("Completed Assessments", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), modifier = Modifier.padding(top = 8.dp))
                 }
-                items(completed) { exam ->
+                items(completed, key = { it.id }) { exam ->
                     AssessmentCardRow(exam, formatter, onDelete, onToggle)
                 }
             }
@@ -359,9 +359,27 @@ fun AssessmentCardRow(
     onToggle: (Assessment) -> Unit
 ) {
     val countdownDays = remember(exam.date) {
-        val diff = exam.date - System.currentTimeMillis()
-        val days = (diff / (24 * 60 * 60 * 1000L)).toInt()
-        if (days < 0) "Passed" else if (days == 0) "TODAY" else "$days days left"
+        val todayCal = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val targetCal = java.util.Calendar.getInstance().apply {
+            timeInMillis = exam.date
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val diffMs = targetCal.timeInMillis - todayCal.timeInMillis
+        val days = (diffMs / (24 * 60 * 60 * 1000L)).toInt()
+        when {
+            days < 0 -> "Passed"
+            days == 0 -> "TODAY"
+            days == 1 -> "1 day left"
+            else -> "$days days left"
+        }
     }
 
     Surface(
@@ -457,7 +475,7 @@ fun StudyTasksSubList(
                 item {
                     Text("Active Goals", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
                 }
-                items(active) { task ->
+                items(active, key = { it.id }) { task ->
                     StudyTaskCardRow(task, formatter, onDelete, onProgress)
                 }
             }
@@ -466,7 +484,7 @@ fun StudyTasksSubList(
                 item {
                     Text("Completed Revision", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), modifier = Modifier.padding(top = 8.dp))
                 }
-                items(completed) { task ->
+                items(completed, key = { it.id }) { task ->
                     StudyTaskCardRow(task, formatter, onDelete, onProgress)
                 }
             }
@@ -795,7 +813,7 @@ fun AddAssessmentDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
-        title = { Text("New Exam / Test", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)) },
+        title = { Text("New Assessment", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)) },
         text = {
             Column(
                 modifier = Modifier
@@ -806,7 +824,7 @@ fun AddAssessmentDialog(
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text("Exam Name (e.g. Physiology Internal I)") },
+                    label = { Text("Assessment Name (e.g. Physiology Internal I)") },
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth().testTag("add_exam_title")
                 )
@@ -873,7 +891,7 @@ fun AddAssessmentDialog(
                         value = type,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Exam Format") },
+                        label = { Text("Assessment Type") },
                         trailingIcon = {
                             IconButton(onClick = { typeExpanded = true }) {
                                 Icon(Icons.Default.ArrowDropDown, contentDescription = null)

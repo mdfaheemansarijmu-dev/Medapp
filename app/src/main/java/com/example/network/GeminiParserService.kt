@@ -23,6 +23,9 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
+import com.google.firebase.Firebase
+import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.GenerativeBackend
 
 @JsonClass(generateAdapter = true)
 data class InlineData(
@@ -162,8 +165,15 @@ class GeminiParserService {
         }
 
         val prompt = """
-            You are an expert medical student AI assistant. Analyze the provided input (which can be a text notice, an image of a weekly/exam timetable, a WhatsApp message, or a document scan) and extract schedule information with high precision.
+            You are an expert medical student AI assistant. Analyze the provided input (which can be a text notice, an image of a weekly/exam timetable, a WhatsApp message, a document scan, or a conversational user question/message) and extract schedule information with high precision.
 
+            IMPORTANT RULES FOR CHAT & CONVERSATIONAL QUESTIONS:
+            If the user input is NOT an academic notice, schedule, or timetable to parse, but is instead a general greeting, question, or discussion (e.g. "hi", "how are you", "what is anatomy", "explain ECG", "give study tips"), you MUST:
+            1. Set document_type = "Chat Response"
+            2. Write a highly helpful, comprehensive, friendly, and professional medical academic answer in the "conversational_response" field (supporting rich Markdown formatting such as bullet points, bolding, etc.).
+            3. Keep "extracted_timetable" and "extracted_items" empty.
+
+            For schedule extraction (when input contains dates, times, or classes):
             You MUST recognize and classify the input into one of the following exact document types:
             - "Weekly Timetable" (A structured recurring weekly schedule with days, periods, times, subjects, rooms, etc.)
             - "Exam Timetable" (A schedule of specific exam dates)
@@ -194,7 +204,7 @@ class GeminiParserService {
 
             For other notices, or if is_temporary_override is true, extract individual tasks, exams, overrides, or events into the "extracted_items" array.
             Each item:
-            - category: One of exact values: "Assignment", "Assessment", "Exam", "Viva", "Seminar", "Holiday", "Class Cancellation", "Room Change", "Teacher Change", "General Notice"
+            - category: One of exact values: "Assignment", "Assessment", "Seminar", "Holiday", "Class Cancellation", "Room Change", "Teacher Change", "General Notice". IMPORTANT: You MUST map any Exams, Vivas, Class Tests, Quizzes, or Midterm tests to the 'Assessment' category. (Do not output 'Exam' or 'Viva' as category, map them strictly to 'Assessment').
             - subject: The subject name (e.g., "Anatomy", "Physiology", or "General" if not subject-specific)
             - title: Action-oriented title (e.g., "Submit Pathology Record", "Physiology Internal Assessment")
             - due_date_description: Due date description as found in text (e.g., "Tomorrow", "Next Monday", "2026-07-02")
@@ -211,6 +221,7 @@ class GeminiParserService {
               "document_type": "Weekly Timetable",
               "is_temporary_override": false,
               "override_date": null,
+              "conversational_response": null,
               "extracted_timetable": [
                 {
                   "day_of_week": 1,
@@ -260,19 +271,21 @@ class GeminiParserService {
             )
         )
 
+        var jsonText: String? = null
         try {
+            Log.d("GeminiParser", "Calling Gemini directly via fast production network pathway...")
             val response = RetrofitClient.service.generateContent(apiKey, request)
-            val jsonText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
-            if (jsonText != null) {
-                Log.d("GeminiParser", "Raw response: $jsonText")
-                val adapter = RetrofitClient.moshiParser.adapter(UnifiedParserResponse::class.java)
-                adapter.fromJson(jsonText) ?: getLocalFallbackResponse(inputPrompt, hasImage, mimeType)
-            } else {
-                Log.e("GeminiParser", "Empty content parts in Gemini response")
-                getLocalFallbackResponse(inputPrompt, hasImage, mimeType)
-            }
+            jsonText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
         } catch (e: Exception) {
-            Log.e("GeminiParser", "Error calling Gemini API: ${e.message}", e)
+            Log.e("GeminiParser", "Direct Gemini API pathway failed: ${e.message}", e)
+        }
+
+        if (jsonText != null) {
+            Log.d("GeminiParser", "Raw response: $jsonText")
+            val adapter = RetrofitClient.moshiParser.adapter(UnifiedParserResponse::class.java)
+            adapter.fromJson(jsonText) ?: getLocalFallbackResponse(inputPrompt, hasImage, mimeType)
+        } else {
+            Log.e("GeminiParser", "Direct API pathway failed or returned empty content")
             getLocalFallbackResponse(inputPrompt, hasImage, mimeType)
         }
     }
@@ -291,17 +304,17 @@ class GeminiParserService {
             if (lowercaseInput.contains("exam") || lowercaseInput.contains("test") || lowercaseInput.contains("assessment")) {
                 val items = listOf(
                     ParsedItem(
-                        category = "Exam",
+                        category = "Assessment",
                         subject = "Anatomy",
-                        title = "Anatomy Theory Paper I",
+                        title = "Anatomy Theory Paper I (Exam)",
                         due_date_description = "Next Monday",
                         priority = "High",
                         details = "09:30 AM in Examination Hall"
                     ),
                     ParsedItem(
-                        category = "Exam",
+                        category = "Assessment",
                         subject = "Physiology",
-                        title = "Physiology Theory Paper II",
+                        title = "Physiology Theory Paper II (Exam)",
                         due_date_description = "Next Wednesday",
                         priority = "High",
                         details = "09:30 AM in Examination Hall"
@@ -502,5 +515,90 @@ class GeminiParserService {
     suspend fun parseWhatsAppNotice(message: String): List<ParsedItem> {
         val response = parseDocument(message, null, null)
         return response.extracted_items
+    }
+
+    suspend fun generateDailyClassRevision(subject: String, explanation: String): DailySubjectRevision = withContext(Dispatchers.IO) {
+        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
+            // Local fallback
+            return@withContext DailySubjectRevision(
+                dateString = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date()),
+                subject = subject,
+                studentExplanation = explanation,
+                aiSummary = "Here is an AI-generated study summary for $subject based on your notes about: \"$explanation\".",
+                keyPoints = "• Important medical mechanism\n• High-yield exam criteria\n• Clinical significance of the pathology",
+                revisionQuestions = "1. What is the primary diagnosis based on the symptoms discussed?\n2. Which anatomical structures are affected?\n3. What is the first-line treatment?"
+            )
+        }
+
+        val prompt = """
+            You are an expert medical student tutor and professor.
+            The student attended their class on "$subject" today and explained what they learned:
+            "$explanation"
+
+            Generate a professionally structured medical study note. It must include:
+            1. A highly readable, clear, clean academic summary.
+            2. A list of 3-5 high-yield key clinical points.
+            3. A list of 3 key revision questions for exam practice.
+
+            You MUST respond ONLY with a valid JSON object matching the exact structure below, with no markdown formatting tags and no preamble:
+            {
+              "summary": "AI generated clear academic summary here...",
+              "keyPoints": [
+                "Key high-yield point 1",
+                "Key high-yield point 2",
+                "Key high-yield point 3"
+              ],
+              "questions": [
+                "Revision question 1",
+                "Revision question 2",
+                "Revision question 3"
+              ]
+            }
+        """.trimIndent()
+
+        val request = GeminiRequest(
+            contents = listOf(GeminiContent(parts = listOf(GeminiPart(text = prompt)))),
+            generationConfig = GenerationConfig(
+                responseMimeType = "application/json",
+                temperature = 0.3f
+            ),
+            systemInstruction = GeminiContent(parts = listOf(GeminiPart(text = "You are an expert medical tutor. Summarize classes and create high-yield questions in structured JSON.")))
+        )
+
+        try {
+            val response = RetrofitClient.service.generateContent(apiKey, request)
+            val jsonText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
+            if (jsonText != null) {
+                val moshi = RetrofitClient.moshiParser
+                val type = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
+                val adapter = moshi.adapter<Map<String, Any>>(type)
+                val map = adapter.fromJson(jsonText)
+                if (map != null) {
+                    val summary = map["summary"] as? String ?: "No summary"
+                    val keyPointsList = map["keyPoints"] as? List<*> ?: emptyList<Any>()
+                    val questionsList = map["questions"] as? List<*> ?: emptyList<Any>()
+                    return@withContext DailySubjectRevision(
+                        dateString = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date()),
+                        subject = subject,
+                        studentExplanation = explanation,
+                        aiSummary = summary,
+                        keyPoints = keyPointsList.joinToString("\n") { it.toString() },
+                        revisionQuestions = questionsList.joinToString("\n") { it.toString() }
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("GeminiParser", "Failed to generate class revision: ${e.message}", e)
+        }
+
+        // Fallback
+        DailySubjectRevision(
+            dateString = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date()),
+            subject = subject,
+            studentExplanation = explanation,
+            aiSummary = "Here is an AI-generated study summary for $subject based on your notes about: \"$explanation\".",
+            keyPoints = "• Important medical mechanism\n• High-yield exam criteria\n• Clinical significance of the pathology",
+            revisionQuestions = "1. What is the primary diagnosis based on the symptoms discussed?\n2. Which anatomical structures are affected?\n3. What is the first-line treatment?"
+        )
     }
 }

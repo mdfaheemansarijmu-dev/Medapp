@@ -179,7 +179,8 @@ data class UnifiedParserResponse(
     val is_temporary_override: Boolean = false,
     val override_date: String? = null, // "YYYY-MM-DD"
     val extracted_timetable: List<ParsedTimetableClass> = emptyList(),
-    val extracted_items: List<ParsedItem> = emptyList()
+    val extracted_items: List<ParsedItem> = emptyList(),
+    val conversational_response: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -192,6 +193,40 @@ data class ScheduledNotification(
     val triggerTime: Long,
     val subject: String,
     val targetTime: Long
+)
+
+@Entity(tableName = "user_profiles")
+@JsonClass(generateAdapter = true)
+data class UserProfile(
+    @PrimaryKey val uid: String,
+    val fullName: String,
+    val college: String,
+    val course: String,
+    val year: String,
+    val semester: String = "",
+    val batch: String = ""
+)
+
+@Entity(tableName = "attendance_records")
+@JsonClass(generateAdapter = true)
+data class AttendanceRecord(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val dateString: String, // "YYYY-MM-DD"
+    val subject: String,
+    val isPresent: Boolean,
+    val classTime: String? = null
+)
+
+@Entity(tableName = "daily_subject_revisions")
+@JsonClass(generateAdapter = true)
+data class DailySubjectRevision(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val dateString: String, // "YYYY-MM-DD"
+    val subject: String,
+    val studentExplanation: String,
+    val aiSummary: String,
+    val keyPoints: String, // delimiter separated
+    val revisionQuestions: String // delimiter separated
 )
 
 
