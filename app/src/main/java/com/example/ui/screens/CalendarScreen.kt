@@ -320,11 +320,16 @@ fun CalendarScreen(
                     if (dayAttendance.isNotEmpty()) {
                         item { Text("Daily Attendance", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = Color(0xFF2E7D32)) }
                         items(dayAttendance, key = { "calendar_att_${it.id}" }) { att ->
+                            val (statusText, statusIcon, statusColor) = when {
+                                att.status == "NO_CLASS" -> Triple("NO CLASS", Icons.Default.Block, Color(0xFFE65100))
+                                att.isPresent || att.status == "PRESENT" -> Triple("PRESENT", Icons.Default.CheckCircle, Color(0xFF2E7D32))
+                                else -> Triple("ABSENT", Icons.Default.Cancel, Color(0xFFC62828))
+                            }
                             AgendaRow(
                                 title = att.subject,
-                                subtitle = "Marked ${if (att.isPresent) "PRESENT" else "ABSENT"} • Time: ${att.classTime ?: "Scheduled Time"}",
-                                icon = if (att.isPresent) Icons.Default.CheckCircle else Icons.Default.Cancel,
-                                color = if (att.isPresent) Color(0xFF2E7D32) else Color(0xFFC62828)
+                                subtitle = "Marked $statusText • Time: ${att.classTime ?: "Scheduled Time"}",
+                                icon = statusIcon,
+                                color = statusColor
                             )
                         }
                     }

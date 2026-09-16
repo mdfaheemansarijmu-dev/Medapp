@@ -52,18 +52,30 @@ class UpdateServiceImpl : UpdateService {
         sharedPrefs.edit().putLong(KEY_LAST_CHECKED, now).apply()
 
         try {
+            val apps = com.google.firebase.FirebaseApp.getApps(context)
+            if (apps.isEmpty()) {
+                Log.w("UpdateService", "FirebaseApp not initialized; skipping remote update check.")
+                return@withContext getCachedUpdateInfo(context)?.let { cachedConfig ->
+                    val installedVersion = BuildConfig.VERSION_NAME
+                    if (isVersionNewer(installedVersion, cachedConfig.latestVersion)) {
+                        val isForce = cachedConfig.forceUpdate || isVersionNewer(installedVersion, cachedConfig.minimumVersion)
+                        AppUpdateResult.UpdateAvailable(cachedConfig, isForce)
+                    } else AppUpdateResult.UpToDate
+                } ?: AppUpdateResult.UpToDate
+            }
+
             val db = FirebaseFirestore.getInstance()
             val docRef = db.collection("app_config").document("update")
             
             var documentSnapshot = try {
-                Tasks.await(docRef.get(), 8, TimeUnit.SECONDS)
+                Tasks.await(docRef.get(), 6, TimeUnit.SECONDS)
             } catch (e: Exception) {
-                Log.e("UpdateService", "Error waiting for Firestore document: ${e.message}")
+                Log.w("UpdateService", "Firestore document fetch notice (using offline cache): ${e.message}")
                 null
             }
 
             // Automatically seed config in Firestore if it doesn't exist
-            if (documentSnapshot == null || !documentSnapshot.exists()) {
+            if (documentSnapshot != null && !documentSnapshot.exists()) {
                 val seedConfig = hashMapOf(
                     "latestVersion" to "1.0",
                     "minimumVersion" to "1.0",
@@ -81,21 +93,8 @@ class UpdateServiceImpl : UpdateService {
 
             val config = if (documentSnapshot != null && documentSnapshot.exists()) {
                 val latest = documentSnapshot.getString("latestVersion") ?: "1.0"
-                val cleanedLatest = if (latest == "1.1.0" || latest == "1.2.0" || latest == "1.1") {
-                    // Update/Fix the Firestore document to "1.0" so it is corrected in the cloud as well
-                    val updatedFields = mapOf("latestVersion" to "1.0", "minimumVersion" to "1.0")
-                    try {
-                        db.collection("app_config").document("update").update(updatedFields)
-                    } catch (e: Exception) {
-                        Log.e("UpdateService", "Error updating Firestore doc to 1.0", e)
-                    }
-                    "1.0"
-                } else {
-                    latest
-                }
-
                 AppUpdateConfig(
-                    latestVersion = cleanedLatest,
+                    latestVersion = latest,
                     minimumVersion = documentSnapshot.getString("minimumVersion") ?: "1.0",
                     forceUpdate = documentSnapshot.getBoolean("forceUpdate") ?: false,
                     apkUrl = documentSnapshot.getString("apkUrl") ?: "https://raw.githubusercontent.com/faheem-ansari/student-planner-app/main/app-release.apk",
@@ -147,8 +146,7 @@ class UpdateServiceImpl : UpdateService {
 
     override fun getCachedUpdateInfo(context: Context): AppUpdateConfig? {
         val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val rawLatestVersion = sharedPrefs.getString(KEY_CACHED_VERSION, null) ?: return null
-        val latestVersion = if (rawLatestVersion == "1.1.0" || rawLatestVersion == "1.2.0" || rawLatestVersion == "1.1") "1.0" else rawLatestVersion
+        val latestVersion = sharedPrefs.getString(KEY_CACHED_VERSION, null) ?: return null
         val minVersion = sharedPrefs.getString(KEY_CACHED_MIN_VERSION, "1.0") ?: "1.0"
         val force = sharedPrefs.getBoolean(KEY_CACHED_FORCE, false)
         val apkUrl = sharedPrefs.getString(KEY_CACHED_APK_URL, "") ?: ""

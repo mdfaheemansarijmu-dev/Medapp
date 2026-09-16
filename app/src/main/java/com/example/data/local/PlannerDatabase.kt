@@ -169,6 +169,9 @@ interface PlannerDao {
     @Query("DELETE FROM attendance_records WHERE dateString = :dateString")
     suspend fun deleteAttendanceForDate(dateString: String)
 
+    @Query("DELETE FROM attendance_records WHERE id = :id")
+    suspend fun deleteAttendanceRecordById(id: Int)
+
     // Daily Subject Revisions
     @Query("SELECT * FROM daily_subject_revisions WHERE dateString = :dateString")
     fun getRevisionsForDate(dateString: String): Flow<List<DailySubjectRevision>>
@@ -181,6 +184,79 @@ interface PlannerDao {
 
     @Query("DELETE FROM daily_subject_revisions WHERE id = :id")
     suspend fun deleteRevisionById(id: Int)
+
+    // Sync Helper Queries
+    @Query("SELECT * FROM timetable_classes WHERE firestoreId = :firestoreId LIMIT 1")
+    suspend fun getTimetableClassByFirestoreId(firestoreId: String): TimetableClass?
+
+    @Query("SELECT * FROM assignments WHERE firestoreId = :firestoreId LIMIT 1")
+    suspend fun getAssignmentByFirestoreId(firestoreId: String): Assignment?
+
+    @Query("SELECT * FROM assessments WHERE firestoreId = :firestoreId LIMIT 1")
+    suspend fun getAssessmentByFirestoreId(firestoreId: String): Assessment?
+
+    @Query("SELECT * FROM study_tasks WHERE firestoreId = :firestoreId LIMIT 1")
+    suspend fun getStudyTaskByFirestoreId(firestoreId: String): StudyTask?
+
+    @Query("SELECT * FROM exams WHERE firestoreId = :firestoreId LIMIT 1")
+    suspend fun getExamByFirestoreId(firestoreId: String): Exam?
+
+    @Query("SELECT * FROM planner_tasks WHERE firestoreId = :firestoreId LIMIT 1")
+    suspend fun getPlannerTaskByFirestoreId(firestoreId: String): PlannerTask?
+
+    @Query("SELECT * FROM schedule_overrides WHERE firestoreId = :firestoreId LIMIT 1")
+    suspend fun getScheduleOverrideByFirestoreId(firestoreId: String): ScheduleOverride?
+
+    @Query("SELECT * FROM attendance_records WHERE firestoreId = :firestoreId LIMIT 1")
+    suspend fun getAttendanceRecordByFirestoreId(firestoreId: String): AttendanceRecord?
+
+    @Query("SELECT * FROM timetable_classes")
+    suspend fun getAllTimetableClassesOnce(): List<TimetableClass>
+
+    @Query("SELECT * FROM assignments")
+    suspend fun getAllAssignmentsOnce(): List<Assignment>
+
+    @Query("SELECT * FROM assessments")
+    suspend fun getAllAssessmentsOnce(): List<Assessment>
+
+    @Query("SELECT * FROM study_tasks")
+    suspend fun getAllStudyTasksOnce(): List<StudyTask>
+
+    @Query("SELECT * FROM exams")
+    suspend fun getAllExamsOnce(): List<Exam>
+
+    @Query("SELECT * FROM planner_tasks")
+    suspend fun getAllPlannerTasksOnce(): List<PlannerTask>
+
+    @Query("SELECT * FROM schedule_overrides")
+    suspend fun getAllScheduleOverridesOnce(): List<ScheduleOverride>
+
+    @Query("SELECT * FROM attendance_records")
+    suspend fun getAllAttendanceRecordsOnce(): List<AttendanceRecord>
+
+    @Query("SELECT * FROM timetable_classes WHERE id = :id LIMIT 1")
+    suspend fun getTimetableClassById(id: Int): TimetableClass?
+
+    @Query("SELECT * FROM assignments WHERE id = :id LIMIT 1")
+    suspend fun getAssignmentById(id: Int): Assignment?
+
+    @Query("SELECT * FROM assessments WHERE id = :id LIMIT 1")
+    suspend fun getAssessmentById(id: Int): Assessment?
+
+    @Query("SELECT * FROM study_tasks WHERE id = :id LIMIT 1")
+    suspend fun getStudyTaskById(id: Int): StudyTask?
+
+    @Query("SELECT * FROM exams WHERE id = :id LIMIT 1")
+    suspend fun getExamById(id: Int): Exam?
+
+    @Query("SELECT * FROM planner_tasks WHERE id = :id LIMIT 1")
+    suspend fun getPlannerTaskById(id: Int): PlannerTask?
+
+    @Query("SELECT * FROM schedule_overrides WHERE id = :id LIMIT 1")
+    suspend fun getScheduleOverrideById(id: Int): ScheduleOverride?
+
+    @Query("SELECT * FROM attendance_records WHERE id = :id LIMIT 1")
+    suspend fun getAttendanceRecordById(id: Int): AttendanceRecord?
 }
 
 @Database(
@@ -200,7 +276,7 @@ interface PlannerDao {
         AttendanceRecord::class,
         DailySubjectRevision::class
     ],
-    version = 3,
+    version = 6,
     exportSchema = false
 )
 abstract class PlannerDatabase : RoomDatabase() {

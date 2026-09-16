@@ -3,6 +3,7 @@ package com.example.ui.screens
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,7 +38,9 @@ import com.example.data.model.Assignment
 import com.example.data.model.Assessment
 import com.example.data.model.StudyTask
 import com.example.data.model.TimetableClass
+import com.example.util.OverallAttendanceSummary
 import com.example.ui.viewmodel.PlannerViewModel
+import com.example.ui.viewmodel.Screen
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -232,54 +236,54 @@ fun DashboardScreen(
                         modifier = Modifier.padding(end = 12.dp),
                         onClick = { showPhotoSourceChooser = true }
                     )
-                    Column {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.Center
+                    ) {
                         Text(
                             text = todayDateStr,
-                            style = MaterialTheme.typography.labelLarge,
+                            style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
                             text = if (studentName.isNotBlank()) "Hello, $studentName! 👋" else "Hello! 👋",
-                            style = MaterialTheme.typography.headlineMedium.copy(
-                                fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = (-0.5).sp,
-                                fontSize = 22.sp
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = (-0.3).sp,
+                                fontSize = 18.sp,
+                                lineHeight = 22.sp
                             ),
-                            color = MaterialTheme.colorScheme.onBackground
+                            color = MaterialTheme.colorScheme.onBackground,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = course?.displayName ?: "No Course Selected",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Live Local Clock Widget
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.padding(end = 12.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    // Settings icon button
+                    IconButton(
+                        onClick = { viewModel.navigateTo(Screen.Settings) },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .testTag("header_settings_button")
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Schedule,
-                                contentDescription = "Clock",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = liveClock.ifEmpty { "00:00" },
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Outlined.Settings,
+                            contentDescription = "Settings",
+                            tint = MaterialTheme.colorScheme.onBackground
+                        )
                     }
 
                     // Bell icon
@@ -314,6 +318,7 @@ fun DashboardScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 // Class Schedule Panel (Interactive Widget)
@@ -323,15 +328,15 @@ fun DashboardScreen(
 
                 // Stats Dashboard summary cards
                 item {
-                    val overallAttendance = viewModel.getOverallAttendancePercentage()
+                    val overallAttendanceSummary by viewModel.overallAttendanceSummary.collectAsStateWithLifecycle()
                     StatsMetricsGrid(
                         assignments = assignments,
                         assessments = assessments,
                         remainingClassesCount = liveSchedule.remainingClasses.size,
-                        overallAttendance = overallAttendance,
+                        overallAttendanceSummary = overallAttendanceSummary,
                         onPendingClick = { showPendingDialog = true },
                         onUpcomingClick = { showUpcomingDialog = true },
-                        onRemainingClick = { showRemainingDialog = true }
+                        onAttendanceClick = { viewModel.navigateTo(Screen.Attendance) }
                     )
                 }
 
@@ -705,27 +710,16 @@ fun LiveTimetableWidget(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = Icons.Default.PlayCircle,
-                        contentDescription = "Running Class",
+                        imageVector = Icons.Default.EventNote,
+                        contentDescription = "Today's Schedule",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Today's Live Classes",
+                        text = "Today's Schedule",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-                Surface(
-                    color = MaterialTheme.colorScheme.primary,
-                    shape = RoundedCornerShape(100.dp)
-                ) {
-                    Text(
-                        text = viewModel.getDayName(viewModel.getCurrentDayOfWeek()),
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
             }
@@ -791,13 +785,43 @@ fun LiveTimetableWidget(
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
+                                        
+                                        // Badge for Clinical, Non-Lecture, Practical, Yoga
+                                        val lowerSubject = cls.subject.lowercase()
+                                        if (lowerSubject.contains("non-lecture") || lowerSubject.contains("posting") || lowerSubject.contains("clinical") || lowerSubject.contains("practical") || lowerSubject.contains("yoga")) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Surface(
+                                                color = if (lowerSubject.contains("clinical") || lowerSubject.contains("posting")) 
+                                                    MaterialTheme.colorScheme.tertiaryContainer 
+                                                else 
+                                                    MaterialTheme.colorScheme.secondaryContainer,
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = if (lowerSubject.contains("clinical") || lowerSubject.contains("posting")) 
+                                                        "🏥 CLINICAL" 
+                                                    else if (lowerSubject.contains("yoga"))
+                                                        "🧘 YOGA"
+                                                    else 
+                                                        "🔬 PRACTICAL",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = MaterialTheme.typography.labelSmall.fontSize * 0.85f),
+                                                    color = if (lowerSubject.contains("clinical") || lowerSubject.contains("posting")) 
+                                                        MaterialTheme.colorScheme.onTertiaryContainer 
+                                                    else 
+                                                        MaterialTheme.colorScheme.onSecondaryContainer,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
                                     }
 
                                     // Attendance State Indicator
                                     if (attendance != null && !isLunch) {
-                                        val badgeColor = if (attendance.isPresent) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
-                                        val badgeTextColor = if (attendance.isPresent) Color(0xFF2E7D32) else Color(0xFFC62828)
-                                        val label = if (attendance.isPresent) "Present" else "Absent"
+                                        val (badgeColor, badgeTextColor, label) = when {
+                                            attendance.status == "NO_CLASS" -> Triple(Color(0xFFFFF3E0), Color(0xFFE65100), "No Class")
+                                            attendance.isPresent || attendance.status == "PRESENT" -> Triple(Color(0xFFE8F5E9), Color(0xFF2E7D32), "Present")
+                                            else -> Triple(Color(0xFFFFEBEE), Color(0xFFC62828), "Absent")
+                                        }
 
                                         Surface(
                                             color = badgeColor,
@@ -832,41 +856,109 @@ fun LiveTimetableWidget(
                                         horizontalArrangement = Arrangement.End,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        TextButton(
-                                            onClick = { viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}") },
-                                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                        OutlinedButton(
+                                            onClick = { viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}", status = "NO_CLASS") },
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                                         ) {
-                                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Default.Block, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("No Class", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        TextButton(
+                                            onClick = { viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}", status = "ABSENT") },
+                                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(14.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
                                             Text("Mark Absent", style = MaterialTheme.typography.labelMedium)
                                         }
-                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
                                         FilledTonalButton(
-                                            onClick = { viewModel.markAttendance(cls.subject, isPresent = true, classTime = "${cls.startTime}-${cls.endTime}") },
-                                            colors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                                            onClick = { viewModel.markAttendance(cls.subject, isPresent = true, classTime = "${cls.startTime}-${cls.endTime}", status = "PRESENT") },
+                                            colors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                                         ) {
-                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
                                             Text("Mark Present", style = MaterialTheme.typography.labelMedium)
                                         }
                                     }
-                                } else if (attendance.isPresent) {
-                                    // Present means can explain class and get AI summary
+                                } else {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.End
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Button(
-                                            onClick = {
-                                                selectedClassForRevision = cls
-                                                explanationText = ""
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                                            shape = RoundedCornerShape(10.dp)
-                                        ) {
-                                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text("AI Revision Notes ✨", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                                        var showStatusMenu by remember { mutableStateOf(false) }
+                                        Box {
+                                            OutlinedButton(
+                                                onClick = { showStatusMenu = true },
+                                                shape = RoundedCornerShape(10.dp),
+                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                                modifier = Modifier
+                                                    .height(34.dp)
+                                                    .testTag("btn_change_status_${cls.id}")
+                                            ) {
+                                                Icon(Icons.Default.Edit, contentDescription = "Change Status", modifier = Modifier.size(13.dp))
+                                                Spacer(modifier = Modifier.width(5.dp))
+                                                Text("Change Status", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium))
+                                            }
+                                            DropdownMenu(
+                                                expanded = showStatusMenu,
+                                                onDismissRequest = { showStatusMenu = false }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Mark Present ✓") },
+                                                    onClick = {
+                                                        showStatusMenu = false
+                                                        viewModel.markAttendance(cls.subject, isPresent = true, classTime = "${cls.startTime}-${cls.endTime}", status = "PRESENT")
+                                                    },
+                                                    leadingIcon = { Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF2E7D32)) }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Mark Absent ✗") },
+                                                    onClick = {
+                                                        showStatusMenu = false
+                                                        viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}", status = "ABSENT")
+                                                    },
+                                                    leadingIcon = { Icon(Icons.Default.Close, contentDescription = null, tint = Color(0xFFC62828)) }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("No Class 🚫") },
+                                                    onClick = {
+                                                        showStatusMenu = false
+                                                        viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}", status = "NO_CLASS")
+                                                    },
+                                                    leadingIcon = { Icon(Icons.Default.Block, contentDescription = null, tint = Color(0xFFE65100)) }
+                                                )
+                                            }
+                                        }
+
+                                        if (attendance.isPresent || attendance.status == "PRESENT") {
+                                            FilledTonalButton(
+                                                onClick = {
+                                                    selectedClassForRevision = cls
+                                                    explanationText = ""
+                                                },
+                                                colors = ButtonDefaults.filledTonalButtonColors(
+                                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                                ),
+                                                shape = RoundedCornerShape(10.dp),
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                                modifier = Modifier
+                                                    .height(34.dp)
+                                                    .testTag("btn_ai_revision_${cls.id}")
+                                            ) {
+                                                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(13.dp))
+                                                Spacer(modifier = Modifier.width(5.dp))
+                                                Text("AI Revision Notes", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
+                                            }
                                         }
                                     }
                                 }
@@ -884,10 +976,10 @@ fun StatsMetricsGrid(
     assignments: List<Assignment>,
     assessments: List<Assessment>,
     remainingClassesCount: Int,
-    overallAttendance: Float,
+    overallAttendanceSummary: OverallAttendanceSummary,
     onPendingClick: () -> Unit,
     onUpcomingClick: () -> Unit,
-    onRemainingClick: () -> Unit
+    onAttendanceClick: () -> Unit
 ) {
     val pendingAsg = assignments.count { it.status == "Pending" }
     val upcomingExm = assessments.count { it.status == "Upcoming" }
@@ -920,14 +1012,14 @@ fun StatsMetricsGrid(
         )
         StatCard(
             title = "Attendance",
-            value = String.format("%.0f%%", overallAttendance),
-            subtitle = "Overall Rate",
+            value = if (overallAttendanceSummary.hasData) String.format(java.util.Locale.getDefault(), "%.0f%%", overallAttendanceSummary.percentage) else "—",
+            subtitle = if (overallAttendanceSummary.hasData) overallAttendanceSummary.statusLabel else "No records",
             color = MaterialTheme.colorScheme.secondaryContainer,
             textColor = MaterialTheme.colorScheme.onSecondaryContainer,
             icon = Icons.Default.CheckCircle,
             modifier = Modifier
                 .weight(1f)
-                .clickable { onRemainingClick() }
+                .clickable { onAttendanceClick() }
         )
     }
 }

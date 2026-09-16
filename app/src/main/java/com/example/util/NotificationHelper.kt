@@ -65,12 +65,15 @@ object NotificationHelper {
                 enableLights(true)
                 lightColor = Color.BLUE
                 enableVibration(true)
+                vibrationPattern = longArrayOf(0, 500, 250, 500)
                 setShowBadge(true)
-                // Set default sound for critical alarms
-                val alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                
+                val alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
                 val audioAttributes = AudioAttributes.Builder()
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                    .setUsage(AudioAttributes.USAGE_ALARM)
                     .build()
                 setSound(alarmSound, audioAttributes)
             }
@@ -79,7 +82,7 @@ object NotificationHelper {
 
         // 1. Content click intent (Opens MainActivity)
         val contentIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("navigate_to", "planner")
         }
         val contentPendingIntent = PendingIntent.getActivity(
@@ -89,19 +92,22 @@ object NotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
 
         // Builder setup
         val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(message)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // Make visible on lock screen
+            .setFullScreenIntent(contentPendingIntent, true) // Heads-up alert on locked screen
             .setAutoCancel(true)
             .setSound(soundUri)
-            .setVibrate(longArrayOf(0, 250, 250, 250))
+            .setVibrate(longArrayOf(0, 500, 250, 500))
             .setContentIntent(contentPendingIntent)
 
         // 2. Action: Snooze (Reschedule 15 minutes in the future)

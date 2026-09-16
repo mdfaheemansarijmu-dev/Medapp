@@ -24,7 +24,8 @@ data class TimetableClass(
     val endTime: String, // e.g., "10:00 AM"
     val room: String? = null,
     val teacherName: String? = null,
-    val colorHex: String = "#4F46E5" // Color representation
+    val colorHex: String = "#4F46E5", // Color representation
+    val firestoreId: String = java.util.UUID.randomUUID().toString()
 )
 
 @Entity(tableName = "assignments")
@@ -37,7 +38,8 @@ data class Assignment(
     val priority: String, // "High", "Medium", "Low"
     val status: String, // "Pending", "Completed"
     val type: String, // "Assignment", "Practical", "Seminar", "Viva", "Homework", "Case Record"
-    val notes: String? = null
+    val notes: String? = null,
+    val firestoreId: String = java.util.UUID.randomUUID().toString()
 )
 
 @Entity(tableName = "assessments")
@@ -49,7 +51,8 @@ data class Assessment(
     val date: Long, // timestamp
     val type: String, // "Class Test", "Internal", "Practical Exam", "Viva", "University Exam"
     val status: String = "Upcoming", // "Upcoming", "Completed"
-    val syllabus: String? = null
+    val syllabus: String? = null,
+    val firestoreId: String = java.util.UUID.randomUUID().toString()
 )
 
 @Entity(tableName = "study_tasks")
@@ -62,7 +65,8 @@ data class StudyTask(
     val priority: String, // "High", "Medium", "Low"
     val progress: Int = 0, // 0 to 100
     val targetMinutes: Int = 30, // daily study goal for this task
-    val notes: String? = null
+    val notes: String? = null,
+    val firestoreId: String = java.util.UUID.randomUUID().toString()
 )
 
 @Entity(tableName = "chat_messages")
@@ -111,7 +115,8 @@ data class Exam(
     val time: String? = null,
     val room: String? = null,
     val syllabus: String? = null,
-    val status: String = "Upcoming" // "Upcoming", "Completed"
+    val status: String = "Upcoming", // "Upcoming", "Completed"
+    val firestoreId: String = java.util.UUID.randomUUID().toString()
 )
 
 @Entity(tableName = "teachers")
@@ -137,7 +142,8 @@ data class PlannerTask(
     val title: String,
     val date: Long, // timestamp
     val isCompleted: Boolean = false,
-    val category: String = "General" // "General", "Clinical Posting", etc.
+    val category: String = "General", // "General", "Clinical Posting", etc.
+    val firestoreId: String = java.util.UUID.randomUUID().toString()
 )
 
 @Entity(tableName = "schedule_overrides")
@@ -154,7 +160,8 @@ data class ScheduleOverride(
     val room: String? = null,
     val teacherName: String? = null,
     val isCancelled: Boolean = false,
-    val colorHex: String = "#EF4444"
+    val colorHex: String = "#EF4444",
+    val firestoreId: String = java.util.UUID.randomUUID().toString()
 )
 
 @JsonClass(generateAdapter = true)
@@ -170,7 +177,9 @@ data class ParsedTimetableClass(
     val is_lunch_break: Boolean = false,
     val confidence: String? = "High", // "High", "Medium", "Low"
     val is_uncertain: Boolean? = false,
-    val notes: String? = null
+    val notes: String? = null,
+    val batch: String? = null,
+    val department: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -214,7 +223,14 @@ data class AttendanceRecord(
     val dateString: String, // "YYYY-MM-DD"
     val subject: String,
     val isPresent: Boolean,
-    val classTime: String? = null
+    val classTime: String? = null,
+    val firestoreId: String = java.util.UUID.randomUUID().toString(),
+    val status: String = if (isPresent) "PRESENT" else "ABSENT",
+    val startTime: String? = null,
+    val endTime: String? = null,
+    val note: String? = null,
+    val reason: String? = null,
+    val recordedTimestamp: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "daily_subject_revisions")

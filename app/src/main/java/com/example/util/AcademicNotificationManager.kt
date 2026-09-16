@@ -58,16 +58,22 @@ object AcademicNotificationManager {
         subject: String,
         minutesBefore: Int = 30
     ) {
-        val triggerTime = targetTime - (minutesBefore * 60 * 1000L)
-        if (triggerTime <= System.currentTimeMillis()) {
-            // Already in past, don't schedule
+        val now = System.currentTimeMillis()
+        if (targetTime <= now) {
+            // Event is already in the past, skip
             return
+        }
+
+        val calculatedTriggerTime = targetTime - (minutesBefore * 60 * 1000L)
+        val triggerTime = if (calculatedTriggerTime <= now) {
+            now + 2000L // If reminder time passed but event hasn't started, notify immediately in 2s
+        } else {
+            calculatedTriggerTime
         }
 
         val currentList = getScheduledNotifications(context).toMutableList()
 
-        // Requirement 3 & 9: Before scheduling a notification, check whether a notification for the same class, date, and time already exists.
-        // Check for duplicate: same type, subject/class, and triggerTime (date & time)
+        // Check for duplicate: same type, subject/class, and targetTime
         val alreadyExists = currentList.any {
             it.type == type &&
             it.subject.equals(subject, ignoreCase = true) &&
@@ -79,8 +85,6 @@ object AcademicNotificationManager {
             return
         }
 
-        // Requirement 5: Assign a unique ID to every notification.
-        // We can generate unique ID via hashCode of distinct properties
         val idString = "$type:$itemId:$targetTime"
         val uniqueId = idString.hashCode()
 
@@ -102,17 +106,16 @@ object AcademicNotificationManager {
         )
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (alarmManager.canScheduleExactAlarms()) {
-                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-                } else {
-                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-                }
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-            } else {
-                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-            }
+            val showIntent = PendingIntent.getActivity(
+                context,
+                uniqueId,
+                Intent(context, com.example.MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val clockInfo = AlarmManager.AlarmClockInfo(triggerTime, showIntent)
+            alarmManager.setAlarmClock(clockInfo, pendingIntent)
 
             // Save to persistent record
             val newNotification = ScheduledNotification(
@@ -127,9 +130,30 @@ object AcademicNotificationManager {
             )
             currentList.add(newNotification)
             saveScheduledNotifications(context, currentList)
-            Log.d(TAG, "Successfully scheduled notification ID: $uniqueId for $type: $subject")
-        } catch (e: SecurityException) {
-            Log.e(TAG, "Failed to schedule exact alarm", e)
+            Log.d(TAG, "Successfully scheduled alarm clock ID: $uniqueId for $type: $subject at trigger $triggerTime")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed setAlarmClock, trying setExactAndAllowWhileIdle fallback: ${e.message}")
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                } else {
+                    alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                }
+                val newNotification = ScheduledNotification(
+                    id = uniqueId,
+                    type = type,
+                    itemId = itemId,
+                    title = title,
+                    message = message,
+                    triggerTime = triggerTime,
+                    subject = subject,
+                    targetTime = targetTime
+                )
+                currentList.add(newNotification)
+                saveScheduledNotifications(context, currentList)
+            } catch (e2: Exception) {
+                Log.e(TAG, "Failed all alarm scheduling for ID: $uniqueId", e2)
+            }
         }
     }
 
@@ -212,15 +236,14 @@ object AcademicNotificationManager {
         }
     }
 
-    // Verify existing notifications (removes past entries)
+    // Verify existing notifications (removes past entries where event target time has passed)
     @Synchronized
     fun verifyExistingNotifications(context: Context) {
-        // Requirement 8: On app launch, only verify existing notifications instead of recreating them.
         val currentList = getScheduledNotifications(context)
         val now = System.currentTimeMillis()
         
-        // Remove past notifications from SharedPreferences record
-        val futureNotifications = currentList.filter { it.triggerTime > now }
+        // Remove notifications where target event time is in the past
+        val futureNotifications = currentList.filter { it.targetTime > now }
         if (futureNotifications.size != currentList.size) {
             saveScheduledNotifications(context, futureNotifications)
             Log.d(TAG, "Verified existing notifications. Cleared ${currentList.size - futureNotifications.size} expired items.")
@@ -234,7 +257,7 @@ object AcademicNotificationManager {
     fun rescheduleAllFutureNotifications(context: Context) {
         val currentList = getScheduledNotifications(context)
         val now = System.currentTimeMillis()
-        val futureNotifications = currentList.filter { it.triggerTime > now }
+        val futureNotifications = currentList.filter { it.targetTime > now }
         
         // Clear all from OS system alarm manager first to prevent duplication
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -254,6 +277,7 @@ object AcademicNotificationManager {
 
         // Re-schedule future ones
         for (item in futureNotifications) {
+            val triggerTime = if (item.triggerTime <= now) now + 2000L else item.triggerTime
             val intent = Intent(context, com.example.receivers.NotificationReceiver::class.java).apply {
                 putExtra("title", item.title)
                 putExtra("message", item.message)
@@ -270,20 +294,28 @@ object AcademicNotificationManager {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    if (alarmManager.canScheduleExactAlarms()) {
-                        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, item.triggerTime, pendingIntent)
+                val showIntent = PendingIntent.getActivity(
+                    context,
+                    item.id,
+                    Intent(context, com.example.MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    },
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val clockInfo = AlarmManager.AlarmClockInfo(triggerTime, showIntent)
+                alarmManager.setAlarmClock(clockInfo, pendingIntent)
+                Log.d(TAG, "Rescheduled alarm clock ID: ${item.id} at $triggerTime")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed setAlarmClock during reschedule, trying fallback for ID: ${item.id}", e)
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
                     } else {
-                        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, item.triggerTime, pendingIntent)
+                        alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
                     }
-                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, item.triggerTime, pendingIntent)
-                } else {
-                    alarmManager.setExact(AlarmManager.RTC_WAKEUP, item.triggerTime, pendingIntent)
+                } catch (e2: Exception) {
+                    Log.e(TAG, "Failed fallback reschedule for ID: ${item.id}", e2)
                 }
-                Log.d(TAG, "Rescheduled alarm with ID: ${item.id}")
-            } catch (e: SecurityException) {
-                Log.e(TAG, "Failed to reschedule alarm ID: ${item.id}", e)
             }
         }
     }

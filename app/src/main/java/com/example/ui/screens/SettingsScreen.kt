@@ -12,6 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import kotlinx.coroutines.launch
@@ -131,7 +132,6 @@ fun SettingsScreen(
     }
 
     val isAuthenticating by viewModel.isAuthenticating.collectAsStateWithLifecycle()
-    var showAccountChooserDialog by remember { mutableStateOf(false) }
 
     val gso = remember {
         GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
@@ -146,6 +146,7 @@ fun SettingsScreen(
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        viewModel.setAuthenticating(false)
         if (result.resultCode == Activity.RESULT_OK) {
             val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
             try {
@@ -154,21 +155,21 @@ fun SettingsScreen(
                 val email = account.email ?: ""
                 val photoUrl = account.photoUrl?.toString() ?: ""
                 val id = account.id ?: ""
+                val idToken = account.idToken
                 
-                viewModel.signInWithGoogle(name, email, photoUrl, id)
-                Toast.makeText(context, "Successfully linked Google account: $name", Toast.LENGTH_SHORT).show()
+                viewModel.signInWithGoogle(name, email, photoUrl, id, idToken)
+                Toast.makeText(context, "Successfully signed in with Google: $email", Toast.LENGTH_SHORT).show()
             } catch (e: ApiException) {
-                val errorMsg = "Link Google account failed: ${e.message ?: "Unknown error"}"
+                val errorMsg = "Google sign-in failed: ${e.message ?: "Code ${e.statusCode}"}"
                 viewModel.setAuthError(errorMsg)
-                Toast.makeText(context, "$errorMsg. Opening simulated account chooser.", Toast.LENGTH_LONG).show()
-                showAccountChooserDialog = true
+                Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
             }
         } else if (result.resultCode == Activity.RESULT_CANCELED) {
-            Toast.makeText(context, "Sign-in cancelled. Opening simulated account chooser.", Toast.LENGTH_SHORT).show()
-            showAccountChooserDialog = true
+            Toast.makeText(context, "Google sign-in cancelled", Toast.LENGTH_SHORT).show()
         } else {
-            Toast.makeText(context, "Sign-in failed. Opening simulated account chooser.", Toast.LENGTH_SHORT).show()
-            showAccountChooserDialog = true
+            val errorMsg = "Google sign-in failed (code: ${result.resultCode})"
+            viewModel.setAuthError(errorMsg)
+            Toast.makeText(context, errorMsg, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -176,20 +177,6 @@ fun SettingsScreen(
         val googleApiAvailability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
         val resultCode = googleApiAvailability.isGooglePlayServicesAvailable(context)
         return resultCode == com.google.android.gms.common.ConnectionResult.SUCCESS
-    }
-
-    if (showAccountChooserDialog) {
-        GoogleAccountChooserDialog(
-            onAccountSelected = { name, email, dpUrl ->
-                showAccountChooserDialog = false
-                viewModel.signInWithGoogle(name, email, dpUrl, "simulated_google_id_12345")
-                Toast.makeText(context, "Successfully linked Google account: $name", Toast.LENGTH_SHORT).show()
-            },
-            onDismiss = {
-                showAccountChooserDialog = false
-                viewModel.setAuthenticating(false)
-            }
-        )
     }
 
     if (showDpDialog) {
@@ -358,19 +345,37 @@ fun SettingsScreen(
         ) {
             // Header
             Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "System Settings",
-                style = MaterialTheme.typography.headlineMedium.copy(
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = (-0.5).sp
-                ),
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Text(
-                text = "Configure specialization profiles, sync services and alerts",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                IconButton(
+                    onClick = { viewModel.navigateTo(com.example.ui.viewmodel.Screen.Dashboard) },
+                    modifier = Modifier.testTag("settings_back_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back to Home",
+                        tint = MaterialTheme.colorScheme.onBackground
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                Column {
+                    Text(
+                        text = "System Settings",
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = (-0.5).sp
+                        ),
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = "Configure specialization profiles, sync services and alerts",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -505,8 +510,7 @@ fun SettingsScreen(
                             Button(
                                 onClick = {
                                     if (!isPlayServicesAvailable(context)) {
-                                        Toast.makeText(context, "Google Play Services are unavailable. Opening simulated account chooser.", Toast.LENGTH_LONG).show()
-                                        showAccountChooserDialog = true
+                                        Toast.makeText(context, "Google Play Services are unavailable on this device.", Toast.LENGTH_LONG).show()
                                     } else if (!isAuthenticating) {
                                         viewModel.setAuthenticating(true)
                                         googleSignInClient.signOut().addOnCompleteListener {
@@ -1025,6 +1029,83 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
+            // Attendance & Academics Group
+            SettingsSectionHeader(title = "Attendance & Academics")
+
+            val attendanceTarget by viewModel.attendanceTarget.collectAsStateWithLifecycle()
+            var showTargetDialogInSettings by remember { mutableStateOf(false) }
+
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showTargetDialogInSettings = true }
+                    .testTag("settings_attendance_target_card")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(14.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Attendance Target",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Configured requirement: $attendanceTarget%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            text = "$attendanceTarget%",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            if (showTargetDialogInSettings) {
+                AttendanceTargetDialog(
+                    currentTarget = attendanceTarget,
+                    onDismiss = { showTargetDialogInSettings = false },
+                    onSave = { newTarget ->
+                        viewModel.setAttendanceTarget(newTarget)
+                        showTargetDialogInSettings = false
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
             // Display Appearance Group
             SettingsSectionHeader(title = "Display Appearance")
 
@@ -1242,19 +1323,19 @@ fun SettingsScreen(
 
                     HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-                    // Diagnostic row 3: Battery optimizer settings
+                    // Diagnostic row 3: Reliable Background Reminders
                     DiagnosticItem(
-                        title = "Battery Saver Exclusion",
-                        description = "Exclude MedPulse from Android battery restrictions to guarantee 100% notification reliability.",
+                        title = "Reliable Background Reminders",
+                        description = "Want reliable reminders even when MedPulse hasn't been opened recently? Allow reminders to arrive right on time.",
                         icon = Icons.Default.BatteryChargingFull,
-                        actionLabel = "Exclude",
+                        actionLabel = "Adjust",
                         onClick = {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                                 val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                                 context.startActivity(intent)
-                                Toast.makeText(context, "Scroll to MedPulse and set to 'Unrestricted' or 'Don't Optimize'.", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, "Set MedPulse to 'Unrestricted' so class alarms arrive right on time.", Toast.LENGTH_LONG).show()
                             } else {
-                                Toast.makeText(context, "Battery saver whitelisting not required on this Android version.", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Background restrictions are not required on this Android version.", Toast.LENGTH_SHORT).show()
                             }
                         },
                         tag = "diagnostic_battery_exclusion"

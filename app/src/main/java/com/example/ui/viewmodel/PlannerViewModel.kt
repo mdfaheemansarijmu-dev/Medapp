@@ -19,6 +19,7 @@ import com.example.data.local.PlannerDatabase
 import com.example.data.model.*
 import com.example.data.repository.PlannerRepository
 import com.example.util.AcademicNotificationManager
+import com.example.util.*
 import com.example.network.GeminiParserService
 import com.example.network.RetrofitClient
 import com.example.network.UpdateService
@@ -30,6 +31,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 import android.app.Activity
@@ -65,8 +67,13 @@ class PlannerViewModel(
     // Active Database Flows
     val timetable: StateFlow<List<TimetableClass>> = selectedCourse
         .flatMapLatest { course ->
-            if (course != null) repository.getTimetable(course.code)
-            else flowOf(emptyList())
+            if (course != null) {
+                repository.getTimetable(course.code).map { list ->
+                    list.distinctBy { "${it.dayOfWeek}_${it.periodNumber}_${it.subject}_${it.startTime}_${it.endTime}" }
+                }
+            } else {
+                flowOf(emptyList())
+            }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -120,6 +127,53 @@ class PlannerViewModel(
 
     val allAttendanceRecords: StateFlow<List<AttendanceRecord>> = repository.getAllAttendance()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Attendance Target configuration (defaults to 75%)
+    private val _attendanceTarget = MutableStateFlow(75)
+    val attendanceTarget: StateFlow<Int> = _attendanceTarget.asStateFlow()
+
+    val overallAttendanceSummary: StateFlow<OverallAttendanceSummary> = combine(
+        allAttendanceRecords,
+        _attendanceTarget
+    ) { records, target ->
+        AttendanceCalculator.calculateOverallSummary(records, target)
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        AttendanceCalculator.calculateOverallSummary(emptyList(), 75)
+    )
+
+    val subjectAttendanceSummaries: StateFlow<List<SubjectAttendanceSummary>> = combine(
+        allAttendanceRecords,
+        timetable,
+        _attendanceTarget
+    ) { records, timetableClasses, target ->
+        val subjectSet = linkedSetOf<String>()
+        timetableClasses.forEach { cls ->
+            if (cls.subject.isNotBlank()) {
+                subjectSet.add(cls.subject.trim())
+            }
+        }
+        records.forEach { rec ->
+            if (rec.subject.isNotBlank()) {
+                subjectSet.add(rec.subject.trim())
+            }
+        }
+
+        subjectSet.map { subject ->
+            AttendanceCalculator.calculateSubjectSummary(subject, records, target)
+        }.sortedWith(
+            compareByDescending<SubjectAttendanceSummary> { it.status == AttendanceStatus.CRITICAL }
+                .thenByDescending { it.status == AttendanceStatus.BELOW_TARGET }
+                .thenByDescending { it.status == AttendanceStatus.NEAR_TARGET }
+                .thenBy { it.percentage }
+                .thenBy { it.subject }
+        )
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        emptyList()
+    )
 
     val allRevisions: StateFlow<List<DailySubjectRevision>> = repository.getAllRevisions()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -234,31 +288,25 @@ class PlannerViewModel(
         val sharedPrefs = application.getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
         _fcmToken.value = sharedPrefs.getString("fcm_registration_token", "") ?: ""
 
-        // Asynchronously fetch Firebase FCM registration token
+        // Safe Firebase initialization check without forcing unconfigured FCM registration
         viewModelScope.launch {
             try {
                 val apps = com.google.firebase.FirebaseApp.getApps(application)
                 if (apps.isNotEmpty()) {
-                    _isFirebaseMessagingAvailable.value = true
-                    com.google.firebase.messaging.FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-                        if (task.isSuccessful) {
-                            val token = task.result
-                            _fcmToken.value = token
-                            sharedPrefs.edit().putString("fcm_registration_token", token).apply()
-                            Log.d("PlannerViewModel", "Retrieved FCM Token on startup: $token")
-                        } else {
-                            Log.w("PlannerViewModel", "FCM token fetching failed on startup", task.exception)
-                        }
+                    try {
+                        com.google.firebase.messaging.FirebaseMessaging.getInstance().isAutoInitEnabled = false
+                    } catch (e: Throwable) {
+                        // ignore if messaging not initialized
                     }
-                } else {
-                    Log.w("PlannerViewModel", "Firebase is not initialized (missing google-services.json)")
+                    _isFirebaseMessagingAvailable.value = true
                 }
-            } catch (e: Exception) {
-                Log.e("PlannerViewModel", "Error checking/initializing Firebase FCM: ${e.message}")
+            } catch (e: Throwable) {
+                Log.w("PlannerViewModel", "Firebase messaging check skipped: ${e.message}")
             }
         }
         _isDarkTheme.value = sharedPrefs.getBoolean("is_dark_theme", false)
         _areNotificationsEnabled.value = sharedPrefs.getBoolean("are_notifications_enabled", true)
+        _attendanceTarget.value = sharedPrefs.getInt("attendance_target_percentage", 75)
         val savedName = sharedPrefs.getString("student_name", "") ?: ""
         _studentName.value = if (savedName == "Med Student") "" else savedName
         _studentDpUrl.value = sharedPrefs.getString("student_dp_url", "") ?: ""
@@ -270,63 +318,72 @@ class PlannerViewModel(
 
         // Verify real Google or Firebase session
         if (savedLoginMode == LoginMode.GOOGLE.name) {
-            val account = com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(application)
-            if (account != null) {
-                _googleUserId.value = account.id ?: ""
-                _studentName.value = account.displayName ?: ""
-                _studentEmail.value = account.email ?: ""
-                _studentDpUrl.value = account.photoUrl?.toString() ?: ""
-                _studentDpPreset.value = "none"
-            } else {
-                // If they are not actually signed in with Google anymore, reset login to UNDECIDED
-                _loginMode.value = LoginMode.UNDECIDED
-                _googleUserId.value = ""
-                _studentName.value = ""
-                _studentEmail.value = ""
-                _studentDpUrl.value = ""
-                _studentDpPreset.value = "doctor_male"
-                sharedPrefs.edit()
-                    .putString("login_mode", LoginMode.UNDECIDED.name)
-                    .putString("google_user_id", "")
-                    .putString("student_name", "")
-                    .putString("student_email", "")
-                    .putString("student_dp_url", "")
-                    .putString("student_dp_preset", "doctor_male")
-                    .putString("selected_course_code", null)
-                    .apply()
+            try {
+                val account = com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(application)
+                if (account != null) {
+                    _googleUserId.value = account.id ?: ""
+                    _studentName.value = account.displayName ?: ""
+                    _studentEmail.value = account.email ?: ""
+                    _studentDpUrl.value = account.photoUrl?.toString() ?: ""
+                    _studentDpPreset.value = "none"
+                } else {
+                    // If no active Google account found, reset login to UNDECIDED
+                    _loginMode.value = LoginMode.UNDECIDED
+                    _googleUserId.value = ""
+                    _studentName.value = ""
+                    _studentEmail.value = ""
+                    _studentDpUrl.value = ""
+                    _studentDpPreset.value = "doctor_male"
+                    sharedPrefs.edit()
+                        .putString("login_mode", LoginMode.UNDECIDED.name)
+                        .putString("google_user_id", "")
+                        .putString("student_name", "")
+                        .putString("student_email", "")
+                        .putString("student_dp_url", "")
+                        .putString("student_dp_preset", "doctor_male")
+                        .putString("selected_course_code", null)
+                        .apply()
+                }
+            } catch (e: Throwable) {
+                Log.w("PlannerViewModel", "GoogleSignIn status check handled: ${e.message}")
             }
         } else if (savedLoginMode == LoginMode.FIREBASE.name) {
-            val user = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
-            if (user != null) {
-                _studentEmail.value = user.email ?: ""
-                _studentName.value = sharedPrefs.getString("student_name", "") ?: user.displayName ?: ""
-                _studentDpUrl.value = sharedPrefs.getString("student_dp_url", "") ?: ""
-                _studentDpPreset.value = sharedPrefs.getString("student_dp_preset", "doctor_male") ?: "doctor_male"
-                _studentCollege.value = sharedPrefs.getString("student_college", "") ?: ""
-                _studentYear.value = sharedPrefs.getString("student_year", "") ?: ""
-                _studentSemester.value = sharedPrefs.getString("student_semester", "") ?: ""
-                _studentBatch.value = sharedPrefs.getString("student_batch", "") ?: ""
-                _isProfileCompleted.value = sharedPrefs.getBoolean("is_profile_completed", false)
-            } else {
-                _loginMode.value = LoginMode.UNDECIDED
-                _studentName.value = ""
-                _studentEmail.value = ""
-                _studentDpUrl.value = ""
-                _studentDpPreset.value = "doctor_male"
-                sharedPrefs.edit()
-                    .putString("login_mode", LoginMode.UNDECIDED.name)
-                    .putString("student_name", "")
-                    .putString("student_email", "")
-                    .putString("student_dp_url", "")
-                    .putString("student_dp_preset", "doctor_male")
-                    .putString("selected_course_code", null)
-                    .apply()
+            try {
+                val user = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+                if (user != null) {
+                    _studentEmail.value = user.email ?: ""
+                    _studentName.value = sharedPrefs.getString("student_name", "") ?: user.displayName ?: ""
+                    _studentDpUrl.value = sharedPrefs.getString("student_dp_url", "") ?: ""
+                    _studentDpPreset.value = sharedPrefs.getString("student_dp_preset", "doctor_male") ?: "doctor_male"
+                    _studentCollege.value = sharedPrefs.getString("student_college", "") ?: ""
+                    _studentYear.value = sharedPrefs.getString("student_year", "") ?: ""
+                    _studentSemester.value = sharedPrefs.getString("student_semester", "") ?: ""
+                    _studentBatch.value = sharedPrefs.getString("student_batch", "") ?: ""
+                    _isProfileCompleted.value = sharedPrefs.getBoolean("is_profile_completed", false)
+                } else {
+                    _loginMode.value = LoginMode.UNDECIDED
+                    _studentName.value = ""
+                    _studentEmail.value = ""
+                    _studentDpUrl.value = ""
+                    _studentDpPreset.value = "doctor_male"
+                    sharedPrefs.edit()
+                        .putString("login_mode", LoginMode.UNDECIDED.name)
+                        .putString("student_name", "")
+                        .putString("student_email", "")
+                        .putString("student_dp_url", "")
+                        .putString("student_dp_preset", "doctor_male")
+                        .putString("selected_course_code", null)
+                        .apply()
+                }
+            } catch (e: Throwable) {
+                Log.w("PlannerViewModel", "FirebaseAuth status check handled: ${e.message}")
             }
         }
 
         val updatedLoginMode = _loginMode.value
         val savedCourseCode = sharedPrefs.getString("selected_course_code", null)
-        if (savedCourseCode != null && updatedLoginMode != LoginMode.UNDECIDED) {
+        val isOnboardingCompleted = sharedPrefs.getBoolean("is_onboarding_completed", false)
+        if (savedCourseCode != null && (isOnboardingCompleted || updatedLoginMode != LoginMode.UNDECIDED)) {
             try {
                 val course = MedicalCourse.valueOf(savedCourseCode)
                 _selectedCourse.value = course
@@ -334,6 +391,8 @@ class PlannerViewModel(
                 viewModelScope.launch {
                     repository.populateDefaultTimetableIfEmpty(course.code)
                     com.example.util.AcademicNotificationManager.verifyExistingNotifications(application)
+                    com.example.util.AcademicNotificationManager.rescheduleAllFutureNotifications(application)
+                    scheduleTimetableClassNotifications()
                     generateSmartNotifications()
                 }
             } catch (e: Exception) {
@@ -723,7 +782,19 @@ class PlannerViewModel(
         
         viewModelScope.launch {
             try {
-                val response = geminiService.parseDocument(textInput, imageBytes, mimeType)
+                val currentScheduleSummary = timetable.value.let { list ->
+                    if (list.isEmpty()) "No classes configured yet."
+                    else {
+                        val daysGrouped = list.groupBy { it.dayOfWeek }
+                        daysGrouped.entries.sortedBy { it.key }.joinToString("\n") { (dayNum, classes) ->
+                            val dayName = getDayName(dayNum)
+                            val classStrs = classes.sortedBy { it.periodNumber }.joinToString("; ") { "${it.startTime}-${it.endTime}: ${it.subject} (${it.room ?: "Hall"})" }
+                            "$dayName: $classStrs"
+                        }
+                    }
+                }
+
+                val response = geminiService.parseDocument(textInput, imageBytes, mimeType, currentScheduleSummary)
                 _activeUnifiedResponse.value = response
                 _activeParsedDrafts.value = response.extracted_items
 
@@ -787,6 +858,49 @@ class PlannerViewModel(
                 _isParsingMessage.value = false
             }
         }
+    }
+
+    fun getDefaultParsedTimetable(course: MedicalCourse): List<ParsedTimetableClass> {
+        return repository.getDefaultParsedTimetableForCourse(course.code)
+    }
+
+    suspend fun parseTimetableDocument(textInput: String?, imageBytes: ByteArray?, mimeType: String?, course: MedicalCourse): List<ParsedTimetableClass> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val response = geminiService.parseDocument(textInput, imageBytes, mimeType, "")
+                if (response.extracted_timetable.isNotEmpty()) {
+                    response.extracted_timetable
+                } else {
+                    emptyList()
+                }
+            } catch (e: Exception) {
+                Log.e("PlannerVM", "Failed to parse document with Gemini", e)
+                emptyList()
+            }
+        }
+    }
+
+    fun completeOnboarding(course: MedicalCourse) {
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+        sharedPrefs.edit()
+            .putBoolean("is_onboarding_completed", true)
+            .putString("selected_course_code", course.name)
+            .apply()
+
+        val onboardingPrefs = getApplication<Application>().getSharedPreferences("medpulse_onboarding_draft", Application.MODE_PRIVATE)
+        onboardingPrefs.edit().clear().apply()
+
+        selectCourse(course)
+    }
+
+    fun isOnboardingCompleted(): Boolean {
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+        return sharedPrefs.getBoolean("is_onboarding_completed", false) && sharedPrefs.getString("selected_course_code", null) != null
+    }
+
+    fun setOnboardingCompleted(completed: Boolean) {
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+        sharedPrefs.edit().putBoolean("is_onboarding_completed", completed).apply()
     }
 
     // Replace the current timetable with a parsed timetable
@@ -1488,7 +1602,7 @@ class PlannerViewModel(
         _isAuthenticating.value = false
     }
 
-    fun signInWithGoogle(name: String, email: String, dpUrl: String, googleId: String) {
+    fun signInWithGoogle(name: String, email: String, dpUrl: String, googleId: String, idToken: String? = null) {
         _loginMode.value = LoginMode.GOOGLE
         _studentName.value = name
         _studentEmail.value = email
@@ -1508,11 +1622,27 @@ class PlannerViewModel(
             .putString("google_user_id", googleId)
             .apply()
 
+        if (!idToken.isNullOrEmpty()) {
+            try {
+                val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
+                com.google.firebase.auth.FirebaseAuth.getInstance().signInWithCredential(credential)
+                    .addOnCompleteListener { task ->
+                        if (task.isSuccessful) {
+                            Log.d("PlannerViewModel", "Firebase Auth session connected via Google credential.")
+                        } else {
+                            Log.w("PlannerViewModel", "Firebase Google credential sign in note: ${task.exception?.message}")
+                        }
+                    }
+            } catch (e: Exception) {
+                Log.e("PlannerViewModel", "Error creating Google Auth credential: ${e.message}")
+            }
+        }
+
         viewModelScope.launch {
             addNotificationWithDuplicateCheck(
                 InAppNotification(
                     title = "Signed in as $name",
-                    message = "Your account is now securely linked locally. Cloud sync readiness active.",
+                    message = "Successfully authenticated via Google ($email). Profile and schedule sync active.",
                     type = "alert"
                 )
             )
@@ -1767,7 +1897,11 @@ class PlannerViewModel(
             .putString("student_semester", "")
             .putString("student_batch", "")
             .putBoolean("is_profile_completed", false)
+            .putBoolean("is_onboarding_completed", false)
             .apply()
+
+        val onboardingDraftPrefs = getApplication<Application>().getSharedPreferences("medpulse_onboarding_draft", Application.MODE_PRIVATE)
+        onboardingDraftPrefs.edit().clear().apply()
  
         try {
             com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
@@ -2074,43 +2208,93 @@ class PlannerViewModel(
         }
     }
 
-    fun markAttendance(subject: String, isPresent: Boolean, classTime: String? = null) {
+    fun setAttendanceTarget(target: Int) {
+        val validated = target.coerceIn(1, 100)
+        _attendanceTarget.value = validated
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+        sharedPrefs.edit().putInt("attendance_target_percentage", validated).apply()
+    }
+
+    fun markAttendance(
+        subject: String,
+        isPresent: Boolean,
+        classTime: String? = null,
+        status: String = if (isPresent) "PRESENT" else "ABSENT",
+        dateString: String? = null,
+        startTime: String? = null,
+        endTime: String? = null,
+        note: String? = null,
+        reason: String? = null
+    ) {
         val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
-        val dateString = sdf.format(java.util.Date())
+        val actualDateString = dateString ?: sdf.format(java.util.Date())
+
+        // Duplicate prevention: match on date, subject, and time/period
+        val existing = allAttendanceRecords.value.find { 
+            it.dateString == actualDateString && 
+            it.subject.equals(subject, ignoreCase = true) &&
+            (classTime == null || it.classTime == null || it.classTime == classTime) &&
+            (startTime == null || it.startTime == null || it.startTime == startTime)
+        }
+
         val record = AttendanceRecord(
-            dateString = dateString,
+            id = existing?.id ?: 0,
+            dateString = actualDateString,
             subject = subject,
             isPresent = isPresent,
-            classTime = classTime
+            classTime = classTime ?: existing?.classTime,
+            firestoreId = existing?.firestoreId ?: java.util.UUID.randomUUID().toString(),
+            status = status,
+            startTime = startTime ?: existing?.startTime,
+            endTime = endTime ?: existing?.endTime,
+            note = note ?: existing?.note,
+            reason = reason ?: existing?.reason,
+            recordedTimestamp = System.currentTimeMillis()
         )
         viewModelScope.launch(Dispatchers.IO) {
             repository.saveAttendanceRecord(record)
             syncDataToFirebase()
             
-            // Add custom visual alert
-            val statusLabel = if (isPresent) "Present" else "Absent"
+            val statusLabel = when (status) {
+                "NO_CLASS" -> "No Class"
+                "CANCELLED" -> "Cancelled"
+                "PRESENT" -> "Present"
+                "ABSENT" -> "Absent"
+                "EXCUSED" -> "Excused"
+                else -> if (isPresent) "Present" else "Absent"
+            }
             addNotificationWithDuplicateCheck(
                 InAppNotification(
-                    title = "Attendance Marked",
-                    message = "Successfully marked $statusLabel for $subject ($classTime).",
+                    title = "Attendance Updated",
+                    message = "Successfully marked $statusLabel for $subject ($actualDateString).",
                     type = "class"
                 )
             )
         }
     }
 
+    fun updateAttendanceRecord(record: AttendanceRecord) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.saveAttendanceRecord(record.copy(recordedTimestamp = System.currentTimeMillis()))
+            syncDataToFirebase()
+        }
+    }
+
+    fun deleteAttendanceRecord(record: AttendanceRecord) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.deleteAttendanceRecord(record)
+            syncDataToFirebase()
+        }
+    }
+
     fun getAttendancePercentageForSubject(subject: String): Float {
-        val records = allAttendanceRecords.value.filter { it.subject.lowercase() == subject.lowercase() }
-        if (records.isEmpty()) return 100f
-        val present = records.count { it.isPresent }
-        return (present.toFloat() / records.size) * 100f
+        val summary = AttendanceCalculator.calculateSubjectSummary(subject, allAttendanceRecords.value, _attendanceTarget.value)
+        return if (summary.totalClasses == 0) 100f else summary.percentage
     }
 
     fun getOverallAttendancePercentage(): Float {
-        val records = allAttendanceRecords.value
-        if (records.isEmpty()) return 100f
-        val present = records.count { it.isPresent }
-        return (present.toFloat() / records.size) * 100f
+        val summary = AttendanceCalculator.calculateOverallSummary(allAttendanceRecords.value, _attendanceTarget.value)
+        return if (summary.totalClasses == 0) 100f else summary.percentage
     }
 
     private val _isGeneratingRevision = MutableStateFlow(false)
@@ -2284,13 +2468,17 @@ class PlannerViewModel(
                 if (result.isForce) {
                     _isUpdateDialogDismissed.value = false
                 } else {
-                    // It's optional: check if the user previously dismissed this exact version
-                    val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
-                    val dismissedVersion = sharedPrefs.getString("dismissed_update_version", "") ?: ""
-                    if (dismissedVersion == result.config.latestVersion) {
+                    if (silent) {
                         _isUpdateDialogDismissed.value = true
                     } else {
-                        _isUpdateDialogDismissed.value = false
+                        // It's optional: check if the user previously dismissed this exact version
+                        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+                        val dismissedVersion = sharedPrefs.getString("dismissed_update_version", "") ?: ""
+                        if (dismissedVersion == result.config.latestVersion) {
+                            _isUpdateDialogDismissed.value = true
+                        } else {
+                            _isUpdateDialogDismissed.value = false
+                        }
                     }
                 }
             } else {
@@ -2362,7 +2550,8 @@ enum class Screen {
     Planner,
     Calendar,
     AIChat,
-    Settings
+    Settings,
+    Attendance
 }
 
 enum class LoginMode {

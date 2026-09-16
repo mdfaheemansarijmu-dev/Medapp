@@ -424,6 +424,34 @@ fun TimetableClassRow(
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
+                
+                // Show Non-Lecture / Practical / Clinical Badging
+                val lowerSubject = classItem.subject.lowercase()
+                if (lowerSubject.contains("non-lecture") || lowerSubject.contains("posting") || lowerSubject.contains("clinical") || lowerSubject.contains("practical") || lowerSubject.contains("yoga")) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        color = if (lowerSubject.contains("clinical") || lowerSubject.contains("posting")) 
+                            MaterialTheme.colorScheme.tertiaryContainer 
+                        else 
+                            MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = if (lowerSubject.contains("clinical") || lowerSubject.contains("posting")) 
+                                "🏥 CLINICAL POSTING" 
+                            else if (lowerSubject.contains("yoga"))
+                                "🧘 YOGA / PRACTICE"
+                            else 
+                                "🔬 NON-LECTURE / PRACTICAL",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = if (lowerSubject.contains("clinical") || lowerSubject.contains("posting")) 
+                                MaterialTheme.colorScheme.onTertiaryContainer 
+                            else 
+                                MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
             }
 
             IconButton(

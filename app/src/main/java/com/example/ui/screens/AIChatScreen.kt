@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -49,10 +50,71 @@ fun AIChatScreen(
     val activeResponse by viewModel.activeUnifiedResponse.collectAsStateWithLifecycle()
 
     var textInput by remember { mutableStateOf("") }
+    var selectedAttachmentBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var selectedAttachmentMimeType by remember { mutableStateOf<String?>(null) }
+    var selectedAttachmentName by remember { mutableStateOf<String?>(null) }
+    var showAttachmentSheet by remember { mutableStateOf(false) }
+    var showPresetsDialog by remember { mutableStateOf(false) }
+
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    // Camera Launcher for direct photo taking
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        if (bitmap != null) {
+            val stream = java.io.ByteArrayOutputStream()
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, stream)
+            val bytes = stream.toByteArray()
+            selectedAttachmentBytes = bytes
+            selectedAttachmentMimeType = "image/jpeg"
+            selectedAttachmentName = "Camera_Photo_${System.currentTimeMillis() % 10000}.jpg"
+        }
+    }
+
+    // Gallery Launcher for direct image picking
+    val galleryPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            val bytes = try {
+                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            } catch (e: Exception) {
+                null
+            }
+            val mimeType = context.contentResolver.getType(uri) ?: "image/jpeg"
+            val fileName = uri.lastPathSegment?.substringAfterLast('/') ?: "Timetable_Image.jpg"
+            if (bytes != null) {
+                selectedAttachmentBytes = bytes
+                selectedAttachmentMimeType = mimeType
+                selectedAttachmentName = fileName
+            }
+        }
+    }
+
+    // Document / PDF Launcher for files
+    val documentPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            val bytes = try {
+                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            } catch (e: Exception) {
+                null
+            }
+            val mimeType = context.contentResolver.getType(uri) ?: "application/pdf"
+            val fileName = uri.lastPathSegment?.substringAfterLast('/') ?: "Timetable_Document.pdf"
+            if (bytes != null) {
+                selectedAttachmentBytes = bytes
+                selectedAttachmentMimeType = mimeType
+                selectedAttachmentName = fileName
+            }
+        }
+    }
+
     val speechRecognizerLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -75,6 +137,24 @@ fun AIChatScreen(
             speechRecognizerLauncher.launch(intent)
         } catch (e: Exception) {
             android.widget.Toast.makeText(context, "Speech recognition is not supported on this device.", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val handleSendMessage = {
+        if (selectedAttachmentBytes != null) {
+            val isPdf = selectedAttachmentMimeType?.contains("pdf", ignoreCase = true) == true
+            val promptText = textInput.ifBlank {
+                if (isPdf) "Extract schedule and timetable from this document."
+                else "Extract timetable and schedule from this image."
+            }
+            viewModel.parseInputDocument(promptText, selectedAttachmentBytes, selectedAttachmentMimeType ?: "image/jpeg")
+            textInput = ""
+            selectedAttachmentBytes = null
+            selectedAttachmentMimeType = null
+            selectedAttachmentName = null
+        } else if (textInput.isNotBlank()) {
+            viewModel.sendChatMessage(textInput)
+            textInput = ""
         }
     }
 
@@ -102,50 +182,74 @@ fun AIChatScreen(
                 .fillMaxSize()
                 .statusBarsPadding()
         ) {
-            // Header
+            // ChatGPT-Style Minimalist Top Header
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(
-                        text = "MedPulse AI Chat",
-                        style = MaterialTheme.typography.headlineMedium.copy(
-                            fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = (-0.5).sp
-                        ),
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Text(
-                        text = "Import schedule via Camera, Gallery, PDF or WhatsApp text",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = "AI Assistant",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "MedPulse AI",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = (-0.3).sp
+                                ),
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = "2.5 Flash",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = "Medical Assistant • Ask questions or attach files",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
 
                 IconButton(
                     onClick = { viewModel.clearChatHistory() },
                     modifier = Modifier.testTag("clear_chat_button")
                 ) {
-                    Icon(Icons.Default.DeleteSweep, contentDescription = "Clear Chat History", tint = MaterialTheme.colorScheme.outline)
+                    Icon(
+                        imageVector = Icons.Default.DeleteSweep,
+                        contentDescription = "Clear Chat History",
+                        tint = MaterialTheme.colorScheme.outline
+                    )
                 }
             }
 
-            // Sleek row of input sources (Camera, Gallery, PDF, Text)
-            AIInputMethodsRow(
-                onTextMethodSelected = {
-                    // Pre-fill text input with a standard timetable WhatsApp text notice template
-                    textInput = "Weekly Timetable:\nMonday\n08:30 Anatomy\n09:30 Physiology\n12:00 Lunch Break\n01:00 Anatomy Practical"
-                },
-                onFileSelected = { name, content, bytes, mimeType ->
-                    viewModel.parseInputDocument(content, bytes, mimeType)
-                }
-            )
-
-            // Message list
+            // Message list (starts right under the header without top buttons)
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -156,7 +260,14 @@ fun AIChatScreen(
             ) {
                 if (chatMessages.isEmpty()) {
                     item {
-                        AIChatWelcomeCard()
+                        AIChatWelcomeCard(
+                            onSuggestionClick = { suggestion ->
+                                textInput = suggestion
+                            },
+                            onAttachClick = {
+                                showAttachmentSheet = true
+                            }
+                        )
                     }
                 } else {
                     items(chatMessages) { chat ->
@@ -170,7 +281,7 @@ fun AIChatScreen(
                     }
                 }
 
-                item { Spacer(modifier = Modifier.height(16.dp)) }
+                item { Spacer(modifier = Modifier.height(12.dp)) }
             }
 
             // Draft / Timetable Preview Panel (Appears if Gemini successfully parsed items)
@@ -179,6 +290,7 @@ fun AIChatScreen(
                     response = activeResponse!!,
                     onReplaceClick = { editedList ->
                         viewModel.replaceCurrentTimetable(editedList)
+                        android.widget.Toast.makeText(context, "Timetable replaced and saved to your app!", android.widget.Toast.LENGTH_SHORT).show()
                     },
                     onCancelClick = {
                         viewModel.cancelUnifiedImport()
@@ -191,6 +303,7 @@ fun AIChatScreen(
                     onImportClick = {
                         val approvedList = selectedDraftsMap.entries.filter { it.value }.map { it.key }
                         viewModel.approveAndImportDrafts(approvedList)
+                        android.widget.Toast.makeText(context, "Items added to your planner!", android.widget.Toast.LENGTH_SHORT).show()
                     },
                     onCancelClick = {
                         viewModel.cancelUnifiedImport()
@@ -198,125 +311,437 @@ fun AIChatScreen(
                 )
             }
 
+            // Attachment preview pill if user took photo, picked image, or document
+            if (selectedAttachmentBytes != null) {
+                val isPdf = selectedAttachmentMimeType?.contains("pdf", ignoreCase = true) == true
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        if (isPdf) Color(0xFF10B981).copy(alpha = 0.15f)
+                                        else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (isPdf) Icons.Default.PictureAsPdf else Icons.Default.Image,
+                                    contentDescription = "Attachment",
+                                    tint = if (isPdf) Color(0xFF10B981) else MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = selectedAttachmentName ?: if (isPdf) "Document Attached" else "Image Attached",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = if (isPdf) "PDF Document • Ready to parse" else "Image • Ready to parse",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
 
-            // Bottom text field row
+                        IconButton(
+                            onClick = {
+                                selectedAttachmentBytes = null
+                                selectedAttachmentMimeType = null
+                                selectedAttachmentName = null
+                            },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Remove attachment",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ChatGPT-Style Bottom Input Bar
             Surface(
                 color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 4.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .navigationBarsPadding(),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.Bottom
                 ) {
-                    OutlinedTextField(
-                        value = textInput,
-                        onValueChange = { textInput = it },
-                        placeholder = { Text("Ask Gemini, speak, or paste text...") },
-                        maxLines = 4,
-                        shape = RoundedCornerShape(20.dp),
+                    // Capsule text container
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        shape = RoundedCornerShape(24.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
                         modifier = Modifier
                             .weight(1f)
-                            .testTag("chat_input_field"),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
-                        ),
-                        leadingIcon = {
+                            .padding(end = 6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Plus (+) Attachment Menu Button
+                            IconButton(
+                                onClick = { showAttachmentSheet = true },
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .testTag("chat_plus_button")
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = "Attach Files",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+
+                            // Quick Camera Button
+                            IconButton(
+                                onClick = { cameraLauncher.launch(null) },
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .testTag("chat_camera_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CameraAlt,
+                                    contentDescription = "Take Photo",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            // Quick Gallery Button
+                            IconButton(
+                                onClick = { galleryPickerLauncher.launch("image/*") },
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .testTag("chat_gallery_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PhotoLibrary,
+                                    contentDescription = "Pick Image",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            // Text Input Field
+                            TextField(
+                                value = textInput,
+                                onValueChange = { textInput = it },
+                                placeholder = {
+                                    Text(
+                                        text = if (selectedAttachmentBytes != null) "Add prompt or tap send..." else "Message MedPulse AI...",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                        maxLines = 1
+                                    )
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("chat_input_field"),
+                                maxLines = 5,
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent,
+                                    disabledContainerColor = Color.Transparent,
+                                    focusedIndicatorColor = Color.Transparent,
+                                    unfocusedIndicatorColor = Color.Transparent,
+                                    disabledIndicatorColor = Color.Transparent
+                                ),
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface)
+                            )
+
+                            // Mic Button
                             IconButton(
                                 onClick = { triggerSpeechRecognition() },
-                                modifier = Modifier.testTag("mic_button")
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .testTag("mic_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Mic,
-                                    contentDescription = "Speak directly to Gemini",
-                                    tint = MaterialTheme.colorScheme.primary
+                                    contentDescription = "Voice input",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
-                    )
+                    }
 
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    FloatingActionButton(
-                        onClick = {
-                            if (textInput.isNotBlank()) {
-                                viewModel.sendChatMessage(textInput)
-                                textInput = ""
-                            }
-                        },
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                        shape = CircleShape,
+                    // ChatGPT Send / Up Button
+                    val canSend = textInput.isNotBlank() || selectedAttachmentBytes != null
+                    IconButton(
+                        onClick = { if (canSend) handleSendMessage() },
+                        enabled = canSend,
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(44.dp)
                             .testTag("chat_send_button")
                     ) {
-                        Icon(Icons.Default.Send, contentDescription = "Send notice to AI")
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (canSend) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowUpward,
+                                contentDescription = "Send",
+                                tint = if (canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
             }
+        }
+
+        // ChatGPT-Style Attachment Modal Bottom Sheet
+        if (showAttachmentSheet) {
+            ChatAttachmentBottomSheet(
+                onDismiss = { showAttachmentSheet = false },
+                onCameraClick = {
+                    showAttachmentSheet = false
+                    cameraLauncher.launch(null)
+                },
+                onGalleryClick = {
+                    showAttachmentSheet = false
+                    galleryPickerLauncher.launch("image/*")
+                },
+                onDocumentClick = {
+                    showAttachmentSheet = false
+                    documentPickerLauncher.launch("*/*")
+                },
+                onWhatsAppClick = {
+                    showAttachmentSheet = false
+                    textInput = "Weekly Timetable:\nMonday\n08:30 Anatomy\n09:30 Physiology\n12:00 Lunch Break\n01:00 Anatomy Practical"
+                },
+                onPresetsClick = {
+                    showAttachmentSheet = false
+                    showPresetsDialog = true
+                }
+            )
+        }
+
+        // Preset Timetable Test Dialog
+        if (showPresetsDialog) {
+            SimulatedFileDialog(
+                title = "Medical Timetable Presets",
+                icon = Icons.Default.AutoAwesome,
+                presets = listOf(
+                    SimulatedFilePreset("1st_Year_MBBS_Weekly_Schedule.png", "Image of a structured 1st Year MBBS Weekly Timetable (Anatomy, Physiology)", "image/png"),
+                    SimulatedFilePreset("Exam_Routine_July_2026.png", "Image of an Exam Timetable covering final theory dates", "image/png"),
+                    SimulatedFilePreset("Clinical_postings_Rotations.jpg", "Clinical rotation postings for Surgery & Medicine", "image/jpeg"),
+                    SimulatedFilePreset("BHMS_Pharmacy_Timetable.pdf", "PDF Timetable of Homeopathic Pharmacy & Anatomy Practicals", "application/pdf"),
+                    SimulatedFilePreset("Exam_Timetable_Official.pdf", "PDF Timetable listing June/July medical university theory papers", "application/pdf"),
+                    SimulatedFilePreset("College_Holiday_Circular.pdf", "PDF Circular declaring a general holiday next Friday", "application/pdf")
+                ),
+                onDismiss = { showPresetsDialog = false },
+                onLaunchReal = {
+                    showPresetsDialog = false
+                    documentPickerLauncher.launch("*/*")
+                },
+                onSelectPreset = { preset ->
+                    showPresetsDialog = false
+                    selectedAttachmentBytes = preset.getMockBytes()
+                    selectedAttachmentMimeType = preset.mimeType
+                    selectedAttachmentName = preset.name
+                }
+            )
         }
     }
 }
 
 @Composable
-fun AIChatWelcomeCard() {
-    Surface(
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f),
-        shape = RoundedCornerShape(20.dp),
+fun AIChatWelcomeCard(
+    onSuggestionClick: (String) -> Unit,
+    onAttachClick: () -> Unit
+) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 16.dp)
+            .padding(horizontal = 4.dp, vertical = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            modifier = Modifier.padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = Icons.Default.AutoAwesome,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(28.dp)
             )
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-                text = "Welcome to MedPulse AI Notice Parser",
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                textAlign = TextAlign.Center
-            )
-            Text(
-                text = "Simply copy announcements or homework assignments from your class WhatsApp group and paste them here. The AI will extract and organize them automatically into your planner!",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 8.dp)
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        Text(
+            text = "What can I help you plan?",
+            style = MaterialTheme.typography.headlineSmall.copy(
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.3).sp
+            ),
+            color = MaterialTheme.colorScheme.onBackground,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = "Ask questions, schedule duties, or attach photos, PDF files, and WhatsApp timetable notes.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 12.dp)
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // ChatGPT-style Quick Starter Prompts
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            ChatSuggestionCard(
+                icon = Icons.Default.DateRange,
+                iconTint = Color(0xFF3B82F6),
+                title = "Import Medical Timetable",
+                subtitle = "Take photo or upload PDF of your routine",
+                onClick = onAttachClick
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(
-                        "Try Pasting This Example:",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        "\"Tomorrow submit Anatomy Record. Monday Physiology Internal. Organon assignment before Friday.\"",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            ChatSuggestionCard(
+                icon = Icons.Default.Chat,
+                iconTint = Color(0xFFF59E0B),
+                title = "Parse WhatsApp Announcement",
+                subtitle = "Extract assignments and room changes from class group",
+                onClick = {
+                    onSuggestionClick("Weekly Timetable:\nMonday\n08:30 Anatomy\n09:30 Physiology\n12:00 Lunch Break\n01:00 Anatomy Practical")
                 }
+            )
+
+            ChatSuggestionCard(
+                icon = Icons.Default.MenuBook,
+                iconTint = Color(0xFF10B981),
+                title = "Study & Revision Schedule",
+                subtitle = "Create high-yield study plan for upcoming university exams",
+                onClick = {
+                    onSuggestionClick("Create a focused study and revision plan for 1st Year Anatomy and Physiology for upcoming university exams.")
+                }
+            )
+
+            ChatSuggestionCard(
+                icon = Icons.Default.LocalHospital,
+                iconTint = Color(0xFFEF4444),
+                title = "Clinical Posting Schedule",
+                subtitle = "Log ward rotations and clinical duty timings",
+                onClick = {
+                    onSuggestionClick("Hospital Posting Notice: General Medicine ward posting from 9:00 AM to 12:00 PM for Batch A starting Monday.")
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun ChatSuggestionCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconTint: Color,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(iconTint.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(20.dp)
+                )
             }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                imageVector = Icons.Default.ArrowUpward,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.outlineVariant,
+                modifier = Modifier.size(16.dp)
+            )
         }
     }
 }
@@ -532,181 +957,143 @@ data class SimulatedFilePreset(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AIInputMethodsRow(
-    onTextMethodSelected: () -> Unit,
-    onFileSelected: (name: String, content: String, bytes: ByteArray?, mimeType: String?) -> Unit
+fun ChatAttachmentBottomSheet(
+    onDismiss: () -> Unit,
+    onCameraClick: () -> Unit,
+    onGalleryClick: () -> Unit,
+    onDocumentClick: () -> Unit,
+    onWhatsAppClick: () -> Unit,
+    onPresetsClick: () -> Unit
 ) {
-    var showCameraDialog by remember { mutableStateOf(false) }
-    var showGalleryDialog by remember { mutableStateOf(false) }
-    var showPdfDialog by remember { mutableStateOf(false) }
-    
-    val imagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri != null) {
-            onFileSelected("Picked_Image.jpg", "Weekly Timetable:\nMonday\n08:30 Anatomy\n09:30 Physiology\n12:00 Lunch Break\n01:00 Anatomy Practical", null, "image/jpeg")
-        }
-    }
-
-    val pdfPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri != null) {
-            onFileSelected("Picked_Document.pdf", "Weekly Timetable:\nMonday\n08:30 Anatomy\n09:30 Physiology\n12:00 Lunch Break\n01:00 Anatomy Practical", null, "application/pdf")
-        }
-    }
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text(
-                text = "Select AI Input Source",
-                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(bottom = 8.dp)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(
+                color = MaterialTheme.colorScheme.outlineVariant
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                // Camera Button
-                AIInputChip(
-                    icon = Icons.Default.CameraAlt,
-                    label = "Camera",
-                    color = Color(0xFFEF4444),
-                    onClick = { showCameraDialog = true }
-                )
-                // Gallery Button
-                AIInputChip(
-                    icon = Icons.Default.PhotoLibrary,
-                    label = "Gallery",
-                    color = Color(0xFF3B82F6),
-                    onClick = { showGalleryDialog = true }
-                )
-                // PDF Button
-                AIInputChip(
-                    icon = Icons.Default.PictureAsPdf,
-                    label = "PDF File",
-                    color = Color(0xFF10B981),
-                    onClick = { showPdfDialog = true }
-                )
-                // WhatsApp Button
-                AIInputChip(
-                    icon = Icons.Default.TextSnippet,
-                    label = "WhatsApp",
-                    color = Color(0xFFF59E0B),
-                    onClick = onTextMethodSelected
-                )
-            }
         }
-    }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 6.dp)
+                .navigationBarsPadding(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "Attach to MedPulse AI",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+            )
 
-    // Camera Simulation & Picker Dialog
-    if (showCameraDialog) {
-        SimulatedFileDialog(
-            title = "Capture Document with Camera",
-            icon = Icons.Default.CameraAlt,
-            presets = listOf(
-                SimulatedFilePreset("1st_Year_MBBS_Weekly_Schedule.png", "Image of a structured 1st Year MBBS Weekly Timetable (Anatomy, Physiology)", "image/png"),
-                SimulatedFilePreset("Exam_Routine_July_2026.png", "Image of an Exam Timetable covering final theory dates", "image/png"),
-                SimulatedFilePreset("room_change_materia_medica.jpg", "Image of a Notice Board with tomorrow's Materia Medica room changed to Lecture Hall C", "image/jpeg")
-            ),
-            onDismiss = { showCameraDialog = false },
-            onLaunchReal = {
-                showCameraDialog = false
-                imagePickerLauncher.launch("image/*")
-            },
-            onSelectPreset = { preset ->
-                showCameraDialog = false
-                onFileSelected(preset.name, preset.description, preset.getMockBytes(), preset.mimeType)
-            }
-        )
-    }
+            // 1. Camera
+            AttachmentSheetOption(
+                icon = Icons.Default.CameraAlt,
+                iconTint = Color(0xFFEF4444),
+                title = "Camera",
+                subtitle = "Take photo of timetable or notice board",
+                onClick = onCameraClick
+            )
 
-    // Gallery Picker Dialog
-    if (showGalleryDialog) {
-        SimulatedFileDialog(
-            title = "Import Document from Gallery",
-            icon = Icons.Default.PhotoLibrary,
-            presets = listOf(
-                SimulatedFilePreset("MBBS_Weekly_Timetable.png", "Image of a structured 1st Year MBBS Weekly Timetable (Anatomy, Physiology)", "image/png"),
-                SimulatedFilePreset("Clinical_postings_Rotations.jpg", "Clinical rotation postings for Surgery & Medicine", "image/jpeg"),
-                SimulatedFilePreset("cancelled_class_announcement.png", "WhatsApp screenshot stating tomorrow's Physiology is cancelled", "image/png")
-            ),
-            onDismiss = { showGalleryDialog = false },
-            onLaunchReal = {
-                showGalleryDialog = false
-                imagePickerLauncher.launch("image/*")
-            },
-            onSelectPreset = { preset ->
-                showGalleryDialog = false
-                onFileSelected(preset.name, preset.description, preset.getMockBytes(), preset.mimeType)
-            }
-        )
-    }
+            // 2. Photos & Gallery
+            AttachmentSheetOption(
+                icon = Icons.Default.PhotoLibrary,
+                iconTint = Color(0xFF3B82F6),
+                title = "Photos & Images",
+                subtitle = "Choose timetable image from gallery",
+                onClick = onGalleryClick
+            )
 
-    // PDF Document Picker Dialog
-    if (showPdfDialog) {
-        SimulatedFileDialog(
-            title = "Import PDF Document",
-            icon = Icons.Default.PictureAsPdf,
-            presets = listOf(
-                SimulatedFilePreset("BHMS_Pharmacy_Timetable.pdf", "PDF Timetable of Homeopathic Pharmacy & Anatomy Practicals", "application/pdf"),
-                SimulatedFilePreset("Exam_Timetable_Official.pdf", "PDF Timetable listing June/July medical university theory papers", "application/pdf"),
-                SimulatedFilePreset("College_Holiday_Circular.pdf", "PDF Circular declaring a general holiday next Friday", "application/pdf")
-            ),
-            onDismiss = { showPdfDialog = false },
-            onLaunchReal = {
-                showPdfDialog = false
-                pdfPickerLauncher.launch("application/pdf")
-            },
-            onSelectPreset = { preset ->
-                showPdfDialog = false
-                onFileSelected(preset.name, preset.description, preset.getMockBytes(), preset.mimeType)
-            }
-        )
+            // 3. Document / PDF
+            AttachmentSheetOption(
+                icon = Icons.Default.PictureAsPdf,
+                iconTint = Color(0xFF10B981),
+                title = "Document or PDF",
+                subtitle = "Attach PDF syllabus, routine, or circular",
+                onClick = onDocumentClick
+            )
+
+            // 4. WhatsApp / Text Announcement
+            AttachmentSheetOption(
+                icon = Icons.Default.Chat,
+                iconTint = Color(0xFFF59E0B),
+                title = "WhatsApp Notice",
+                subtitle = "Insert formatted medical class announcement",
+                onClick = onWhatsAppClick
+            )
+
+            // 5. Presets
+            AttachmentSheetOption(
+                icon = Icons.Default.AutoAwesome,
+                iconTint = Color(0xFF8B5CF6),
+                title = "Sample Timetable Presets",
+                subtitle = "Test instant 1st Year MBBS & Clinical schedules",
+                onClick = onPresetsClick
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
     }
 }
 
 @Composable
-fun AIInputChip(
+fun AttachmentSheetOption(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    color: Color,
+    iconTint: Color,
+    title: String,
+    subtitle: String,
     onClick: () -> Unit
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(4.dp)
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(color.copy(alpha = 0.15f)),
-            contentAlignment = Alignment.Center
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(iconTint.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = title,
+                    tint = iconTint,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = color,
-                modifier = Modifier.size(22.dp)
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.outlineVariant,
+                modifier = Modifier.size(18.dp)
             )
         }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
@@ -730,6 +1117,7 @@ fun SimulatedFileDialog(
         },
         text = {
             Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(

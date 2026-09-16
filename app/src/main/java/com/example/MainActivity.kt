@@ -47,6 +47,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Prompt user for POST_NOTIFICATIONS permission on Android 13+ (API 33+)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
+        }
+
         // 1. Initialize Database & Repository locally (robust context-aware creation)
         database = Room.databaseBuilder(
             applicationContext,
@@ -150,6 +157,10 @@ fun MainAppLayout(
                     Screen.Calendar -> CalendarScreen(viewModel = viewModel)
                     Screen.AIChat -> AIChatScreen(viewModel = viewModel)
                     Screen.Settings -> SettingsScreen(viewModel = viewModel)
+                    Screen.Attendance -> AttendanceScreen(
+                        viewModel = viewModel,
+                        onBack = { viewModel.navigateTo(Screen.Dashboard) }
+                    )
                     else -> DashboardScreen(viewModel = viewModel)
                 }
             }
@@ -278,27 +289,6 @@ fun BottomNavigationBar(
             modifier = Modifier.testTag("nav_ai")
         )
 
-        // Tab 6: Settings
-        NavigationBarItem(
-            selected = currentScreen == Screen.Settings,
-            onClick = { onNavigate(Screen.Settings) },
-            icon = {
-                Icon(
-                    imageVector = if (currentScreen == Screen.Settings) Icons.Default.Settings else Icons.Outlined.Settings,
-                    contentDescription = "Settings"
-                )
-            },
-            label = {
-                Text(
-                    text = "Settings",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            modifier = Modifier.testTag("nav_settings")
-        )
     }
 }
 
