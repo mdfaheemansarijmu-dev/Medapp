@@ -237,12 +237,14 @@ data class AttendanceRecord(
 @JsonClass(generateAdapter = true)
 data class DailySubjectRevision(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    val dateString: String, // "YYYY-MM-DD"
-    val subject: String,
-    val studentExplanation: String,
-    val aiSummary: String,
-    val keyPoints: String, // delimiter separated
-    val revisionQuestions: String // delimiter separated
+    val dateString: String = "", // "YYYY-MM-DD"
+    val subject: String = "",
+    val periodNumber: Int = 0,
+    val classTime: String = "",
+    val studentExplanation: String = "",
+    val aiSummary: String = "",
+    val keyPoints: String = "", // delimiter separated
+    val revisionQuestions: String = "" // delimiter separated
 )
 
 

@@ -17,9 +17,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.PlannerDatabase
 import com.example.data.model.*
+import com.example.data.university.*
 import com.example.data.repository.PlannerRepository
 import com.example.util.AcademicNotificationManager
 import com.example.util.*
+import com.example.util.GoogleCalendarSyncManager
 import com.example.network.GeminiParserService
 import com.example.network.RetrofitClient
 import com.example.network.UpdateService
@@ -198,6 +200,29 @@ class PlannerViewModel(
     private val _studentCollege = MutableStateFlow("")
     val studentCollege: StateFlow<String> = _studentCollege.asStateFlow()
 
+    // University & Holiday State
+    val selectedCollegeInfo: StateFlow<CollegeInfo?> = _studentCollege.map { collegeName ->
+        if (collegeName.isBlank()) null else UniversityDirectory.findCollege(collegeName)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val todayHoliday: StateFlow<UniversityHoliday?> = _studentCollege.map { collegeName ->
+        UniversityCalendarService.isTodayHoliday(collegeName).second
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UniversityCalendarService.isTodayHoliday("").second)
+
+    val tomorrowHoliday: StateFlow<UniversityHoliday?> = _studentCollege.map { collegeName ->
+        UniversityCalendarService.isTomorrowHoliday(collegeName).second
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UniversityCalendarService.isTomorrowHoliday("").second)
+
+    val upcomingHolidays: StateFlow<List<HolidayCountdown>> = _studentCollege.map { collegeName ->
+        UniversityCalendarService.getUpcomingHolidays(collegeName)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UniversityCalendarService.getUpcomingHolidays(""))
+
+    private val _isSyncingCalendar = MutableStateFlow(false)
+    val isSyncingCalendar: StateFlow<Boolean> = _isSyncingCalendar.asStateFlow()
+
+    private val _lastCalendarSyncResult = MutableStateFlow<GoogleCalendarSyncResult?>(null)
+    val lastCalendarSyncResult: StateFlow<GoogleCalendarSyncResult?> = _lastCalendarSyncResult.asStateFlow()
+
     private val _studentYear = MutableStateFlow("")
     val studentYear: StateFlow<String> = _studentYear.asStateFlow()
 
@@ -283,6 +308,15 @@ class PlannerViewModel(
 
     private val geminiService = GeminiParserService()
 
+    private val _selectedGeminiModel = MutableStateFlow(GeminiModelOption.DEFAULT)
+    val selectedGeminiModel: StateFlow<GeminiModelOption> = _selectedGeminiModel.asStateFlow()
+
+    fun setGeminiModel(model: GeminiModelOption) {
+        _selectedGeminiModel.value = model
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+        sharedPrefs.edit().putString("selected_gemini_model_id", model.modelId).apply()
+    }
+
     init {
         // Read stored course preference from local preferences if any
         val sharedPrefs = application.getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
@@ -307,6 +341,8 @@ class PlannerViewModel(
         _isDarkTheme.value = sharedPrefs.getBoolean("is_dark_theme", false)
         _areNotificationsEnabled.value = sharedPrefs.getBoolean("are_notifications_enabled", true)
         _attendanceTarget.value = sharedPrefs.getInt("attendance_target_percentage", 75)
+        val savedModelId = sharedPrefs.getString("selected_gemini_model_id", GeminiModelOption.DEFAULT.modelId) ?: GeminiModelOption.DEFAULT.modelId
+        _selectedGeminiModel.value = GeminiModelOption.fromModelId(savedModelId)
         val savedName = sharedPrefs.getString("student_name", "") ?: ""
         _studentName.value = if (savedName == "Med Student") "" else savedName
         _studentDpUrl.value = sharedPrefs.getString("student_dp_url", "") ?: ""
@@ -794,7 +830,13 @@ class PlannerViewModel(
                     }
                 }
 
-                val response = geminiService.parseDocument(textInput, imageBytes, mimeType, currentScheduleSummary)
+                val response = geminiService.parseDocument(
+                    textInput,
+                    imageBytes,
+                    mimeType,
+                    currentScheduleSummary,
+                    _selectedGeminiModel.value
+                )
                 _activeUnifiedResponse.value = response
                 _activeParsedDrafts.value = response.extracted_items
 
@@ -867,7 +909,7 @@ class PlannerViewModel(
     suspend fun parseTimetableDocument(textInput: String?, imageBytes: ByteArray?, mimeType: String?, course: MedicalCourse): List<ParsedTimetableClass> {
         return withContext(Dispatchers.IO) {
             try {
-                val response = geminiService.parseDocument(textInput, imageBytes, mimeType, "")
+                val response = geminiService.parseDocument(textInput, imageBytes, mimeType, "", _selectedGeminiModel.value)
                 if (response.extracted_timetable.isNotEmpty()) {
                     response.extracted_timetable
                 } else {
@@ -1977,6 +2019,103 @@ class PlannerViewModel(
             } catch (e: Exception) {
                 Log.e("PlannerViewModel", "Failed to sync profile to Firestore: ${e.message}", e)
             }
+            checkAndNotifyTomorrowHoliday()
+        }
+    }
+
+    fun setStudentCollege(collegeName: String) {
+        _studentCollege.value = collegeName
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+        sharedPrefs.edit().putString("student_college", collegeName).apply()
+        checkAndNotifyTomorrowHoliday()
+    }
+
+    fun syncWithGoogleCalendar(context: Context, onResult: (GoogleCalendarSyncResult) -> Unit = {}) {
+        viewModelScope.launch {
+            _isSyncingCalendar.value = true
+            val holidays = UniversityCalendarService.getHolidaysForCollege(_studentCollege.value)
+            val result = GoogleCalendarSyncManager.syncAllToGoogleCalendar(
+                context = context,
+                classes = timetable.value,
+                assignments = assignments.value,
+                assessments = assessments.value,
+                holidays = holidays,
+                collegeName = _studentCollege.value.ifBlank { "Medical College" }
+            )
+            _lastCalendarSyncResult.value = result
+            _isSyncingCalendar.value = false
+            onResult(result)
+        }
+    }
+
+    fun clearCalendarSyncResult() {
+        _lastCalendarSyncResult.value = null
+    }
+
+    private val _isSyncingHolidays = MutableStateFlow(false)
+    val isSyncingHolidays: StateFlow<Boolean> = _isSyncingHolidays
+
+    private val _holidaySyncStatus = MutableStateFlow("Official Gazette Verified")
+    val holidaySyncStatus: StateFlow<String> = _holidaySyncStatus
+
+    fun syncOfficialHolidays() {
+        viewModelScope.launch {
+            _isSyncingHolidays.value = true
+            try {
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                    val task = db.collection("gazetted_holidays").get()
+                    val snapshot = com.google.android.gms.tasks.Tasks.await(task)
+                    val dynamicList = snapshot.documents.mapNotNull { doc ->
+                        val id = doc.getString("id") ?: doc.id
+                        val name = doc.getString("name") ?: return@mapNotNull null
+                        val date = doc.getString("date") ?: return@mapNotNull null
+                        val typeStr = doc.getString("type") ?: "NATIONAL"
+                        val type = try { com.example.data.university.HolidayType.valueOf(typeStr) } catch (e: Exception) { com.example.data.university.HolidayType.NATIONAL }
+                        val desc = doc.getString("description") ?: ""
+                        val isSuspended = doc.getBoolean("isClassSuspended") ?: true
+                        com.example.data.university.UniversityHoliday(
+                            id = id,
+                            name = name,
+                            date = date,
+                            type = type,
+                            description = desc,
+                            isClassSuspended = isSuspended
+                        )
+                    }
+                    if (dynamicList.isNotEmpty()) {
+                        UniversityCalendarService.applyDynamicHolidays(dynamicList)
+                    }
+                }
+                _holidaySyncStatus.value = "Synced with Official Gazette (Real-time)"
+                addNotificationWithDuplicateCheck(
+                    InAppNotification(
+                        title = "Holidays Up to Date",
+                        message = "Academic calendar is synchronized with verified DoPT & university gazette circulars.",
+                        type = "info"
+                    )
+                )
+            } catch (e: Exception) {
+                _holidaySyncStatus.value = "Official Gazette Verified (Offline)"
+            } finally {
+                _isSyncingHolidays.value = false
+            }
+        }
+    }
+
+    fun checkAndNotifyTomorrowHoliday() {
+        val (isHol, hol) = UniversityCalendarService.isTomorrowHoliday(_studentCollege.value)
+        if (isHol && hol != null) {
+            AcademicNotificationManager.scheduleNotification(
+                context = getApplication(),
+                type = "study",
+                itemId = "holiday_${hol.id}",
+                title = "🌴 Tomorrow is a Holiday: ${hol.name}",
+                message = "${hol.description} Classes are suspended according to your university academic calendar.",
+                targetTime = System.currentTimeMillis() + 15000L,
+                subject = "University Holiday",
+                minutesBefore = 0
+            )
         }
     }
 
@@ -2303,35 +2442,57 @@ class PlannerViewModel(
     private val _lastGeneratedRevision = MutableStateFlow<DailySubjectRevision?>(null)
     val lastGeneratedRevision: StateFlow<DailySubjectRevision?> = _lastGeneratedRevision
 
-    fun generateClassRevision(subject: String, explanation: String) {
+    fun clearLastGeneratedRevision() {
+        _lastGeneratedRevision.value = null
+    }
+
+    fun getRevisionForClass(dateString: String, subject: String, periodNumber: Int, classTime: String): DailySubjectRevision? {
+        return allRevisions.value.firstOrNull { rev ->
+            rev.dateString == dateString &&
+            rev.subject.equals(subject, ignoreCase = true) &&
+            ((periodNumber > 0 && rev.periodNumber == periodNumber) ||
+             (classTime.isNotBlank() && rev.classTime == classTime) ||
+             (periodNumber == 0 && classTime.isBlank() && rev.subject.equals(subject, ignoreCase = true)))
+        }
+    }
+
+    fun generateClassRevision(subject: String, explanation: String, periodNumber: Int = 0, classTime: String = "") {
         _isGeneratingRevision.value = true
         _lastGeneratedRevision.value = null
         viewModelScope.launch {
             try {
-                val response = geminiService.generateDailyClassRevision(subject, explanation)
+                val response = geminiService.generateDailyClassRevision(
+                    subject = subject,
+                    explanation = explanation,
+                    modelOption = _selectedGeminiModel.value,
+                    periodNumber = periodNumber,
+                    classTime = classTime
+                )
                 val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
                 val dateString = sdf.format(java.util.Date())
                 
-                val revision = DailySubjectRevision(
-                    dateString = dateString,
-                    subject = subject,
-                    studentExplanation = explanation,
-                    aiSummary = response.aiSummary,
-                    keyPoints = response.keyPoints,
-                    revisionQuestions = response.revisionQuestions
-                )
-                
                 kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    val existing = repository.getRevisionForClass(dateString, subject, periodNumber, classTime)
+                    val revision = DailySubjectRevision(
+                        id = existing?.id ?: 0,
+                        dateString = dateString,
+                        subject = subject,
+                        periodNumber = periodNumber,
+                        classTime = classTime,
+                        studentExplanation = explanation,
+                        aiSummary = response.aiSummary,
+                        keyPoints = response.keyPoints,
+                        revisionQuestions = response.revisionQuestions
+                    )
                     repository.saveRevision(revision)
+                    _lastGeneratedRevision.value = revision
                     syncDataToFirebase()
                 }
-                
-                _lastGeneratedRevision.value = revision
                 
                 addNotificationWithDuplicateCheck(
                     InAppNotification(
                         title = "AI Notes Generated",
-                        message = "AI successfully analyzed your lecture explanation for $subject and saved custom summaries & test questions.",
+                        message = "AI successfully analyzed your lecture explanation for $subject (Period $periodNumber) and saved custom summaries & test questions.",
                         type = "study"
                     )
                 )

@@ -256,6 +256,8 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
     // Daily Subject Revisions API
     fun getRevisionsForDate(dateString: String): Flow<List<DailySubjectRevision>> = plannerDao.getRevisionsForDate(dateString)
     fun getAllRevisions(): Flow<List<DailySubjectRevision>> = plannerDao.getAllRevisions()
+    suspend fun getRevisionForClass(dateString: String, subject: String, periodNumber: Int, classTime: String): DailySubjectRevision? =
+        plannerDao.getRevisionForClass(dateString, subject, periodNumber, classTime)
     suspend fun saveRevision(revision: DailySubjectRevision) = plannerDao.insertRevision(revision)
     suspend fun deleteRevision(id: Int) = plannerDao.deleteRevisionById(id)
 

@@ -1,9 +1,19 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -18,16 +28,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Assignment
 import com.example.data.model.Assessment
 import com.example.data.model.StudyTask
 import com.example.data.model.TimetableClass
+import com.example.data.university.CollegeCategory
+import com.example.data.university.CollegeInfo
+import com.example.data.university.HolidayCountdown
+import com.example.data.university.UniversityCalendarService
+import com.example.data.university.UniversityDirectory
+import com.example.data.university.UniversityHoliday
 import com.example.ui.viewmodel.PlannerViewModel
 import java.text.SimpleDateFormat
 import java.util.*
@@ -37,6 +56,7 @@ fun CalendarScreen(
     viewModel: PlannerViewModel,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val currentCalendar by viewModel.currentCalendarDate.collectAsStateWithLifecycle()
     val selectedCalendar by viewModel.selectedCalendarDate.collectAsStateWithLifecycle()
 
@@ -47,9 +67,66 @@ fun CalendarScreen(
     val attendanceRecords by viewModel.allAttendanceRecords.collectAsStateWithLifecycle()
     val revisions by viewModel.allRevisions.collectAsStateWithLifecycle()
 
+    // University & Holiday State
+    val studentCollege by viewModel.studentCollege.collectAsStateWithLifecycle()
+    val selectedCollegeInfo by viewModel.selectedCollegeInfo.collectAsStateWithLifecycle()
+    val todayHoliday by viewModel.todayHoliday.collectAsStateWithLifecycle()
+    val tomorrowHoliday by viewModel.tomorrowHoliday.collectAsStateWithLifecycle()
+    val upcomingHolidays by viewModel.upcomingHolidays.collectAsStateWithLifecycle()
+    val isSyncingCalendar by viewModel.isSyncingCalendar.collectAsStateWithLifecycle()
+    val lastCalendarSyncResult by viewModel.lastCalendarSyncResult.collectAsStateWithLifecycle()
+    val isSyncingHolidays by viewModel.isSyncingHolidays.collectAsStateWithLifecycle()
+    val holidaySyncStatus by viewModel.holidaySyncStatus.collectAsStateWithLifecycle()
+
+    var showChangeCollegeDialog by remember { mutableStateOf(false) }
+
     // Months and years state
     var activeMonth by remember { mutableStateOf(selectedCalendar.get(Calendar.MONTH)) }
     var activeYear by remember { mutableStateOf(selectedCalendar.get(Calendar.YEAR)) }
+
+    // Calendar sync permission launcher
+    val calendarPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions[Manifest.permission.READ_CALENDAR] == true &&
+                permissions[Manifest.permission.WRITE_CALENDAR] == true
+        if (granted) {
+            viewModel.syncWithGoogleCalendar(context)
+        } else {
+            Toast.makeText(context, "Calendar permission required to sync with Google Calendar.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun handleGoogleCalendarSync() {
+        val hasRead = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
+        val hasWrite = ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED
+        if (hasRead && hasWrite) {
+            viewModel.syncWithGoogleCalendar(context)
+        } else {
+            calendarPermissionLauncher.launch(
+                arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+            )
+        }
+    }
+
+    fun openGoogleCalendar() {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                data = Uri.parse("content://com.android.calendar/time/${selectedCalendar.timeInMillis}")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(context, "No default Calendar app found on device.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Feedback for Google Calendar Sync
+    LaunchedEffect(lastCalendarSyncResult) {
+        lastCalendarSyncResult?.let { result ->
+            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+        }
+    }
 
     val daysInMonth = remember(activeMonth, activeYear) {
         val cal = Calendar.getInstance().apply {
@@ -99,11 +176,15 @@ fun CalendarScreen(
             else -> 1
         }
 
+        val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(cal.time)
+        val holiday = UniversityCalendarService.getHolidayForDate(dateStr, studentCollege)
+
         return DailyItems(
             assignments = assignments.filter { it.dueDate in startMs until endMs },
             assessments = assessments.filter { it.date in startMs until endMs },
             studyTasks = studyTasks.filter { it.dueDate in startMs until endMs },
-            classes = timetable.filter { it.dayOfWeek == dayOfWeek }
+            classes = timetable.filter { it.dayOfWeek == dayOfWeek },
+            holiday = holiday
         )
     }
 
@@ -139,28 +220,196 @@ fun CalendarScreen(
                 .fillMaxSize()
                 .statusBarsPadding()
         ) {
-            // Header
-            Row(
+            // Header with University Indicator and Google Sync Action
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
             ) {
-                Column {
-                    Text(
-                        text = "Academic Calendar",
-                        style = MaterialTheme.typography.headlineMedium.copy(
-                            fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = (-0.5).sp
-                        ),
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Text(
-                        text = "Monthly view of tests and deadlines",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Academic Calendar",
+                            style = MaterialTheme.typography.headlineMedium.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = (-0.5).sp
+                            ),
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { showChangeCollegeDialog = true }
+                                .padding(vertical = 2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.School,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = selectedCollegeInfo?.shortName ?: studentCollege.take(30),
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "Change University",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    // Google Sync and Open Calendar Actions
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = { openGoogleCalendar() },
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CalendarMonth,
+                                contentDescription = "Open Device Calendar",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        Button(
+                            onClick = { handleGoogleCalendarSync() },
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .height(40.dp)
+                                .testTag("sync_google_calendar_button")
+                        ) {
+                            if (isSyncingCalendar) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Syncing...", style = MaterialTheme.typography.labelMedium)
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Sync,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Sync G-Cal", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                            }
+                        }
+                    }
+                }
+
+                // Tomorrow Holiday Alert Banner (High Priority)
+                if (tomorrowHoliday != null) {
+                    val hol = tomorrowHoliday!!
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0xFFFEF3C7),
+                        border = BorderStroke(1.dp, Color(0xFFF59E0B)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("tomorrow_holiday_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xFFF59E0B),
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Celebration,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "🌴 Tomorrow is a Holiday: ${hol.name}!",
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color(0xFF92400E)
+                                    )
+                                )
+                                Text(
+                                    text = "Official university holiday. Lectures & clinical postings suspended.",
+                                    style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF78350F))
+                                )
+                            }
+                        }
+                    }
+                } else if (todayHoliday != null) {
+                    val hol = todayHoliday!!
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0xFFE0F2FE),
+                        border = BorderStroke(1.dp, Color(0xFF38BDF8)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xFF0284C7),
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.BeachAccess,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "🎉 Today is a Holiday: ${hol.name}",
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color(0xFF075985)
+                                    )
+                                )
+                                Text(
+                                    text = "${hol.description} • Enjoy your academic recess.",
+                                    style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF0C4A6E))
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -168,7 +417,7 @@ fun CalendarScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -221,7 +470,7 @@ fun CalendarScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             // Calendar Days Grid
             CalendarDaysGrid(
@@ -241,19 +490,98 @@ fun CalendarScreen(
                     CalendarDots(
                         hasClasses = items.classes.isNotEmpty(),
                         hasAssignments = items.assignments.isNotEmpty(),
-                        hasAssessments = items.assessments.isNotEmpty()
+                        hasAssessments = items.assessments.isNotEmpty(),
+                        hasHoliday = items.holiday != null
                     )
                 }
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            // Upcoming Holidays Row
+            if (upcomingHolidays.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Official University Holidays",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = "$holidaySyncStatus • ${upcomingHolidays.size} scheduled",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(
+                        onClick = { viewModel.syncOfficialHolidays() },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("btn_sync_holidays")
+                    ) {
+                        if (isSyncingHolidays) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Sync,
+                                contentDescription = "Sync Official Gazette Holidays",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(upcomingHolidays, key = { it.holiday.id }) { item ->
+                        UpcomingHolidayChip(
+                            item = item,
+                            onClick = {
+                                // Jump calendar to holiday date
+                                try {
+                                    val parts = item.holiday.date.split("-")
+                                    if (parts.size == 3) {
+                                        val y = parts[0].toInt()
+                                        val m = parts[1].toInt() - 1
+                                        val d = parts[2].toInt()
+                                        activeYear = y
+                                        activeMonth = m
+                                        val cal = Calendar.getInstance().apply {
+                                            set(Calendar.YEAR, y)
+                                            set(Calendar.MONTH, m)
+                                            set(Calendar.DAY_OF_MONTH, d)
+                                        }
+                                        viewModel.selectCalendarDate(cal)
+                                    }
+                                } catch (e: Exception) { /* no-op */ }
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Day Agenda List
             Text(
                 text = "Agenda for " + SimpleDateFormat("EEEE, MMMM dd", Locale.getDefault()).format(selectedCalendar.time),
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)
             )
 
             LazyColumn(
@@ -263,12 +591,24 @@ fun CalendarScreen(
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                // Official Holiday Card if this day is a holiday
+                if (selectedDateItems.holiday != null) {
+                    item {
+                        OfficialHolidayAgendaCard(
+                            holiday = selectedDateItems.holiday!!,
+                            collegeName = selectedCollegeInfo?.shortName ?: studentCollege
+                        )
+                    }
+                }
+
                 if (isDiaryEmpty) {
                     item {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f),
                             shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.fillMaxWidth().padding(top = 10.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
                         ) {
                             Box(
                                 modifier = Modifier.padding(24.dp),
@@ -286,7 +626,7 @@ fun CalendarScreen(
                 } else {
                     // Render exams
                     if (selectedDateItems.assessments.isNotEmpty()) {
-                        item { Text("Assessments", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.error) }
+                        item { Text("Assessments & Exams", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.error) }
                         items(selectedDateItems.assessments, key = { "calendar_assessment_${it.id}" }) { exam ->
                             AgendaRow(title = exam.title, subtitle = "${exam.subject} • ${exam.type}", icon = Icons.Default.Warning, color = MaterialTheme.colorScheme.error)
                         }
@@ -334,49 +674,37 @@ fun CalendarScreen(
                         }
                     }
 
-                    // Render AI Class Revisions (Academic Journal)
+                    // Render AI Revisions
                     if (dayRevisions.isNotEmpty()) {
-                        item { Text("AI Lecture Revisions & Smart Notes", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.secondary) }
+                        item { Text("AI Lecture Revisions & Test Sets", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.tertiary) }
                         items(dayRevisions, key = { "calendar_rev_${it.id}" }) { rev ->
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
+                            Surface(
                                 shape = RoundedCornerShape(16.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
-                                )
+                                color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.25f),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f)),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(
-                                    modifier = Modifier.padding(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Row(
-                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                imageVector = Icons.Default.AutoAwesome,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.secondary,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = rev.subject,
-                                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                                            )
-                                        }
+                                        Text(
+                                            text = if (rev.periodNumber > 0) "🧠 ${rev.subject} (Period ${rev.periodNumber})" else "🧠 ${rev.subject}",
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.tertiary
+                                        )
+                                        Text(
+                                            text = if (rev.classTime.isNotBlank()) rev.classTime else rev.studentExplanation.take(25),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     }
 
-                                    Divider(color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.1f))
-
-                                    Text(
-                                        text = "Clinical Summary",
-                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = MaterialTheme.colorScheme.secondary
-                                    )
                                     Text(
                                         text = rev.aiSummary,
                                         style = MaterialTheme.typography.bodyMedium,
@@ -389,7 +717,7 @@ fun CalendarScreen(
                                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                                             color = MaterialTheme.colorScheme.secondary
                                         )
-                                        rev.keyPoints.split("|").forEach { pt ->
+                                        rev.keyPoints.split(Regex("[|\n]")).forEach { pt ->
                                             if (pt.isNotBlank()) {
                                                 Text(
                                                     text = "• ${pt.trim()}",
@@ -406,7 +734,7 @@ fun CalendarScreen(
                                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                                             color = MaterialTheme.colorScheme.secondary
                                         )
-                                        rev.revisionQuestions.split("|").forEach { q ->
+                                        rev.revisionQuestions.split(Regex("[|\n]")).forEach { q ->
                                             if (q.isNotBlank()) {
                                                 Text(
                                                     text = "❓ ${q.trim()}",
@@ -426,21 +754,328 @@ fun CalendarScreen(
             }
         }
     }
+
+    // Change College / University Dialog
+    if (showChangeCollegeDialog) {
+        ChangeCollegeSelectionDialog(
+            currentCollege = studentCollege,
+            onSelectCollege = { newCol ->
+                viewModel.setStudentCollege(newCol)
+                showChangeCollegeDialog = false
+                Toast.makeText(context, "University updated to $newCol. Calendar synced!", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showChangeCollegeDialog = false }
+        )
+    }
+}
+
+@Composable
+fun OfficialHolidayAgendaCard(
+    holiday: UniversityHoliday,
+    collegeName: String
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFFFEF3C7),
+        border = BorderStroke(1.5.dp, Color(0xFFF59E0B)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("official_holiday_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Celebration,
+                        contentDescription = null,
+                        tint = Color(0xFFD97706),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Official University Holiday",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color(0xFFB45309)
+                        )
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = Color(0xFFFDE68A)
+                ) {
+                    Text(
+                        text = holiday.type.displayName,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF92400E)
+                        ),
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = holiday.name,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFF78350F)
+                )
+            )
+
+            Text(
+                text = holiday.description,
+                style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF92400E))
+            )
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 4.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.EventBusy,
+                    contentDescription = null,
+                    tint = Color(0xFFB45309),
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Theory classes, practicals, and clinical postings suspended.",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF78350F)
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun UpcomingHolidayChip(
+    item: HolidayCountdown,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+        modifier = Modifier.width(180.dp)
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (item.daysRemaining <= 1) Color(0xFFFEF3C7) else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                ) {
+                    Text(
+                        text = item.relativeLabel,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = if (item.daysRemaining <= 1) Color(0xFF92400E) else MaterialTheme.colorScheme.primary
+                        ),
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+
+                val dateLabel = remember(item.holiday.date) {
+                    try {
+                        val inFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+                        val outFormat = java.text.SimpleDateFormat("dd MMM", java.util.Locale.getDefault())
+                        inFormat.parse(item.holiday.date)?.let { outFormat.format(it) } ?: item.holiday.date
+                    } catch (e: Exception) {
+                        item.holiday.date
+                    }
+                }
+                Text(
+                    text = dateLabel,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = item.holiday.name,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Text(
+                text = item.holiday.type.displayName,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+fun ChangeCollegeSelectionDialog(
+    currentCollege: String,
+    onSelectCollege: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var query by remember { mutableStateOf("") }
+    var selectedCategory by remember { mutableStateOf<CollegeCategory?>(null) }
+
+    val colleges = remember(query, selectedCategory) {
+        UniversityDirectory.filterColleges(query, selectedCategory)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Switch University / College",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+            )
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Selecting your college automatically updates your calendar with official academic holidays, exams, and university schedules.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search 40+ medical & AYUSH colleges...") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Chips
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    item {
+                        FilterChip(
+                            selected = selectedCategory == null,
+                            onClick = { selectedCategory = null },
+                            label = { Text("All") }
+                        )
+                    }
+                    item {
+                        FilterChip(
+                            selected = selectedCategory == CollegeCategory.AYUSH,
+                            onClick = { selectedCategory = if (selectedCategory == CollegeCategory.AYUSH) null else CollegeCategory.AYUSH },
+                            label = { Text("🌿 AYUSH") }
+                        )
+                    }
+                    item {
+                        FilterChip(
+                            selected = selectedCategory == CollegeCategory.CENTRAL_INI,
+                            onClick = { selectedCategory = if (selectedCategory == CollegeCategory.CENTRAL_INI) null else CollegeCategory.CENTRAL_INI },
+                            label = { Text("AIIMS / INI") }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 280.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(colleges, key = { it.id }) { col ->
+                        val isSelected = currentCollege.equals(col.name, ignoreCase = true) ||
+                                currentCollege.equals(col.shortName, ignoreCase = true)
+
+                        Surface(
+                            onClick = { onSelectCollege(col.name) },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                            border = BorderStroke(
+                                width = if (isSelected) 2.dp else 1.dp,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = col.shortName,
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "${col.name} • ${col.state}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = "Selected",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
 
 data class DailyItems(
     val assignments: List<Assignment>,
     val assessments: List<Assessment>,
     val studyTasks: List<StudyTask>,
-    val classes: List<TimetableClass>
+    val classes: List<TimetableClass>,
+    val holiday: UniversityHoliday? = null
 ) {
-    fun isEmpty() = assignments.isEmpty() && assessments.isEmpty() && studyTasks.isEmpty() && classes.isEmpty()
+    fun isEmpty() = assignments.isEmpty() && assessments.isEmpty() && studyTasks.isEmpty() && classes.isEmpty() && holiday == null
 }
 
 data class CalendarDots(
     val hasClasses: Boolean,
     val hasAssignments: Boolean,
-    val hasAssessments: Boolean
+    val hasAssessments: Boolean,
+    val hasHoliday: Boolean = false
 )
 
 @Composable
@@ -484,8 +1119,11 @@ fun CalendarDaysGrid(
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(12.dp))
                         .background(
-                            if (isSelected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
+                            when {
+                                isSelected -> MaterialTheme.colorScheme.primary
+                                dots.hasHoliday -> Color(0xFFFEF3C7)
+                                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
+                            }
                         )
                         .clickable { onDayClick(day) }
                         .testTag("calendar_day_$day"),
@@ -498,13 +1136,25 @@ fun CalendarDaysGrid(
                         Text(
                             text = day.toString(),
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                            color = when {
+                                isSelected -> MaterialTheme.colorScheme.onPrimary
+                                dots.hasHoliday -> Color(0xFF92400E)
+                                else -> MaterialTheme.colorScheme.onSurface
+                            }
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         // Indicators Row
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
+                            if (dots.hasHoliday) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(4.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isSelected) Color.White else Color(0xFFF59E0B))
+                                )
+                            }
                             if (dots.hasAssessments) {
                                 Box(
                                     modifier = Modifier

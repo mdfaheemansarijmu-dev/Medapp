@@ -38,6 +38,7 @@ import com.example.data.model.Assignment
 import com.example.data.model.Assessment
 import com.example.data.model.StudyTask
 import com.example.data.model.TimetableClass
+import com.example.data.university.UniversityHoliday
 import com.example.util.OverallAttendanceSummary
 import com.example.ui.viewmodel.PlannerViewModel
 import com.example.ui.viewmodel.Screen
@@ -118,6 +119,9 @@ fun DashboardScreen(
     val assessments by viewModel.assessments.collectAsStateWithLifecycle()
     val studyTasks by viewModel.studyTasks.collectAsStateWithLifecycle()
     val notifications by viewModel.notifications.collectAsStateWithLifecycle()
+    val todayHoliday by viewModel.todayHoliday.collectAsStateWithLifecycle()
+    val tomorrowHoliday by viewModel.tomorrowHoliday.collectAsStateWithLifecycle()
+    val studentCollege by viewModel.studentCollege.collectAsStateWithLifecycle()
 
     val today = remember(liveClock) { Calendar.getInstance() }
 
@@ -321,6 +325,27 @@ fun DashboardScreen(
                 contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                // University Holiday Alert Card
+                if (tomorrowHoliday != null) {
+                    item {
+                        UniversityHolidayAlertCard(
+                            isTomorrow = true,
+                            holiday = tomorrowHoliday!!,
+                            collegeName = studentCollege,
+                            onViewCalendar = { viewModel.navigateTo(Screen.Calendar) }
+                        )
+                    }
+                } else if (todayHoliday != null) {
+                    item {
+                        UniversityHolidayAlertCard(
+                            isTomorrow = false,
+                            holiday = todayHoliday!!,
+                            collegeName = studentCollege,
+                            onViewCalendar = { viewModel.navigateTo(Screen.Calendar) }
+                        )
+                    }
+                }
+
                 // Class Schedule Panel (Interactive Widget)
                 item {
                     LiveTimetableWidget(liveSchedule, viewModel)
@@ -563,6 +588,7 @@ fun LiveTimetableWidget(
     viewModel: PlannerViewModel
 ) {
     val attendanceRecords by viewModel.allAttendanceRecords.collectAsStateWithLifecycle()
+    val allRevisions by viewModel.allRevisions.collectAsStateWithLifecycle()
     val sdf = remember { java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()) }
     val todayStr = remember { sdf.format(java.util.Date()) }
 
@@ -576,14 +602,73 @@ fun LiveTimetableWidget(
     val isGeneratingRevision by viewModel.isGeneratingRevision.collectAsStateWithLifecycle()
     val lastGeneratedRevision by viewModel.lastGeneratedRevision.collectAsStateWithLifecycle()
 
+    // Find if the currently selected class has an existing revision recorded for today
+    val existingClassRevision = remember(selectedClassForRevision, allRevisions, todayStr) {
+        val cls = selectedClassForRevision ?: return@remember null
+        allRevisions.firstOrNull { rev ->
+            rev.dateString == todayStr &&
+            rev.subject.equals(cls.subject, ignoreCase = true) &&
+            ((cls.periodNumber > 0 && rev.periodNumber == cls.periodNumber) ||
+             (rev.classTime.isNotBlank() && rev.classTime == "${cls.startTime}-${cls.endTime}") ||
+             (rev.periodNumber == 0 && rev.classTime.isBlank() && rev.subject.equals(cls.subject, ignoreCase = true)))
+        }
+    }
+
+    // Active revision strictly matching this exact class and period/hour
+    val currentRevisionForClass = remember(selectedClassForRevision, lastGeneratedRevision, existingClassRevision) {
+        val cls = selectedClassForRevision ?: return@remember null
+        val generated = lastGeneratedRevision?.takeIf {
+            it.subject.equals(cls.subject, ignoreCase = true) &&
+            (cls.periodNumber == 0 || it.periodNumber == cls.periodNumber || it.classTime == "${cls.startTime}-${cls.endTime}")
+        }
+        generated ?: existingClassRevision
+    }
+
+    LaunchedEffect(selectedClassForRevision) {
+        val cls = selectedClassForRevision
+        if (cls != null) {
+            viewModel.clearLastGeneratedRevision()
+            val existing = allRevisions.firstOrNull { rev ->
+                rev.dateString == todayStr &&
+                rev.subject.equals(cls.subject, ignoreCase = true) &&
+                ((cls.periodNumber > 0 && rev.periodNumber == cls.periodNumber) ||
+                 (rev.classTime.isNotBlank() && rev.classTime == "${cls.startTime}-${cls.endTime}") ||
+                 (rev.periodNumber == 0 && rev.classTime.isBlank() && rev.subject.equals(cls.subject, ignoreCase = true)))
+            }
+            explanationText = existing?.studentExplanation ?: ""
+        } else {
+            explanationText = ""
+            viewModel.clearLastGeneratedRevision()
+        }
+    }
+
     if (selectedClassForRevision != null) {
+        val cls = selectedClassForRevision!!
         AlertDialog(
-            onDismissRequest = { selectedClassForRevision = null },
+            onDismissRequest = {
+                selectedClassForRevision = null
+                explanationText = ""
+                viewModel.clearLastGeneratedRevision()
+            },
             title = {
-                Text(
-                    text = "AI Revision: ${selectedClassForRevision?.subject}",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                )
+                Column {
+                    Text(
+                        text = "AI Revision: ${cls.subject}",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = "Period ${cls.periodNumber} • ${cls.startTime} - ${cls.endTime}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
             },
             text = {
                 Column(
@@ -592,22 +677,37 @@ fun LiveTimetableWidget(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        text = "Dictate or explain what you learned in this lecture. MedPulse AI will analyze your notes, summarize them into a clinical textbook-style guide, and generate study revision questions.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (currentRevisionForClass == null) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "✨ New Session for this Hour: Dictate or enter today's topic and what you learned in ${cls.subject} (Period ${cls.periodNumber}). MedPulse AI will create high-yield summaries, key points, and revision test questions specifically for this class hour.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "Class notes & AI revision set for Period ${cls.periodNumber}. You can review below or update your topic notes to regenerate.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
 
                     OutlinedTextField(
                         value = explanationText,
                         onValueChange = { explanationText = it },
-                        label = { Text("Your Explanation / Lecture Notes") },
-                        placeholder = { Text("Today we studied the pathogenesis of atherosclerosis, LDL accumulation, foam cell formation, and fibrous plaque build up...") },
+                        label = { Text("Today's Topic / Lecture Notes (Period ${cls.periodNumber})") },
+                        placeholder = { Text("Enter what was taught in ${cls.subject} during this hour...") },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(140.dp)
+                            .height(130.dp)
                             .testTag("revision_explanation_input"),
-                        maxLines = 10
+                        maxLines = 8
                     )
 
                     if (isGeneratingRevision) {
@@ -618,34 +718,46 @@ fun LiveTimetableWidget(
                             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                "AI is analyzing medical concepts & generating revision questions...",
+                                "AI is analyzing medical concepts for Period ${cls.periodNumber}...",
                                 style = MaterialTheme.typography.labelSmall,
                                 textAlign = TextAlign.Center
                             )
                         }
                     }
 
-                    if (lastGeneratedRevision != null) {
+                    if (currentRevisionForClass != null) {
                         Card(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)),
                             shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("✨ AI CLINICAL NOTES SUMMARY", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
-                                Text(lastGeneratedRevision!!.aiSummary, style = MaterialTheme.typography.bodySmall)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("✨ AI CLINICAL NOTES SUMMARY", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
+                                    Text("Period ${currentRevisionForClass.periodNumber}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Text(currentRevisionForClass.aiSummary, style = MaterialTheme.typography.bodySmall)
                                 
-                                Text("📌 KEY POINTS EXTRACTED", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
-                                lastGeneratedRevision!!.keyPoints.split("|").forEach { pt ->
-                                    if (pt.isNotBlank()) {
-                                        Text("• ${pt.trim()}", style = MaterialTheme.typography.bodySmall)
+                                if (currentRevisionForClass.keyPoints.isNotBlank()) {
+                                    Text("📌 KEY POINTS EXTRACTED", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
+                                    currentRevisionForClass.keyPoints.split(Regex("[|\n]")).forEach { pt ->
+                                        if (pt.isNotBlank()) {
+                                            Text("• ${pt.trim()}", style = MaterialTheme.typography.bodySmall)
+                                        }
                                     }
                                 }
 
-                                Text("❓ REVISION QUESTIONS", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
-                                lastGeneratedRevision!!.revisionQuestions.split("|").forEach { q ->
-                                    if (q.isNotBlank()) {
-                                        Text("❓ ${q.trim()}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                if (currentRevisionForClass.revisionQuestions.isNotBlank()) {
+                                    Text("❓ REVISION QUESTIONS", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
+                                    currentRevisionForClass.revisionQuestions.split(Regex("[|\n]")).forEach { q ->
+                                        if (q.isNotBlank()) {
+                                            Text("❓ ${q.trim()}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                 }
                             }
@@ -657,11 +769,16 @@ fun LiveTimetableWidget(
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    if (lastGeneratedRevision == null) {
+                    if (currentRevisionForClass == null) {
                         Button(
                             onClick = {
                                 if (explanationText.isNotBlank()) {
-                                    viewModel.generateClassRevision(selectedClassForRevision!!.subject, explanationText)
+                                    viewModel.generateClassRevision(
+                                        subject = cls.subject,
+                                        explanation = explanationText,
+                                        periodNumber = cls.periodNumber,
+                                        classTime = "${cls.startTime}-${cls.endTime}"
+                                    )
                                 }
                             },
                             enabled = explanationText.isNotBlank() && !isGeneratingRevision,
@@ -670,22 +787,42 @@ fun LiveTimetableWidget(
                             Text("Generate AI Notes")
                         }
                     } else {
+                        if (explanationText != currentRevisionForClass.studentExplanation && explanationText.isNotBlank()) {
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.generateClassRevision(
+                                        subject = cls.subject,
+                                        explanation = explanationText,
+                                        periodNumber = cls.periodNumber,
+                                        classTime = "${cls.startTime}-${cls.endTime}"
+                                    )
+                                },
+                                enabled = !isGeneratingRevision
+                            ) {
+                                Text("Update Notes")
+                            }
+                        }
                         Button(
                             onClick = {
                                 selectedClassForRevision = null
                                 explanationText = ""
+                                viewModel.clearLastGeneratedRevision()
                             }
                         ) {
-                            Text("Save & Close")
+                            Text("Done")
                         }
                     }
                 }
             },
             dismissButton = {
-                if (lastGeneratedRevision == null) {
-                    TextButton(onClick = { selectedClassForRevision = null }) {
-                        Text("Cancel")
+                TextButton(
+                    onClick = {
+                        selectedClassForRevision = null
+                        explanationText = ""
+                        viewModel.clearLastGeneratedRevision()
                     }
+                ) {
+                    Text(if (currentRevisionForClass == null) "Cancel" else "Close")
                 }
             }
         )
@@ -940,14 +1077,21 @@ fun LiveTimetableWidget(
                                         }
 
                                         if (attendance.isPresent || attendance.status == "PRESENT") {
+                                            val hasPeriodRevision = allRevisions.any { rev ->
+                                                rev.dateString == todayStr &&
+                                                rev.subject.equals(cls.subject, ignoreCase = true) &&
+                                                ((cls.periodNumber > 0 && rev.periodNumber == cls.periodNumber) ||
+                                                 (rev.classTime.isNotBlank() && rev.classTime == "${cls.startTime}-${cls.endTime}") ||
+                                                 (rev.periodNumber == 0 && rev.classTime.isBlank()))
+                                            }
+
                                             FilledTonalButton(
                                                 onClick = {
                                                     selectedClassForRevision = cls
-                                                    explanationText = ""
                                                 },
                                                 colors = ButtonDefaults.filledTonalButtonColors(
-                                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                                    containerColor = if (hasPeriodRevision) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+                                                    contentColor = if (hasPeriodRevision) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer
                                                 ),
                                                 shape = RoundedCornerShape(10.dp),
                                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
@@ -955,9 +1099,16 @@ fun LiveTimetableWidget(
                                                     .height(34.dp)
                                                     .testTag("btn_ai_revision_${cls.id}")
                                             ) {
-                                                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(13.dp))
+                                                Icon(
+                                                    imageVector = if (hasPeriodRevision) Icons.Default.CheckCircle else Icons.Default.AutoAwesome,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(13.dp)
+                                                )
                                                 Spacer(modifier = Modifier.width(5.dp))
-                                                Text("AI Revision Notes", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
+                                                Text(
+                                                    text = if (hasPeriodRevision) "AI Notes ✓" else "+ AI Notes",
+                                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                                                )
                                             }
                                         }
                                     }
@@ -1847,4 +1998,84 @@ fun RemainingClassesDialog(
         },
         shape = RoundedCornerShape(24.dp)
     )
+}
+
+@Composable
+fun UniversityHolidayAlertCard(
+    isTomorrow: Boolean,
+    holiday: UniversityHoliday,
+    collegeName: String,
+    onViewCalendar: () -> Unit
+) {
+    Surface(
+        onClick = onViewCalendar,
+        shape = RoundedCornerShape(18.dp),
+        color = if (isTomorrow) Color(0xFFFEF3C7) else Color(0xFFE0F2FE),
+        border = BorderStroke(1.5.dp, if (isTomorrow) Color(0xFFF59E0B) else Color(0xFF38BDF8)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(if (isTomorrow) "tomorrow_holiday_alert" else "today_holiday_alert")
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = if (isTomorrow) Color(0xFFF59E0B) else Color(0xFF0284C7),
+                modifier = Modifier.size(42.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (isTomorrow) Icons.Default.Celebration else Icons.Default.BeachAccess,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isTomorrow) "🌴 TOMORROW IS A HOLIDAY" else "🎉 TODAY IS A HOLIDAY",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (isTomorrow) Color(0xFFB45309) else Color(0xFF0369A1)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                Text(
+                    text = "${holiday.name} • Classes Suspended",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = if (isTomorrow) Color(0xFF78350F) else Color(0xFF0C4A6E)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                Text(
+                    text = "Per your university schedule. Tap to open calendar.",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = if (isTomorrow) Color(0xFF92400E) else Color(0xFF075985)
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = "View Calendar",
+                tint = if (isTomorrow) Color(0xFFB45309) else Color(0xFF0369A1),
+                modifier = Modifier.size(22.dp)
+            )
+        }
+    }
 }

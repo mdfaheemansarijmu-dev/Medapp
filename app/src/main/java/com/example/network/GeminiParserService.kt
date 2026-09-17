@@ -139,7 +139,8 @@ class GeminiParserService {
         textInput: String?,
         imageBytes: ByteArray?,
         mimeType: String?,
-        currentScheduleContext: String? = null
+        currentScheduleContext: String? = null,
+        modelOption: GeminiModelOption = GeminiModelOption.DEFAULT
     ): UnifiedParserResponse = withContext(Dispatchers.IO) {
         val hasImage = imageBytes != null && mimeType != null
         val inputPrompt = textInput ?: "Extract content from the provided attachment."
@@ -280,17 +281,24 @@ class GeminiParserService {
         )
 
         var jsonText: String? = null
+        val targetModel = modelOption.modelId
         try {
-            Log.d("GeminiParser", "Calling Gemini directly via gemini-2.5-flash...")
-            val response = RetrofitClient.service.generateContent("gemini-2.5-flash", apiKey, request)
+            Log.d("GeminiParser", "Calling Gemini directly via $targetModel (${modelOption.displayName})...")
+            val response = RetrofitClient.service.generateContent(targetModel, apiKey, request)
             jsonText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
         } catch (e: Exception) {
-            Log.e("GeminiParser", "gemini-2.5-flash call failed: ${e.message}. Trying gemini-3.5-flash...", e)
+            Log.e("GeminiParser", "$targetModel call failed: ${e.message}. Trying backup model...", e)
+            val fallbackModel = if (targetModel != GeminiModelOption.FLASH_35.modelId) {
+                GeminiModelOption.FLASH_35.modelId
+            } else {
+                "gemini-flash-latest"
+            }
             try {
-                val response = RetrofitClient.service.generateContent("gemini-3.5-flash", apiKey, request)
+                Log.d("GeminiParser", "Calling fallback model $fallbackModel...")
+                val response = RetrofitClient.service.generateContent(fallbackModel, apiKey, request)
                 jsonText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
             } catch (e2: Exception) {
-                Log.e("GeminiParser", "gemini-3.5-flash call failed: ${e2.message}", e2)
+                Log.e("GeminiParser", "$fallbackModel call failed: ${e2.message}", e2)
             }
         }
 
@@ -540,12 +548,20 @@ class GeminiParserService {
         return response.extracted_items
     }
 
-    suspend fun generateDailyClassRevision(subject: String, explanation: String): DailySubjectRevision = withContext(Dispatchers.IO) {
+    suspend fun generateDailyClassRevision(
+        subject: String,
+        explanation: String,
+        modelOption: GeminiModelOption = GeminiModelOption.DEFAULT,
+        periodNumber: Int = 0,
+        classTime: String = ""
+    ): DailySubjectRevision = withContext(Dispatchers.IO) {
         if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
             // Local fallback
             return@withContext DailySubjectRevision(
                 dateString = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date()),
                 subject = subject,
+                periodNumber = periodNumber,
+                classTime = classTime,
                 studentExplanation = explanation,
                 aiSummary = "Here is an AI-generated study summary for $subject based on your notes about: \"$explanation\".",
                 keyPoints = "• Important medical mechanism\n• High-yield exam criteria\n• Clinical significance of the pathology",
@@ -589,7 +605,19 @@ class GeminiParserService {
         )
 
         try {
-            val response = RetrofitClient.service.generateContent("gemini-2.5-flash", apiKey, request)
+            val targetModel = modelOption.modelId
+            val response = try {
+                Log.d("GeminiParser", "generateDailyClassRevision calling $targetModel (${modelOption.displayName})...")
+                RetrofitClient.service.generateContent(targetModel, apiKey, request)
+            } catch (e: Exception) {
+                val fallbackModel = if (targetModel != GeminiModelOption.FLASH_35.modelId) {
+                    GeminiModelOption.FLASH_35.modelId
+                } else {
+                    "gemini-flash-latest"
+                }
+                Log.e("GeminiParser", "$targetModel revision failed: ${e.message}. Calling fallback $fallbackModel...", e)
+                RetrofitClient.service.generateContent(fallbackModel, apiKey, request)
+            }
             val jsonText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
             if (jsonText != null) {
                 val moshi = RetrofitClient.moshiParser
@@ -603,6 +631,8 @@ class GeminiParserService {
                     return@withContext DailySubjectRevision(
                         dateString = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date()),
                         subject = subject,
+                        periodNumber = periodNumber,
+                        classTime = classTime,
                         studentExplanation = explanation,
                         aiSummary = summary,
                         keyPoints = keyPointsList.joinToString("\n") { it.toString() },
@@ -618,6 +648,8 @@ class GeminiParserService {
         DailySubjectRevision(
             dateString = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date()),
             subject = subject,
+            periodNumber = periodNumber,
+            classTime = classTime,
             studentExplanation = explanation,
             aiSummary = "Here is an AI-generated study summary for $subject based on your notes about: \"$explanation\".",
             keyPoints = "• Important medical mechanism\n• High-yield exam criteria\n• Clinical significance of the pathology",

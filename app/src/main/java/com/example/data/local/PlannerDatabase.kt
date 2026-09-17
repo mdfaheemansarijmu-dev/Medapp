@@ -182,6 +182,9 @@ interface PlannerDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRevision(revision: DailySubjectRevision)
 
+    @Query("SELECT * FROM daily_subject_revisions WHERE dateString = :dateString AND subject = :subject AND (periodNumber = :periodNumber OR classTime = :classTime) LIMIT 1")
+    suspend fun getRevisionForClass(dateString: String, subject: String, periodNumber: Int, classTime: String): DailySubjectRevision?
+
     @Query("DELETE FROM daily_subject_revisions WHERE id = :id")
     suspend fun deleteRevisionById(id: Int)
 
@@ -276,7 +279,7 @@ interface PlannerDao {
         AttendanceRecord::class,
         DailySubjectRevision::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class PlannerDatabase : RoomDatabase() {

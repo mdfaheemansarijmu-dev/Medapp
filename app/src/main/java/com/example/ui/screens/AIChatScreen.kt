@@ -34,6 +34,7 @@ import com.example.data.model.ChatMessage
 import com.example.data.model.ParsedItem
 import com.example.data.model.UnifiedParserResponse
 import com.example.data.model.ParsedTimetableClass
+import com.example.data.model.GeminiModelOption
 import com.example.ui.viewmodel.PlannerViewModel
 import kotlinx.coroutines.launch
 
@@ -48,6 +49,8 @@ fun AIChatScreen(
     val isParsing by viewModel.isParsingMessage.collectAsStateWithLifecycle()
     val activeDrafts by viewModel.activeParsedDrafts.collectAsStateWithLifecycle()
     val activeResponse by viewModel.activeUnifiedResponse.collectAsStateWithLifecycle()
+    val selectedModel by viewModel.selectedGeminiModel.collectAsStateWithLifecycle()
+    var showModelPickerSheet by remember { mutableStateOf(false) }
 
     var textInput by remember { mutableStateOf("") }
     var selectedAttachmentBytes by remember { mutableStateOf<ByteArray?>(null) }
@@ -216,21 +219,48 @@ fun AIChatScreen(
                                 ),
                                 color = MaterialTheme.colorScheme.onBackground
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Surface(
-                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                                shape = RoundedCornerShape(6.dp)
+                                color = if (selectedModel.isFastest) Color(0xFF10B981).copy(alpha = 0.15f)
+                                else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selectedModel.isFastest) Color(0xFF10B981).copy(alpha = 0.35f)
+                                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                ),
+                                modifier = Modifier
+                                    .clickable { showModelPickerSheet = true }
+                                    .testTag("gemini_model_selector_chip")
                             ) {
-                                Text(
-                                    text = "2.5 Flash",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.5.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = if (selectedModel.isFastest) Icons.Default.Bolt else Icons.Default.RocketLaunch,
+                                        contentDescription = null,
+                                        tint = if (selectedModel.isFastest) Color(0xFF059669) else MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = selectedModel.shortBadge,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                                        color = if (selectedModel.isFastest) Color(0xFF059669) else MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = "Switch model",
+                                        tint = if (selectedModel.isFastest) Color(0xFF059669) else MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
                             }
                         }
                         Text(
-                            text = "Medical Assistant • Ask questions or attach files",
+                            text = "${selectedModel.displayName} • ${selectedModel.latencyLabel}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -261,6 +291,8 @@ fun AIChatScreen(
                 if (chatMessages.isEmpty()) {
                     item {
                         AIChatWelcomeCard(
+                            selectedModel = selectedModel,
+                            onSwitchModelClick = { showModelPickerSheet = true },
                             onSuggestionClick = { suggestion ->
                                 textInput = suggestion
                             },
@@ -277,7 +309,7 @@ fun AIChatScreen(
 
                 if (isParsing) {
                     item {
-                        AIParsingLoadingRow()
+                        AIParsingLoadingRow(modelOption = selectedModel)
                     }
                 }
 
@@ -591,11 +623,24 @@ fun AIChatScreen(
                 }
             )
         }
+
+        // Gemini Model Selector Bottom Sheet
+        if (showModelPickerSheet) {
+            GeminiModelSelectorBottomSheet(
+                selectedModel = selectedModel,
+                onSelectModel = { model ->
+                    viewModel.setGeminiModel(model)
+                },
+                onDismiss = { showModelPickerSheet = false }
+            )
+        }
     }
 }
 
 @Composable
 fun AIChatWelcomeCard(
+    selectedModel: GeminiModelOption,
+    onSwitchModelClick: () -> Unit,
     onSuggestionClick: (String) -> Unit,
     onAttachClick: () -> Unit
 ) {
@@ -642,7 +687,49 @@ fun AIChatWelcomeCard(
             modifier = Modifier.padding(horizontal = 12.dp)
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Active Gemini Model Engine indicator chip
+        Surface(
+            onClick = onSwitchModelClick,
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+            modifier = Modifier.testTag("welcome_active_model_chip")
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = if (selectedModel.isFastest) Icons.Default.Bolt else Icons.Default.RocketLaunch,
+                    contentDescription = null,
+                    tint = if (selectedModel.isFastest) Color(0xFF059669) else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Engine: ${selectedModel.displayName}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "• ${selectedModel.shortBadge}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (selectedModel.isFastest) Color(0xFF059669) else MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = "Switch model",
+                    tint = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         // ChatGPT-style Quick Starter Prompts
         Column(
@@ -794,7 +881,7 @@ fun ChatBubbleRow(chat: ChatMessage) {
 }
 
 @Composable
-fun AIParsingLoadingRow() {
+fun AIParsingLoadingRow(modelOption: GeminiModelOption = GeminiModelOption.DEFAULT) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Start,
@@ -814,11 +901,18 @@ fun AIParsingLoadingRow() {
             )
         }
         Spacer(modifier = Modifier.width(10.dp))
-        Text(
-            text = "MedPulse AI is organizing schedules...",
-            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-            color = MaterialTheme.colorScheme.primary
-        )
+        Column {
+            Text(
+                text = "${modelOption.displayName} is processing...",
+                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = modelOption.latencyLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -1747,6 +1841,192 @@ fun TimetableStatBadge(
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GeminiModelSelectorBottomSheet(
+    selectedModel: GeminiModelOption,
+    onSelectModel: (GeminiModelOption) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface,
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = "Gemini AI Engine",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Powered by Google DeepMind Gemini API",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            GeminiModelOption.entries.forEach { option ->
+                val isSelected = option == selectedModel
+                Surface(
+                    onClick = {
+                        onSelectModel(option)
+                        onDismiss()
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    border = BorderStroke(
+                        width = if (isSelected) 2.dp else 1.dp,
+                        color = if (isSelected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp)
+                        .testTag("model_option_${option.name}")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = when (option) {
+                                    GeminiModelOption.FLASH_LITE -> Icons.Default.Bolt
+                                    GeminiModelOption.FLASH_35 -> Icons.Default.RocketLaunch
+                                    GeminiModelOption.PRO_31 -> Icons.Default.Psychology
+                                },
+                                contentDescription = null,
+                                tint = if (isSelected) MaterialTheme.colorScheme.onPrimary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(14.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = option.displayName,
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Surface(
+                                    color = if (option.isFastest) Color(0xFF10B981).copy(alpha = 0.15f)
+                                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = if (option.isFastest) "FASTEST" else if (option == GeminiModelOption.FLASH_35) "LATEST FLASH" else "LATEST PRO",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 9.sp
+                                        ),
+                                        color = if (option.isFastest) Color(0xFF059669) else MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "${option.latencyLabel} • ${option.modelId}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                text = option.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        if (isSelected) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = "Selected",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Shield,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Real-time responses with automatic fallback failover protection.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+        }
     }
 }
 

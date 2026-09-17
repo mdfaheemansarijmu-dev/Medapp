@@ -73,6 +73,7 @@ import java.io.ByteArrayOutputStream
 enum class OnboardingStep {
     WELCOME,
     COURSE,
+    UNIVERSITY,
     ACADEMIC_DETAILS,
     ADD_TIMETABLE,
     NOTIFICATIONS,
@@ -131,6 +132,7 @@ fun WelcomeScreen(
 
     // User choices
     var selectedCourse by remember { mutableStateOf<MedicalCourse?>(null) }
+    var selectedCollege by remember { mutableStateOf("All India Institute of Medical Sciences (AIIMS), New Delhi") }
     var selectedYear by remember { mutableStateOf<String?>(null) }
     var selectedSemester by remember { mutableStateOf("Semester 1") }
     var selectedBatch by remember { mutableStateOf("Batch A") }
@@ -161,6 +163,7 @@ fun WelcomeScreen(
                 if (courseCode != null) {
                     selectedCourse = MedicalCourse.valueOf(courseCode)
                 }
+                selectedCollege = onboardingDraftPrefs.getString("draft_college", "All India Institute of Medical Sciences (AIIMS), New Delhi") ?: "All India Institute of Medical Sciences (AIIMS), New Delhi"
                 selectedYear = onboardingDraftPrefs.getString("draft_year", null)
                 selectedSemester = onboardingDraftPrefs.getString("draft_semester", "Semester 1") ?: "Semester 1"
                 selectedBatch = onboardingDraftPrefs.getString("draft_batch", "Batch A") ?: "Batch A"
@@ -174,13 +177,14 @@ fun WelcomeScreen(
         }
     }
 
-    LaunchedEffect(currentStep, selectedCourse, selectedYear, selectedSemester, selectedBatch, studentName) {
+    LaunchedEffect(currentStep, selectedCourse, selectedCollege, selectedYear, selectedSemester, selectedBatch, studentName) {
         if (currentStep == OnboardingStep.WELCOME || currentStep == OnboardingStep.COMPLETION) {
             onboardingDraftPrefs.edit().clear().apply()
         } else {
             onboardingDraftPrefs.edit()
                 .putString("draft_step", currentStep.name)
                 .putString("draft_course", selectedCourse?.name)
+                .putString("draft_college", selectedCollege)
                 .putString("draft_year", selectedYear)
                 .putString("draft_semester", selectedSemester)
                 .putString("draft_batch", selectedBatch)
@@ -349,14 +353,16 @@ fun WelcomeScreen(
     var showPermissionPermanentlyDeniedDialog by remember { mutableStateOf(false) }
 
     fun persistProfileAndTimetable(course: MedicalCourse) {
+        val chosenCollege = if (selectedCollege.isNotBlank()) selectedCollege else "All India Institute of Medical Sciences (AIIMS), New Delhi"
         viewModel.saveUserProfile(
             name = if (studentName.isNotBlank()) studentName else "Medical Student",
-            college = "Medical College",
+            college = chosenCollege,
             course = course.displayName,
             year = selectedYear ?: "1st Year",
             semester = selectedSemester,
             batch = selectedBatch
         )
+        viewModel.setStudentCollege(chosenCollege)
         if (extractedClasses.isNotEmpty()) {
             viewModel.replaceCurrentTimetable(extractedClasses)
         }
@@ -464,14 +470,16 @@ fun WelcomeScreen(
                         onGuestClick = {
                             val course = selectedCourse ?: MedicalCourse.MBBS
                             viewModel.setGuestMode()
+                            val defaultCol = "All India Institute of Medical Sciences (AIIMS), New Delhi"
                             viewModel.saveUserProfile(
                                 name = "Medical Student",
-                                college = "Medical College",
+                                college = defaultCol,
                                 course = course.displayName,
                                 year = "1st Year",
                                 semester = "Semester 1",
                                 batch = "Batch A"
                             )
+                            viewModel.setStudentCollege(defaultCol)
                             viewModel.completeOnboarding(course)
                             Toast.makeText(context, "Welcome! You can create an account later in Settings to sync your data.", Toast.LENGTH_LONG).show()
                         },
@@ -488,8 +496,20 @@ fun WelcomeScreen(
                         onBack = { currentStep = OnboardingStep.WELCOME },
                         onContinue = {
                             if (selectedCourse != null) {
-                                currentStep = OnboardingStep.ACADEMIC_DETAILS
+                                currentStep = OnboardingStep.UNIVERSITY
                             }
+                        }
+                    )
+                }
+
+                OnboardingStep.UNIVERSITY -> {
+                    OnboardingUniversityScreen(
+                        selectedCollege = selectedCollege,
+                        selectedCourse = selectedCourse,
+                        onSelectCollege = { selectedCollege = it },
+                        onBack = { currentStep = OnboardingStep.COURSE },
+                        onContinue = {
+                            currentStep = OnboardingStep.ACADEMIC_DETAILS
                         }
                     )
                 }
@@ -504,7 +524,7 @@ fun WelcomeScreen(
                         onSemesterSelected = { selectedSemester = it },
                         onBatchSelected = { selectedBatch = it },
                         onNameChanged = { studentName = it },
-                        onBack = { currentStep = OnboardingStep.COURSE },
+                        onBack = { currentStep = OnboardingStep.UNIVERSITY },
                         onContinue = {
                             val course = selectedCourse ?: MedicalCourse.MBBS
                             // Preload course timetable if not analyzed yet
@@ -1076,10 +1096,10 @@ fun OnboardingCourseScreen(
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Header Bar with Step Indicator "1 of 4"
+            // Header Bar with Step Indicator "1 of 5"
             OnboardingStepHeader(
                 currentStepNumber = 1,
-                totalSteps = 4,
+                totalSteps = 5,
                 onBack = onBack
             )
 
@@ -1299,10 +1319,10 @@ fun OnboardingAcademicDetailsScreen(
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Header with Progress Indicator "2 of 4"
+            // Header with Progress Indicator "3 of 5"
             OnboardingStepHeader(
-                currentStepNumber = 2,
-                totalSteps = 4,
+                currentStepNumber = 3,
+                totalSteps = 5,
                 onBack = onBack
             )
 
@@ -1532,10 +1552,10 @@ fun OnboardingAddTimetableScreen(
                 .fillMaxWidth()
                 .weight(1f)
         ) {
-            // Header with Progress Indicator "3 of 4"
+            // Header with Progress Indicator "4 of 5"
             OnboardingStepHeader(
-                currentStepNumber = 3,
-                totalSteps = 4,
+                currentStepNumber = 4,
+                totalSteps = 5,
                 onBack = onBack
             )
 
@@ -1969,10 +1989,10 @@ fun OnboardingNotificationsScreen(
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Header with Progress Indicator "4 of 4"
+            // Header with Progress Indicator "5 of 5"
             OnboardingStepHeader(
-                currentStepNumber = 4,
-                totalSteps = 4,
+                currentStepNumber = 5,
+                totalSteps = 5,
                 onBack = onBack
             )
 
