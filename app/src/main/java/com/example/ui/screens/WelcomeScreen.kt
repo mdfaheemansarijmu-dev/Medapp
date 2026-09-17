@@ -71,10 +71,13 @@ import java.io.ByteArrayOutputStream
  * 6. Screen 6: Completion (You're all set 🎉 -> Go to Dashboard)
  */
 enum class OnboardingStep {
-    WELCOME,
+    APP_FUNCTIONS,
+    STUDENT_NAME,
     COURSE,
     UNIVERSITY,
     ACADEMIC_DETAILS,
+    AUTH_CHOICE,
+    WELCOME,
     ADD_TIMETABLE,
     NOTIFICATIONS,
     COMPLETION
@@ -127,7 +130,7 @@ fun WelcomeScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    var currentStep by remember { mutableStateOf(OnboardingStep.WELCOME) }
+    var currentStep by remember { mutableStateOf(OnboardingStep.APP_FUNCTIONS) }
     var authSubView by remember { mutableStateOf(AuthSubView.NONE) }
 
     // User choices
@@ -168,7 +171,7 @@ fun WelcomeScreen(
                 selectedSemester = onboardingDraftPrefs.getString("draft_semester", "Semester 1") ?: "Semester 1"
                 selectedBatch = onboardingDraftPrefs.getString("draft_batch", "Batch A") ?: "Batch A"
                 studentName = onboardingDraftPrefs.getString("draft_name", "") ?: ""
-                if (step != OnboardingStep.WELCOME && step != OnboardingStep.COMPLETION) {
+                if (step != OnboardingStep.APP_FUNCTIONS && step != OnboardingStep.WELCOME && step != OnboardingStep.COMPLETION) {
                     currentStep = step
                 }
             } catch (e: Exception) {
@@ -178,7 +181,7 @@ fun WelcomeScreen(
     }
 
     LaunchedEffect(currentStep, selectedCourse, selectedCollege, selectedYear, selectedSemester, selectedBatch, studentName) {
-        if (currentStep == OnboardingStep.WELCOME || currentStep == OnboardingStep.COMPLETION) {
+        if (currentStep == OnboardingStep.APP_FUNCTIONS || currentStep == OnboardingStep.WELCOME || currentStep == OnboardingStep.COMPLETION) {
             onboardingDraftPrefs.edit().clear().apply()
         } else {
             onboardingDraftPrefs.edit()
@@ -193,11 +196,35 @@ fun WelcomeScreen(
         }
     }
 
+    fun persistProfileAndTimetable(course: MedicalCourse) {
+        val chosenCollege = if (selectedCollege.isNotBlank()) selectedCollege else "All India Institute of Medical Sciences (AIIMS), New Delhi"
+        val finalName = if (studentName.isNotBlank()) studentName else "Medical Student"
+        viewModel.saveUserProfile(
+            name = finalName,
+            college = chosenCollege,
+            course = course.displayName,
+            year = selectedYear ?: "1st Year",
+            semester = selectedSemester,
+            batch = selectedBatch
+        )
+        viewModel.setStudentCollege(chosenCollege)
+        val timetableToSave = if (extractedClasses.isNotEmpty()) {
+            extractedClasses
+        } else {
+            viewModel.getDefaultParsedTimetable(course)
+        }
+        viewModel.replaceCurrentTimetable(timetableToSave)
+    }
+
     LaunchedEffect(loginMode) {
         if (loginMode == LoginMode.FIREBASE && authSubView != AuthSubView.NONE) {
             authSubView = AuthSubView.NONE
             if (viewModel.isOnboardingCompleted()) {
                 viewModel.navigateTo(com.example.ui.viewmodel.Screen.Dashboard)
+            } else if (currentStep == OnboardingStep.AUTH_CHOICE) {
+                val course = selectedCourse ?: MedicalCourse.MBBS
+                persistProfileAndTimetable(course)
+                viewModel.completeOnboarding(course)
             } else {
                 currentStep = OnboardingStep.COURSE
             }
@@ -229,11 +256,17 @@ fun WelcomeScreen(
                 val id = account.id ?: ""
                 val idToken = account.idToken
 
-                studentName = name
+                if (studentName.isBlank()) {
+                    studentName = name
+                }
                 viewModel.signInWithGoogle(name, email, photoUrl, id, idToken)
                 Toast.makeText(context, "Welcome, $name!", Toast.LENGTH_SHORT).show()
                 if (viewModel.isOnboardingCompleted()) {
                     viewModel.navigateTo(com.example.ui.viewmodel.Screen.Dashboard)
+                } else if (currentStep == OnboardingStep.AUTH_CHOICE) {
+                    val course = selectedCourse ?: MedicalCourse.MBBS
+                    persistProfileAndTimetable(course)
+                    viewModel.completeOnboarding(course)
                 } else {
                     currentStep = OnboardingStep.COURSE
                 }
@@ -352,22 +385,6 @@ fun WelcomeScreen(
     val sharedPrefs = remember { context.getSharedPreferences("medpulse_prefs", Context.MODE_PRIVATE) }
     var showPermissionPermanentlyDeniedDialog by remember { mutableStateOf(false) }
 
-    fun persistProfileAndTimetable(course: MedicalCourse) {
-        val chosenCollege = if (selectedCollege.isNotBlank()) selectedCollege else "All India Institute of Medical Sciences (AIIMS), New Delhi"
-        viewModel.saveUserProfile(
-            name = if (studentName.isNotBlank()) studentName else "Medical Student",
-            college = chosenCollege,
-            course = course.displayName,
-            year = selectedYear ?: "1st Year",
-            semester = selectedSemester,
-            batch = selectedBatch
-        )
-        viewModel.setStudentCollege(chosenCollege)
-        if (extractedClasses.isNotEmpty()) {
-            viewModel.replaceCurrentTimetable(extractedClasses)
-        }
-    }
-
     // System Notification permission launcher (Android 13+)
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -451,40 +468,23 @@ fun WelcomeScreen(
             label = "OnboardingStepTransition"
         ) { step ->
             when (step) {
-                OnboardingStep.WELCOME -> {
-                    OnboardingWelcomeScreen(
-                        isAuthenticating = isAuthenticating,
-                        authError = authError,
+                OnboardingStep.APP_FUNCTIONS, OnboardingStep.WELCOME -> {
+                    OnboardingFunctionsScreen(
                         onGetStarted = {
-                            viewModel.setGuestMode()
-                            currentStep = OnboardingStep.COURSE
-                        },
-                        onGoogleClick = {
-                            viewModel.setAuthenticating(true)
-                            viewModel.setAuthError(null)
-                            googleSignInLauncher.launch(googleSignInClient.signInIntent)
-                        },
-                        onMobileClick = {
-                            authSubView = AuthSubView.PHONE_SIGN_IN
-                        },
-                        onGuestClick = {
-                            val course = selectedCourse ?: MedicalCourse.MBBS
-                            viewModel.setGuestMode()
-                            val defaultCol = "All India Institute of Medical Sciences (AIIMS), New Delhi"
-                            viewModel.saveUserProfile(
-                                name = "Medical Student",
-                                college = defaultCol,
-                                course = course.displayName,
-                                year = "1st Year",
-                                semester = "Semester 1",
-                                batch = "Batch A"
-                            )
-                            viewModel.setStudentCollege(defaultCol)
-                            viewModel.completeOnboarding(course)
-                            Toast.makeText(context, "Welcome! You can create an account later in Settings to sync your data.", Toast.LENGTH_LONG).show()
-                        },
-                        onLoginClick = {
-                            authSubView = AuthSubView.EMAIL_SIGN_IN
+                            currentStep = OnboardingStep.STUDENT_NAME
+                        }
+                    )
+                }
+
+                OnboardingStep.STUDENT_NAME -> {
+                    OnboardingStudentNameScreen(
+                        studentName = studentName,
+                        onNameChanged = { studentName = it },
+                        onBack = { currentStep = OnboardingStep.APP_FUNCTIONS },
+                        onContinue = {
+                            if (studentName.isNotBlank()) {
+                                currentStep = OnboardingStep.COURSE
+                            }
                         }
                     )
                 }
@@ -493,12 +493,14 @@ fun WelcomeScreen(
                     OnboardingCourseScreen(
                         selectedCourse = selectedCourse,
                         onSelectCourse = { selectedCourse = it },
-                        onBack = { currentStep = OnboardingStep.WELCOME },
+                        onBack = { currentStep = OnboardingStep.STUDENT_NAME },
                         onContinue = {
                             if (selectedCourse != null) {
                                 currentStep = OnboardingStep.UNIVERSITY
                             }
-                        }
+                        },
+                        stepNumber = 2,
+                        totalSteps = 4
                     )
                 }
 
@@ -510,7 +512,9 @@ fun WelcomeScreen(
                         onBack = { currentStep = OnboardingStep.COURSE },
                         onContinue = {
                             currentStep = OnboardingStep.ACADEMIC_DETAILS
-                        }
+                        },
+                        stepNumber = 3,
+                        totalSteps = 4
                     )
                 }
 
@@ -526,12 +530,40 @@ fun WelcomeScreen(
                         onNameChanged = { studentName = it },
                         onBack = { currentStep = OnboardingStep.UNIVERSITY },
                         onContinue = {
+                            currentStep = OnboardingStep.AUTH_CHOICE
+                        },
+                        stepNumber = 4,
+                        totalSteps = 4
+                    )
+                }
+
+                OnboardingStep.AUTH_CHOICE -> {
+                    OnboardingAuthChoiceScreen(
+                        studentName = studentName,
+                        selectedCourse = selectedCourse,
+                        selectedCollege = selectedCollege,
+                        selectedYear = selectedYear,
+                        selectedBatch = selectedBatch,
+                        isAuthenticating = isAuthenticating,
+                        authError = authError,
+                        onBack = { currentStep = OnboardingStep.ACADEMIC_DETAILS },
+                        onStartNowWithoutLogin = {
+                            viewModel.setGuestMode()
                             val course = selectedCourse ?: MedicalCourse.MBBS
-                            // Preload course timetable if not analyzed yet
-                            if (!isTimetableAnalyzed) {
-                                extractedClasses = viewModel.getDefaultParsedTimetable(course)
-                            }
-                            currentStep = OnboardingStep.ADD_TIMETABLE
+                            persistProfileAndTimetable(course)
+                            viewModel.completeOnboarding(course)
+                            Toast.makeText(context, "Welcome! You can create an account anytime later in Settings.", Toast.LENGTH_LONG).show()
+                        },
+                        onGoogleClick = {
+                            viewModel.setAuthenticating(true)
+                            viewModel.setAuthError(null)
+                            googleSignInLauncher.launch(googleSignInClient.signInIntent)
+                        },
+                        onMobileClick = {
+                            authSubView = AuthSubView.PHONE_SIGN_IN
+                        },
+                        onEmailClick = {
+                            authSubView = AuthSubView.EMAIL_SIGN_IN
                         }
                     )
                 }
@@ -1085,6 +1117,8 @@ fun OnboardingCourseScreen(
     onSelectCourse: (MedicalCourse) -> Unit,
     onBack: () -> Unit,
     onContinue: () -> Unit,
+    stepNumber: Int = 2,
+    totalSteps: Int = 4,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -1096,10 +1130,10 @@ fun OnboardingCourseScreen(
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Header Bar with Step Indicator "1 of 5"
+            // Header Bar with Step Indicator
             OnboardingStepHeader(
-                currentStepNumber = 1,
-                totalSteps = 5,
+                currentStepNumber = stepNumber,
+                totalSteps = totalSteps,
                 onBack = onBack
             )
 
@@ -1299,6 +1333,8 @@ fun OnboardingAcademicDetailsScreen(
     onNameChanged: (String) -> Unit,
     onBack: () -> Unit,
     onContinue: () -> Unit,
+    stepNumber: Int = 4,
+    totalSteps: Int = 4,
     modifier: Modifier = Modifier
 ) {
     val years = listOf("1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year", "Internship")
@@ -1319,10 +1355,10 @@ fun OnboardingAcademicDetailsScreen(
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Header with Progress Indicator "3 of 5"
+            // Header with Progress Indicator
             OnboardingStepHeader(
-                currentStepNumber = 3,
-                totalSteps = 5,
+                currentStepNumber = stepNumber,
+                totalSteps = totalSteps,
                 onBack = onBack
             )
 

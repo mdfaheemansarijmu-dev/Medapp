@@ -41,6 +41,8 @@ fun OnboardingUniversityScreen(
     onSelectCollege: (String) -> Unit,
     onBack: () -> Unit,
     onContinue: () -> Unit,
+    stepNumber: Int = 3,
+    totalSteps: Int = 4,
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -85,10 +87,10 @@ fun OnboardingUniversityScreen(
                 .fillMaxWidth()
                 .weight(1f)
         ) {
-            // Header Bar with Step Indicator "2 of 5"
+            // Header Bar with Step Indicator
             OnboardingStepHeader(
-                currentStepNumber = 2,
-                totalSteps = 5,
+                currentStepNumber = stepNumber,
+                totalSteps = totalSteps,
                 onBack = onBack
             )
 

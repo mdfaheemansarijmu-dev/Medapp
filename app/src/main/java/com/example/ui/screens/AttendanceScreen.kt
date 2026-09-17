@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -1165,6 +1166,15 @@ fun EditAttendanceDialog(
         sdf.format(Date(record.recordedTimestamp))
     }
 
+    val validationResult = remember(record) {
+        AttendanceTimeValidator.validateAttendanceTime(
+            dateString = record.dateString,
+            startTime = record.startTime,
+            classTime = record.classTime
+        )
+    }
+    val isAllowed = validationResult is AttendanceValidationResult.Allowed
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1185,6 +1195,39 @@ fun EditAttendanceDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                if (!isAllowed) {
+                    val errorMsg = when (validationResult) {
+                        is AttendanceValidationResult.TooEarly -> validationResult.message
+                        is AttendanceValidationResult.FutureDate -> validationResult.message
+                        else -> "Attendance cannot be modified before class time."
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = errorMsg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
+
                 Text(
                     text = "Attendance Status",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
@@ -1236,22 +1279,25 @@ fun EditAttendanceDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (statusChanged) {
-                        showConfirmationDialog = true
-                    } else {
-                        onSave(
-                            record.copy(
-                                status = selectedStatus,
-                                isPresent = selectedStatus == "PRESENT" || selectedStatus == "EXCUSED",
-                                note = noteText.ifBlank { null },
-                                reason = noteText.ifBlank { null }
+                    if (isAllowed) {
+                        if (statusChanged) {
+                            showConfirmationDialog = true
+                        } else {
+                            onSave(
+                                record.copy(
+                                    status = selectedStatus,
+                                    isPresent = selectedStatus == "PRESENT" || selectedStatus == "EXCUSED",
+                                    note = noteText.ifBlank { null },
+                                    reason = noteText.ifBlank { null }
+                                )
                             )
-                        )
+                        }
                     }
                 },
+                enabled = isAllowed,
                 shape = RoundedCornerShape(10.dp)
             ) {
-                Text("Save")
+                Text(if (isAllowed) "Save" else "Locked Until Class")
             }
         },
         dismissButton = {
@@ -1466,6 +1512,38 @@ fun QuickRecordAttendanceDialog(
     val todayDate = remember { sdf.format(Date()) }
     var dateString by remember { mutableStateOf(todayDate) }
 
+    val currentCalendar = remember { Calendar.getInstance() }
+    val currentDayOfWeek = remember {
+        when (currentCalendar.get(Calendar.DAY_OF_WEEK)) {
+            Calendar.MONDAY -> 1
+            Calendar.TUESDAY -> 2
+            Calendar.WEDNESDAY -> 3
+            Calendar.THURSDAY -> 4
+            Calendar.FRIDAY -> 5
+            Calendar.SATURDAY -> 6
+            Calendar.SUNDAY -> 7
+            else -> 1
+        }
+    }
+
+    val finalSubject = if (distinctSubjects.isNotEmpty()) selectedSubject else customSubject
+
+    val matchingTodayClass = remember(timetable, finalSubject, currentDayOfWeek) {
+        timetable.firstOrNull { it.dayOfWeek == currentDayOfWeek && it.subject.equals(finalSubject, ignoreCase = true) }
+    }
+
+    val classStartTime = matchingTodayClass?.startTime
+    val classTimeRange = if (matchingTodayClass != null) "${matchingTodayClass.startTime}-${matchingTodayClass.endTime}" else null
+
+    val validationResult = remember(dateString, classStartTime, classTimeRange) {
+        AttendanceTimeValidator.validateAttendanceTime(
+            dateString = dateString,
+            startTime = classStartTime,
+            classTime = classTimeRange
+        )
+    }
+    val isAllowed = validationResult is AttendanceValidationResult.Allowed
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1479,6 +1557,39 @@ fun QuickRecordAttendanceDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                if (!isAllowed) {
+                    val errorMsg = when (validationResult) {
+                        is AttendanceValidationResult.TooEarly -> validationResult.message
+                        is AttendanceValidationResult.FutureDate -> validationResult.message
+                        else -> "Attendance cannot be marked before class time."
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = errorMsg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
+
                 Text(
                     text = "Select Subject",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
@@ -1552,17 +1663,16 @@ fun QuickRecordAttendanceDialog(
             }
         },
         confirmButton = {
-            val finalSubject = if (distinctSubjects.isNotEmpty()) selectedSubject else customSubject
             Button(
                 onClick = {
-                    if (finalSubject.isNotBlank()) {
-                        onRecord(finalSubject, selectedStatus, null, dateString, note.ifBlank { null }, note.ifBlank { null })
+                    if (finalSubject.isNotBlank() && isAllowed) {
+                        onRecord(finalSubject, selectedStatus, classTimeRange, dateString, note.ifBlank { null }, note.ifBlank { null })
                     }
                 },
-                enabled = finalSubject.isNotBlank(),
+                enabled = finalSubject.isNotBlank() && isAllowed,
                 shape = RoundedCornerShape(10.dp)
             ) {
-                Text("Record")
+                Text(if (isAllowed) "Record" else "Locked Until Class")
             }
         },
         dismissButton = {

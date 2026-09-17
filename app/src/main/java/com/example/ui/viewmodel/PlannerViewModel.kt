@@ -10,6 +10,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
@@ -518,19 +519,8 @@ class PlannerViewModel(
 
     // Timetable Logic & Real-time Class Calculations
     fun parseTimeToMinutes(timeStr: String): Int {
-        return try {
-            val clean = timeStr.trim().uppercase()
-            val parts = clean.split(" ")
-            val timeParts = parts[0].split(":")
-            var hour = timeParts[0].toInt()
-            val minute = timeParts[1].toInt()
-            val amPm = parts[1]
-            if (amPm == "PM" && hour != 12) hour += 12
-            if (amPm == "AM" && hour == 12) hour = 0
-            hour * 60 + minute
-        } catch (e: Exception) {
-            0
-        }
+        val parsed = AttendanceTimeValidator.parseTimeToMinutes(timeStr)
+        return if (parsed >= 0) parsed else 0
     }
 
     fun getTimetableForDay(dayOfWeek: Int): List<TimetableClass> {
@@ -2366,6 +2356,25 @@ class PlannerViewModel(
         sharedPrefs.edit().putInt("attendance_target_percentage", validated).apply()
     }
 
+    fun findClassStartTime(subject: String, dayOfWeek: Int = getCurrentDayOfWeek()): String? {
+        val cls = timetable.value.firstOrNull {
+            it.dayOfWeek == dayOfWeek && it.subject.equals(subject, ignoreCase = true)
+        }
+        return cls?.startTime
+    }
+
+    fun isAttendanceAllowed(
+        dateString: String? = null,
+        startTime: String? = null,
+        classTime: String? = null,
+        subject: String? = null
+    ): Boolean {
+        val effectiveStartTime = startTime
+            ?: AttendanceTimeValidator.extractStartTime(null, classTime)
+            ?: subject?.let { findClassStartTime(it) }
+        return AttendanceTimeValidator.isAttendanceAllowed(dateString, effectiveStartTime, classTime)
+    }
+
     fun markAttendance(
         subject: String,
         isPresent: Boolean,
@@ -2379,6 +2388,36 @@ class PlannerViewModel(
     ) {
         val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
         val actualDateString = dateString ?: sdf.format(java.util.Date())
+
+        // Validate timing constraint: Attendance can only be accepted AFTER class start time, not before time!
+        val effectiveStartTime = startTime
+            ?: AttendanceTimeValidator.extractStartTime(null, classTime)
+            ?: findClassStartTime(subject)
+
+        val validation = AttendanceTimeValidator.validateAttendanceTime(
+            dateString = actualDateString,
+            startTime = effectiveStartTime,
+            classTime = classTime
+        )
+
+        if (validation !is AttendanceValidationResult.Allowed) {
+            val message = when (validation) {
+                is AttendanceValidationResult.TooEarly -> validation.message
+                is AttendanceValidationResult.FutureDate -> validation.message
+                else -> "Attendance cannot be marked before class time."
+            }
+            viewModelScope.launch(Dispatchers.Main) {
+                Toast.makeText(getApplication(), message, Toast.LENGTH_LONG).show()
+                addNotificationWithDuplicateCheck(
+                    InAppNotification(
+                        title = "Attendance Blocked",
+                        message = message,
+                        type = "class"
+                    )
+                )
+            }
+            return
+        }
 
         // Duplicate prevention: match on date, subject, and time/period
         val existing = allAttendanceRecords.value.find { 
@@ -2396,7 +2435,7 @@ class PlannerViewModel(
             classTime = classTime ?: existing?.classTime,
             firestoreId = existing?.firestoreId ?: java.util.UUID.randomUUID().toString(),
             status = status,
-            startTime = startTime ?: existing?.startTime,
+            startTime = startTime ?: existing?.startTime ?: effectiveStartTime,
             endTime = endTime ?: existing?.endTime,
             note = note ?: existing?.note,
             reason = reason ?: existing?.reason,
@@ -2425,6 +2464,28 @@ class PlannerViewModel(
     }
 
     fun updateAttendanceRecord(record: AttendanceRecord) {
+        val effectiveStartTime = record.startTime
+            ?: AttendanceTimeValidator.extractStartTime(null, record.classTime)
+            ?: findClassStartTime(record.subject)
+
+        val validation = AttendanceTimeValidator.validateAttendanceTime(
+            dateString = record.dateString,
+            startTime = effectiveStartTime,
+            classTime = record.classTime
+        )
+
+        if (validation !is AttendanceValidationResult.Allowed) {
+            val message = when (validation) {
+                is AttendanceValidationResult.TooEarly -> validation.message
+                is AttendanceValidationResult.FutureDate -> validation.message
+                else -> "Attendance cannot be modified before class time."
+            }
+            viewModelScope.launch(Dispatchers.Main) {
+                Toast.makeText(getApplication(), message, Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
             repository.saveAttendanceRecord(record.copy(recordedTimestamp = System.currentTimeMillis()))
             syncDataToFirebase()

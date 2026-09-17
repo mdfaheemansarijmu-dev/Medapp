@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -587,6 +588,7 @@ fun LiveTimetableWidget(
     schedule: PlannerViewModel.DayClassSchedule,
     viewModel: PlannerViewModel
 ) {
+    val context = LocalContext.current
     val attendanceRecords by viewModel.allAttendanceRecords.collectAsStateWithLifecycle()
     val allRevisions by viewModel.allRevisions.collectAsStateWithLifecycle()
     val sdf = remember { java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()) }
@@ -988,43 +990,123 @@ fun LiveTimetableWidget(
                                         )
                                     }
                                 } else if (attendance == null) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.End,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        OutlinedButton(
-                                            onClick = { viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}", status = "NO_CLASS") },
-                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
-                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                    val calendar = java.util.Calendar.getInstance()
+                                    val currentMinutes = calendar.get(java.util.Calendar.HOUR_OF_DAY) * 60 + calendar.get(java.util.Calendar.MINUTE)
+                                    val classStartMinutes = viewModel.parseTimeToMinutes(cls.startTime)
+                                    val isClassStarted = currentMinutes >= classStartMinutes
+
+                                    if (!isClassStarted) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Icon(Icons.Default.Block, contentDescription = null, modifier = Modifier.size(14.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("No Class", style = MaterialTheme.typography.labelMedium)
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                                shape = RoundedCornerShape(8.dp),
+                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(
+                                                        Icons.Default.Lock,
+                                                        contentDescription = "Attendance Locked",
+                                                        modifier = Modifier.size(13.dp),
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(
+                                                        text = "Opens at ${cls.startTime}",
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
+
+                                            Row(
+                                                horizontalArrangement = Arrangement.End,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                TextButton(
+                                                    onClick = {
+                                                        Toast.makeText(context, "Attendance for ${cls.subject} only opens after ${cls.startTime}.", Toast.LENGTH_SHORT).show()
+                                                    },
+                                                    enabled = false,
+                                                    colors = ButtonDefaults.textButtonColors(
+                                                        disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                                    ),
+                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                                    modifier = Modifier.testTag("btn_absent_locked_${cls.id}")
+                                                ) {
+                                                    Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(13.dp))
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text("Absent", style = MaterialTheme.typography.labelMedium)
+                                                }
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                FilledTonalButton(
+                                                    onClick = {
+                                                        Toast.makeText(context, "Attendance for ${cls.subject} only opens after ${cls.startTime}.", Toast.LENGTH_SHORT).show()
+                                                    },
+                                                    enabled = false,
+                                                    colors = ButtonDefaults.filledTonalButtonColors(
+                                                        disabledContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+                                                        disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                                    ),
+                                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                    modifier = Modifier.testTag("btn_present_locked_${cls.id}")
+                                                ) {
+                                                    Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(13.dp))
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text("Present", style = MaterialTheme.typography.labelMedium)
+                                                }
+                                            }
                                         }
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        TextButton(
-                                            onClick = { viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}", status = "ABSENT") },
-                                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                    } else {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.End,
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(14.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Mark Absent", style = MaterialTheme.typography.labelMedium)
-                                        }
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        FilledTonalButton(
-                                            onClick = { viewModel.markAttendance(cls.subject, isPresent = true, classTime = "${cls.startTime}-${cls.endTime}", status = "PRESENT") },
-                                            colors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                                        ) {
-                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Mark Present", style = MaterialTheme.typography.labelMedium)
+                                            OutlinedButton(
+                                                onClick = { viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}", status = "NO_CLASS", startTime = cls.startTime, endTime = cls.endTime) },
+                                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                            ) {
+                                                Icon(Icons.Default.Block, contentDescription = null, modifier = Modifier.size(14.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("No Class", style = MaterialTheme.typography.labelMedium)
+                                            }
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            TextButton(
+                                                onClick = { viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}", status = "ABSENT", startTime = cls.startTime, endTime = cls.endTime) },
+                                                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                            ) {
+                                                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(14.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("Mark Absent", style = MaterialTheme.typography.labelMedium)
+                                            }
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            FilledTonalButton(
+                                                onClick = { viewModel.markAttendance(cls.subject, isPresent = true, classTime = "${cls.startTime}-${cls.endTime}", status = "PRESENT", startTime = cls.startTime, endTime = cls.endTime) },
+                                                colors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                            ) {
+                                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("Mark Present", style = MaterialTheme.typography.labelMedium)
+                                            }
                                         }
                                     }
                                 } else {
+                                    val calendar = java.util.Calendar.getInstance()
+                                    val currentMinutes = calendar.get(java.util.Calendar.HOUR_OF_DAY) * 60 + calendar.get(java.util.Calendar.MINUTE)
+                                    val classStartMinutes = viewModel.parseTimeToMinutes(cls.startTime)
+                                    val isClassStarted = currentMinutes >= classStartMinutes
+
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1033,46 +1115,61 @@ fun LiveTimetableWidget(
                                         var showStatusMenu by remember { mutableStateOf(false) }
                                         Box {
                                             OutlinedButton(
-                                                onClick = { showStatusMenu = true },
+                                                onClick = {
+                                                    if (isClassStarted) {
+                                                        showStatusMenu = true
+                                                    } else {
+                                                        Toast.makeText(context, "Attendance status cannot be modified before class time (${cls.startTime}).", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                },
                                                 shape = RoundedCornerShape(10.dp),
-                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = if (isClassStarted) 0.5f else 0.25f)),
                                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                                 modifier = Modifier
                                                     .height(34.dp)
                                                     .testTag("btn_change_status_${cls.id}")
                                             ) {
-                                                Icon(Icons.Default.Edit, contentDescription = "Change Status", modifier = Modifier.size(13.dp))
+                                                Icon(
+                                                    if (isClassStarted) Icons.Default.Edit else Icons.Default.Lock,
+                                                    contentDescription = "Change Status",
+                                                    modifier = Modifier.size(13.dp)
+                                                )
                                                 Spacer(modifier = Modifier.width(5.dp))
-                                                Text("Change Status", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium))
+                                                Text(
+                                                    if (isClassStarted) "Change Status" else "Locked until ${cls.startTime}",
+                                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium)
+                                                )
                                             }
-                                            DropdownMenu(
-                                                expanded = showStatusMenu,
-                                                onDismissRequest = { showStatusMenu = false }
-                                            ) {
-                                                DropdownMenuItem(
-                                                    text = { Text("Mark Present ✓") },
-                                                    onClick = {
-                                                        showStatusMenu = false
-                                                        viewModel.markAttendance(cls.subject, isPresent = true, classTime = "${cls.startTime}-${cls.endTime}", status = "PRESENT")
-                                                    },
-                                                    leadingIcon = { Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF2E7D32)) }
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text("Mark Absent ✗") },
-                                                    onClick = {
-                                                        showStatusMenu = false
-                                                        viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}", status = "ABSENT")
-                                                    },
-                                                    leadingIcon = { Icon(Icons.Default.Close, contentDescription = null, tint = Color(0xFFC62828)) }
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text("No Class 🚫") },
-                                                    onClick = {
-                                                        showStatusMenu = false
-                                                        viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}", status = "NO_CLASS")
-                                                    },
-                                                    leadingIcon = { Icon(Icons.Default.Block, contentDescription = null, tint = Color(0xFFE65100)) }
-                                                )
+                                            if (isClassStarted) {
+                                                DropdownMenu(
+                                                    expanded = showStatusMenu,
+                                                    onDismissRequest = { showStatusMenu = false }
+                                                ) {
+                                                    DropdownMenuItem(
+                                                        text = { Text("Mark Present ✓") },
+                                                        onClick = {
+                                                            showStatusMenu = false
+                                                            viewModel.markAttendance(cls.subject, isPresent = true, classTime = "${cls.startTime}-${cls.endTime}", status = "PRESENT", startTime = cls.startTime, endTime = cls.endTime)
+                                                        },
+                                                        leadingIcon = { Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF2E7D32)) }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Mark Absent ✗") },
+                                                        onClick = {
+                                                            showStatusMenu = false
+                                                            viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}", status = "ABSENT", startTime = cls.startTime, endTime = cls.endTime)
+                                                        },
+                                                        leadingIcon = { Icon(Icons.Default.Close, contentDescription = null, tint = Color(0xFFC62828)) }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("No Class 🚫") },
+                                                        onClick = {
+                                                            showStatusMenu = false
+                                                            viewModel.markAttendance(cls.subject, isPresent = false, classTime = "${cls.startTime}-${cls.endTime}", status = "NO_CLASS", startTime = cls.startTime, endTime = cls.endTime)
+                                                        },
+                                                        leadingIcon = { Icon(Icons.Default.Block, contentDescription = null, tint = Color(0xFFE65100)) }
+                                                    )
+                                                }
                                             }
                                         }
 
