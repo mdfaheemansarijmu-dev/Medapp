@@ -28,6 +28,9 @@ import com.example.network.UpdateService
 import com.example.network.UpdateServiceImpl
 import com.example.network.AppUpdateResult
 import com.example.network.AppUpdateConfig
+import com.example.network.GitHubUpdateClient
+import com.example.utils.DownloadManagerHelper
+import android.app.DownloadManager
 import com.squareup.moshi.Types
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -281,6 +284,15 @@ class PlannerViewModel(
 
     private val _updateResult = MutableStateFlow<AppUpdateResult?>(null)
     val updateResult: StateFlow<AppUpdateResult?> = _updateResult.asStateFlow()
+
+    private val _updateAvailable = MutableStateFlow(false)
+    val updateAvailable: StateFlow<Boolean> = _updateAvailable.asStateFlow()
+
+    private val _gitHubOwner = MutableStateFlow(updateService.getGitHubOwner(application))
+    val gitHubOwner: StateFlow<String> = _gitHubOwner.asStateFlow()
+
+    private val _gitHubRepo = MutableStateFlow(updateService.getGitHubRepo(application))
+    val gitHubRepo: StateFlow<String> = _gitHubRepo.asStateFlow()
 
     private val _lastCheckedTime = MutableStateFlow(0L)
     val lastCheckedTime: StateFlow<Long> = _lastCheckedTime.asStateFlow()
@@ -2626,23 +2638,21 @@ class PlannerViewModel(
             _updateCheckInProgress.value = false
 
             if (result is AppUpdateResult.UpdateAvailable) {
+                _updateAvailable.value = true
                 if (result.isForce) {
                     _isUpdateDialogDismissed.value = false
                 } else {
-                    if (silent) {
+                    // Check if the user previously dismissed this exact version
+                    val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+                    val dismissedVersion = sharedPrefs.getString("dismissed_update_version", "") ?: ""
+                    if (dismissedVersion == result.config.latestVersion) {
                         _isUpdateDialogDismissed.value = true
                     } else {
-                        // It's optional: check if the user previously dismissed this exact version
-                        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
-                        val dismissedVersion = sharedPrefs.getString("dismissed_update_version", "") ?: ""
-                        if (dismissedVersion == result.config.latestVersion) {
-                            _isUpdateDialogDismissed.value = true
-                        } else {
-                            _isUpdateDialogDismissed.value = false
-                        }
+                        _isUpdateDialogDismissed.value = false
                     }
                 }
             } else {
+                _updateAvailable.value = false
                 _isUpdateDialogDismissed.value = false
             }
         }
@@ -2660,6 +2670,7 @@ class PlannerViewModel(
 
     fun clearUpdateResult() {
         _updateResult.value = null
+        _updateAvailable.value = false
     }
 
     fun saveCustomUpdateUrl(url: String) {
@@ -2667,36 +2678,116 @@ class PlannerViewModel(
         updateService.setCustomUpdateUrl(getApplication(), url)
     }
 
+    fun updateGitHubRepoConfig(owner: String, repo: String) {
+        val cleanOwner = owner.trim().ifEmpty { GitHubUpdateClient.DEFAULT_OWNER }
+        val cleanRepo = repo.trim().ifEmpty { GitHubUpdateClient.DEFAULT_REPO }
+        updateService.setGitHubRepoConfig(getApplication(), cleanOwner, cleanRepo)
+        _gitHubOwner.value = cleanOwner
+        _gitHubRepo.value = cleanRepo
+        checkForUpdates(silent = false)
+    }
+
     fun downloadAndInstallUpdate(apkUrl: String) {
         val context = getApplication<Application>()
-        viewModelScope.launch(Dispatchers.Main) {
-            try {
-                val realUrl = if (apkUrl.isBlank() || apkUrl.contains("example.com")) {
-                    "https://raw.githubusercontent.com/faheem-ansari/student-planner-app/main/app-release.apk"
-                } else {
-                    apkUrl
-                }
-                
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(realUrl)).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                context.startActivity(intent)
-                
-                // Keep progress and state values clean / idle since we've redirected
-                _updateDownloadProgress.value = null
-                _updateDownloadState.value = null
-                
+        val config = _cachedUpdateConfig.value
+        val version = config?.latestVersion ?: ""
+        val targetUrl = if (apkUrl.isBlank() || apkUrl.contains("example.com")) {
+            config?.apkUrl?.ifBlank { null }
+                ?: "https://raw.githubusercontent.com/${_gitHubOwner.value}/${_gitHubRepo.value}/main/app-release.apk"
+        } else {
+            apkUrl
+        }
+
+        _updateDownloadState.value = "Starting download..."
+        _updateDownloadProgress.value = 0f
+
+        val downloadId = DownloadManagerHelper.downloadApk(
+            context = context,
+            apkUrl = targetUrl,
+            version = version
+        )
+
+        if (downloadId > 0L) {
+            monitorDownloadProgress(downloadId)
+            viewModelScope.launch {
                 addNotificationWithDuplicateCheck(
                     InAppNotification(
-                        title = "Update Redirected",
-                        message = "Opening update link in your browser or Play Store...",
+                        title = "Download Started",
+                        message = "Downloading MedPulse update. You will be prompted to install once complete.",
                         type = "system"
                     )
                 )
-            } catch (e: Exception) {
-                Log.e("PlannerViewModel", "Error redirecting to update url", e)
-                _updateDownloadState.value = "Failed to redirect: ${e.localizedMessage}"
-                _updateDownloadProgress.value = null
+            }
+        } else {
+            _updateDownloadState.value = "Failed to start download via DownloadManager"
+            _updateDownloadProgress.value = null
+        }
+    }
+
+    private fun monitorDownloadProgress(downloadId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val downloadManager = getApplication<Application>().getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+            if (downloadManager == null) {
+                _updateDownloadState.value = "DownloadManager unavailable"
+                return@launch
+            }
+
+            var isDownloading = true
+            while (isDownloading) {
+                try {
+                    val query = DownloadManager.Query().setFilterById(downloadId)
+                    val cursor = downloadManager.query(query)
+                    if (cursor != null && cursor.moveToFirst()) {
+                        val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                        val status = if (statusIndex >= 0) cursor.getInt(statusIndex) else -1
+
+                        when (status) {
+                            DownloadManager.STATUS_RUNNING -> {
+                                val bytesDownloadedIndex = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                                val totalBytesIndex = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                                val downloaded = if (bytesDownloadedIndex >= 0) cursor.getLong(bytesDownloadedIndex) else 0L
+                                val total = if (totalBytesIndex >= 0) cursor.getLong(totalBytesIndex) else -1L
+
+                                if (total > 0L) {
+                                    val progress = (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+                                    _updateDownloadProgress.value = progress
+                                    _updateDownloadState.value = "Downloading update: ${(progress * 100).toInt()}%"
+                                } else {
+                                    _updateDownloadProgress.value = -1f
+                                    _updateDownloadState.value = "Downloading update..."
+                                }
+                            }
+                            DownloadManager.STATUS_SUCCESSFUL -> {
+                                _updateDownloadProgress.value = 1f
+                                _updateDownloadState.value = "Download complete! Opening installer..."
+                                isDownloading = false
+                                withContext(Dispatchers.Main) {
+                                    DownloadManagerHelper.installApkFromDownloadId(getApplication(), downloadId)
+                                }
+                            }
+                            DownloadManager.STATUS_FAILED -> {
+                                val reasonIndex = cursor.getColumnIndex(DownloadManager.COLUMN_REASON)
+                                val reason = if (reasonIndex >= 0) cursor.getInt(reasonIndex) else 0
+                                _updateDownloadState.value = "Download failed (code: $reason)"
+                                _updateDownloadProgress.value = null
+                                isDownloading = false
+                            }
+                            DownloadManager.STATUS_PAUSED -> {
+                                _updateDownloadState.value = "Download paused (waiting for connection)"
+                            }
+                        }
+                        cursor.close()
+                    } else {
+                        isDownloading = false
+                    }
+                } catch (e: Exception) {
+                    Log.w("PlannerViewModel", "Error monitoring download: ${e.message}")
+                    isDownloading = false
+                }
+
+                if (isDownloading) {
+                    delay(600)
+                }
             }
         }
     }

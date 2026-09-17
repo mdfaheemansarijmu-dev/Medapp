@@ -68,7 +68,7 @@ fun DashboardScreen(
         val tempFile = java.io.File(context.cacheDir, "temp_profile_capture_dashboard.jpg")
         androidx.core.content.FileProvider.getUriForFile(
             context,
-            "${context.packageName}.fileprovider",
+            "${context.packageName}.provider",
             tempFile
         )
     }

@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
             val isDarkTheme by viewModel.isDarkTheme.collectAsStateWithLifecycle()
             MyApplicationTheme(darkTheme = isDarkTheme) {
                 val currentScreen by viewModel.currentScreen.collectAsStateWithLifecycle()
+                val updateAvailable by viewModel.updateAvailable.collectAsStateWithLifecycle()
                 val updateResult by viewModel.updateResult.collectAsStateWithLifecycle()
                 val isUpdateDialogDismissed by viewModel.isUpdateDialogDismissed.collectAsStateWithLifecycle()
                 val downloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
@@ -82,8 +83,8 @@ class MainActivity : ComponentActivity() {
                     }
 
                     // Handle In-App Update System Overlays and Dialogs
-                    updateResult?.let { result ->
-                        if (result is AppUpdateResult.UpdateAvailable) {
+                    if (updateAvailable && !isUpdateDialogDismissed) {
+                        (updateResult as? AppUpdateResult.UpdateAvailable)?.let { result ->
                             if (result.isForce) {
                                 // Fullscreen non-dismissible critical force update overlay
                                 ForceUpdateScreen(
@@ -94,8 +95,8 @@ class MainActivity : ComponentActivity() {
                                         viewModel.downloadAndInstallUpdate(result.config.apkUrl)
                                     }
                                 )
-                            } else if (!isUpdateDialogDismissed) {
-                                // Material 3 optional update dialog
+                            } else {
+                                // Material 3 optional update AlertDialog
                                 OptionalUpdateDialog(
                                     config = result.config,
                                     downloadProgress = downloadProgress,

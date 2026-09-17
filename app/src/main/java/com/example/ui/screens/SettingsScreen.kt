@@ -74,7 +74,7 @@ fun SettingsScreen(
         val tempFile = java.io.File(context.cacheDir, "temp_profile_capture.jpg")
         androidx.core.content.FileProvider.getUriForFile(
             context,
-            "${context.packageName}.fileprovider",
+            "${context.packageName}.provider",
             tempFile
         )
     }
@@ -782,10 +782,12 @@ fun SettingsScreen(
                         }
                     }
 
-                    // Custom Update URL Field
-                    val customUpdateUrlState by viewModel.customUpdateUrl.collectAsStateWithLifecycle()
-                    var customUrlInput by remember(customUpdateUrlState) { mutableStateOf(customUpdateUrlState) }
-                    var isEditingUrl by remember { mutableStateOf(false) }
+                    // GitHub Release Repository Configuration
+                    val gitHubOwner by viewModel.gitHubOwner.collectAsStateWithLifecycle()
+                    val gitHubRepo by viewModel.gitHubRepo.collectAsStateWithLifecycle()
+                    var isEditingGitHub by remember { mutableStateOf(false) }
+                    var ownerInput by remember(gitHubOwner) { mutableStateOf(gitHubOwner) }
+                    var repoInput by remember(gitHubRepo) { mutableStateOf(gitHubRepo) }
 
                     Column(
                         modifier = Modifier
@@ -798,63 +800,55 @@ fun SettingsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Update Server URL",
+                                text = "GitHub Repository",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             TextButton(
                                 onClick = {
-                                    if (isEditingUrl) {
-                                        viewModel.saveCustomUpdateUrl(customUrlInput)
-                                        isEditingUrl = false
+                                    if (isEditingGitHub) {
+                                        viewModel.updateGitHubRepoConfig(ownerInput, repoInput)
+                                        isEditingGitHub = false
                                     } else {
-                                        isEditingUrl = true
+                                        isEditingGitHub = true
                                     }
                                 },
                                 contentPadding = PaddingValues(0.dp),
                                 modifier = Modifier.height(24.dp)
                             ) {
                                 Text(
-                                    text = if (isEditingUrl) "Save" else "Edit",
+                                    text = if (isEditingGitHub) "Save" else "Edit",
                                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
                                 )
                             }
                         }
 
-                        if (isEditingUrl) {
+                        if (isEditingGitHub) {
+                            Spacer(modifier = Modifier.height(6.dp))
                             OutlinedTextField(
-                                value = customUrlInput,
-                                onValueChange = { customUrlInput = it },
-                                placeholder = { Text("Enter custom update.json URL", style = MaterialTheme.typography.bodyMedium) },
+                                value = ownerInput,
+                                onValueChange = { ownerInput = it },
+                                label = { Text("GitHub Username / Org") },
                                 singleLine = true,
                                 shape = RoundedCornerShape(12.dp),
                                 textStyle = MaterialTheme.typography.bodyMedium,
-                                trailingIcon = {
-                                    if (customUrlInput.isNotEmpty()) {
-                                        IconButton(onClick = {
-                                            customUrlInput = ""
-                                            viewModel.saveCustomUpdateUrl("")
-                                            isEditingUrl = false
-                                        }) {
-                                            Icon(
-                                                imageVector = Icons.Default.Clear,
-                                                contentDescription = "Clear Custom URL",
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
-                                    }
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 4.dp)
-                                    .testTag("custom_update_url_input")
+                                modifier = Modifier.fillMaxWidth().testTag("github_owner_input")
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            OutlinedTextField(
+                                value = repoInput,
+                                onValueChange = { repoInput = it },
+                                label = { Text("Repository Name") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                textStyle = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.fillMaxWidth().testTag("github_repo_input")
                             )
                         } else {
-                            val activeUrl = if (customUpdateUrlState.isNotBlank()) customUpdateUrlState else "Default Server (GitHub)"
                             Text(
-                                text = activeUrl,
+                                text = "$gitHubOwner/$gitHubRepo",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (customUpdateUrlState.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                color = MaterialTheme.colorScheme.primary,
                                 maxLines = 1,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 modifier = Modifier.padding(top = 2.dp)

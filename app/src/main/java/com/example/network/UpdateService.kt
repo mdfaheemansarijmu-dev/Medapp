@@ -3,18 +3,16 @@ package com.example.network
 import android.content.Context
 import android.util.Log
 import com.example.BuildConfig
-import com.google.android.gms.tasks.Tasks
-import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.concurrent.TimeUnit
 
 data class AppUpdateConfig(
     val latestVersion: String,
     val minimumVersion: String,
     val forceUpdate: Boolean,
     val apkUrl: String,
-    val releaseNotes: String
+    val releaseNotes: String,
+    val releaseTag: String = latestVersion
 )
 
 sealed class AppUpdateResult {
@@ -30,11 +28,15 @@ interface UpdateService {
     fun clearCachedUpdate(context: Context)
     fun getCustomUpdateUrl(context: Context): String
     fun setCustomUpdateUrl(context: Context, url: String)
+    fun getGitHubOwner(context: Context): String
+    fun getGitHubRepo(context: Context): String
+    fun setGitHubRepoConfig(context: Context, owner: String, repo: String)
 }
 
 class UpdateServiceImpl : UpdateService {
 
     companion object {
+        private const val TAG = "UpdateService"
         private const val PREFS_NAME = "app_update_prefs"
         private const val KEY_LAST_CHECKED = "last_checked_timestamp"
         private const val KEY_CACHED_VERSION = "cached_latest_version"
@@ -42,106 +44,77 @@ class UpdateServiceImpl : UpdateService {
         private const val KEY_CACHED_FORCE = "cached_force_update"
         private const val KEY_CACHED_APK_URL = "cached_apk_url"
         private const val KEY_CACHED_RELEASE_NOTES = "cached_release_notes"
+        private const val KEY_CACHED_TAG = "cached_release_tag"
     }
 
     override suspend fun checkForUpdates(context: Context, customUrl: String?): AppUpdateResult = withContext(Dispatchers.IO) {
         val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        
-        // Update last checked timestamp
         val now = System.currentTimeMillis()
         sharedPrefs.edit().putLong(KEY_LAST_CHECKED, now).apply()
 
-        try {
-            val apps = com.google.firebase.FirebaseApp.getApps(context)
-            if (apps.isEmpty()) {
-                Log.w("UpdateService", "FirebaseApp not initialized; skipping remote update check.")
-                return@withContext getCachedUpdateInfo(context)?.let { cachedConfig ->
-                    val installedVersion = BuildConfig.VERSION_NAME
-                    if (isVersionNewer(installedVersion, cachedConfig.latestVersion)) {
-                        val isForce = cachedConfig.forceUpdate || isVersionNewer(installedVersion, cachedConfig.minimumVersion)
-                        AppUpdateResult.UpdateAvailable(cachedConfig, isForce)
-                    } else AppUpdateResult.UpToDate
-                } ?: AppUpdateResult.UpToDate
-            }
+        val owner = GitHubUpdateClient.getRepoOwner(context)
+        val repo = GitHubUpdateClient.getRepoName(context)
+        val currentVersion = BuildConfig.VERSION_NAME
 
-            val db = FirebaseFirestore.getInstance()
-            val docRef = db.collection("app_config").document("update")
-            
-            var documentSnapshot = try {
-                Tasks.await(docRef.get(), 6, TimeUnit.SECONDS)
-            } catch (e: Exception) {
-                Log.w("UpdateService", "Firestore document fetch notice (using offline cache): ${e.message}")
-                null
-            }
+        Log.d(TAG, "Checking for updates from GitHub repo $owner/$repo (installed: $currentVersion)...")
 
-            // Automatically seed config in Firestore if it doesn't exist
-            if (documentSnapshot != null && !documentSnapshot.exists()) {
-                val seedConfig = hashMapOf(
-                    "latestVersion" to "1.0",
-                    "minimumVersion" to "1.0",
-                    "forceUpdate" to false,
-                    "apkUrl" to "https://raw.githubusercontent.com/faheem-ansari/student-planner-app/main/app-release.apk",
-                    "releaseNotes" to "• All systems fully updated and running production"
-                )
-                try {
-                    Tasks.await(docRef.set(seedConfig), 5, TimeUnit.SECONDS)
-                    documentSnapshot = Tasks.await(docRef.get(), 5, TimeUnit.SECONDS)
-                } catch (e: Exception) {
-                    Log.e("UpdateService", "Error seeding Firestore update document", e)
+        // 1. Primary: Fetch latest release from GitHub API
+        val gitHubResult = GitHubUpdateClient.fetchLatestRelease(owner, repo)
+        if (gitHubResult.isSuccess) {
+            val release = gitHubResult.getOrNull()
+            if (release != null) {
+                val isNewer = GitHubUpdateClient.isUpdateAvailable(currentVersion, release.tagName)
+                val apkUrl = release.apkDownloadUrl ?: release.htmlUrl
+                val notes = if (release.body.isNotBlank()) {
+                    release.body
+                } else {
+                    "Release ${release.tagName} is available on GitHub with performance improvements and updates."
                 }
-            }
 
-            val config = if (documentSnapshot != null && documentSnapshot.exists()) {
-                val latest = documentSnapshot.getString("latestVersion") ?: "1.0"
-                AppUpdateConfig(
-                    latestVersion = latest,
-                    minimumVersion = documentSnapshot.getString("minimumVersion") ?: "1.0",
-                    forceUpdate = documentSnapshot.getBoolean("forceUpdate") ?: false,
-                    apkUrl = documentSnapshot.getString("apkUrl") ?: "https://raw.githubusercontent.com/faheem-ansari/student-planner-app/main/app-release.apk",
-                    releaseNotes = documentSnapshot.getString("releaseNotes") ?: ""
-                )
-            } else {
-                getCachedUpdateInfo(context) ?: AppUpdateConfig(
-                    latestVersion = "1.0",
+                val config = AppUpdateConfig(
+                    latestVersion = release.cleanVersionName,
                     minimumVersion = "1.0",
                     forceUpdate = false,
-                    apkUrl = "https://raw.githubusercontent.com/faheem-ansari/student-planner-app/main/app-release.apk",
-                    releaseNotes = "• All systems fully updated and running production"
+                    apkUrl = apkUrl,
+                    releaseNotes = notes,
+                    releaseTag = release.tagName
                 )
-            }
 
-            // Cache the update info
-            sharedPrefs.edit()
-                .putString(KEY_CACHED_VERSION, config.latestVersion)
-                .putString(KEY_CACHED_MIN_VERSION, config.minimumVersion)
-                .putBoolean(KEY_CACHED_FORCE, config.forceUpdate)
-                .putString(KEY_CACHED_APK_URL, config.apkUrl)
-                .putString(KEY_CACHED_RELEASE_NOTES, config.releaseNotes)
-                .apply()
+                // Cache the fetched config
+                cacheUpdateInfo(sharedPrefs, config)
 
-            val installedVersion = BuildConfig.VERSION_NAME
-
-            if (isVersionNewer(installedVersion, config.latestVersion)) {
-                val isForce = config.forceUpdate || isVersionNewer(installedVersion, config.minimumVersion)
-                AppUpdateResult.UpdateAvailable(config, isForce)
-            } else {
-                AppUpdateResult.UpToDate
-            }
-        } catch (e: Exception) {
-            Log.e("UpdateService", "Error checking for updates via Firestore", e)
-            
-            // On network error, let's see if we have a cached newer version we can still notify about offline
-            val cachedConfig = getCachedUpdateInfo(context)
-            if (cachedConfig != null) {
-                val installedVersion = BuildConfig.VERSION_NAME
-                if (isVersionNewer(installedVersion, cachedConfig.latestVersion)) {
-                    val isForce = cachedConfig.forceUpdate || isVersionNewer(installedVersion, cachedConfig.minimumVersion)
-                    return@withContext AppUpdateResult.UpdateAvailable(cachedConfig, isForce)
+                return@withContext if (isNewer) {
+                    Log.i(TAG, "New update available on GitHub: ${release.tagName} (installed: $currentVersion)")
+                    AppUpdateResult.UpdateAvailable(config, isForce = false)
+                } else {
+                    Log.i(TAG, "MedPulse is up to date (${currentVersion} >= ${release.tagName})")
+                    AppUpdateResult.UpToDate
                 }
             }
-            
-            AppUpdateResult.UpToDate
+        } else {
+            Log.w(TAG, "GitHub API check failed: ${gitHubResult.exceptionOrNull()?.message}")
         }
+
+        // 2. Fallback: Check cached update info if available
+        val cachedConfig = getCachedUpdateInfo(context)
+        if (cachedConfig != null) {
+            if (GitHubUpdateClient.isUpdateAvailable(currentVersion, cachedConfig.releaseTag)) {
+                return@withContext AppUpdateResult.UpdateAvailable(cachedConfig, isForce = false)
+            }
+        }
+
+        AppUpdateResult.UpToDate
+    }
+
+    private fun cacheUpdateInfo(prefs: android.content.SharedPreferences, config: AppUpdateConfig) {
+        prefs.edit()
+            .putString(KEY_CACHED_VERSION, config.latestVersion)
+            .putString(KEY_CACHED_MIN_VERSION, config.minimumVersion)
+            .putBoolean(KEY_CACHED_FORCE, config.forceUpdate)
+            .putString(KEY_CACHED_APK_URL, config.apkUrl)
+            .putString(KEY_CACHED_RELEASE_NOTES, config.releaseNotes)
+            .putString(KEY_CACHED_TAG, config.releaseTag)
+            .apply()
     }
 
     override fun getCachedUpdateInfo(context: Context): AppUpdateConfig? {
@@ -151,13 +124,15 @@ class UpdateServiceImpl : UpdateService {
         val force = sharedPrefs.getBoolean(KEY_CACHED_FORCE, false)
         val apkUrl = sharedPrefs.getString(KEY_CACHED_APK_URL, "") ?: ""
         val releaseNotes = sharedPrefs.getString(KEY_CACHED_RELEASE_NOTES, "") ?: ""
+        val releaseTag = sharedPrefs.getString(KEY_CACHED_TAG, latestVersion) ?: latestVersion
 
         return AppUpdateConfig(
             latestVersion = latestVersion,
             minimumVersion = minVersion,
             forceUpdate = force,
             apkUrl = apkUrl,
-            releaseNotes = releaseNotes
+            releaseNotes = releaseNotes,
+            releaseTag = releaseTag
         )
     }
 
@@ -174,6 +149,7 @@ class UpdateServiceImpl : UpdateService {
             .remove(KEY_CACHED_FORCE)
             .remove(KEY_CACHED_APK_URL)
             .remove(KEY_CACHED_RELEASE_NOTES)
+            .remove(KEY_CACHED_TAG)
             .apply()
     }
 
@@ -191,20 +167,15 @@ class UpdateServiceImpl : UpdateService {
         }
     }
 
-    private fun isVersionNewer(installed: String, latest: String): Boolean {
-        val installedClean = installed.takeWhile { it.isDigit() || it == '.' }
-        val latestClean = latest.takeWhile { it.isDigit() || it == '.' }
+    override fun getGitHubOwner(context: Context): String {
+        return GitHubUpdateClient.getRepoOwner(context)
+    }
 
-        val installedParts = installedClean.split(".").mapNotNull { it.toIntOrNull() }
-        val latestParts = latestClean.split(".").mapNotNull { it.toIntOrNull() }
+    override fun getGitHubRepo(context: Context): String {
+        return GitHubUpdateClient.getRepoName(context)
+    }
 
-        val maxLength = maxOf(installedParts.size, latestParts.size)
-        for (i in 0 until maxLength) {
-            val installedPart = installedParts.getOrElse(i) { 0 }
-            val latestPart = latestParts.getOrElse(i) { 0 }
-            if (latestPart > installedPart) return true
-            if (installedPart > latestPart) return false
-        }
-        return false
+    override fun setGitHubRepoConfig(context: Context, owner: String, repo: String) {
+        GitHubUpdateClient.setRepoConfig(context, owner, repo)
     }
 }

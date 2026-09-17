@@ -24,6 +24,12 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
+      - name: Restore Keystore from Base64
+        run: |
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
+
       - name: Generate Gradle Wrapper
         run: gradle wrapper
 
@@ -32,3 +38,9 @@ jobs:
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug
+
+      - name: Upload APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: app/build/outputs/apk/debug/app-debug.apk
