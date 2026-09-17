@@ -3,11 +3,17 @@ package com.example
 import com.example.util.AttendanceTimeValidator
 import com.example.util.AttendanceValidationResult
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import java.text.SimpleDateFormat
 import java.util.*
 
 class AttendanceTimeValidatorTest {
+
+    @Before
+    fun setUp() {
+        TimeZone.setDefault(AttendanceTimeValidator.COLLEGE_TIMEZONE)
+    }
 
     @Test
     fun testParseTimeToMinutes_standardFormats() {
@@ -123,5 +129,39 @@ class AttendanceTimeValidatorTest {
         )
 
         assertEquals(AttendanceValidationResult.Allowed, result)
+    }
+
+    @Test
+    fun testClassOpenForAttendance_whenCollegeTimePassed() {
+        val calendar = AttendanceTimeValidator.getCollegeCalendar()
+        // Simulate evening time after college hours (e.g. 7:45 PM = 19:45)
+        calendar.set(Calendar.HOUR_OF_DAY, 19)
+        calendar.set(Calendar.MINUTE, 45)
+        val eveningMillis = calendar.timeInMillis
+
+        // Class scheduled for 09:00 AM
+        val isOpen = AttendanceTimeValidator.isClassOpenForAttendance(
+            startTime = "09:00 AM",
+            classTime = "09:00 AM - 10:00 AM",
+            currentTimeMillis = eveningMillis
+        )
+        assertTrue("Classes must be open for attendance once college hours have passed", isOpen)
+    }
+
+    @Test
+    fun testClassOpenForAttendance_whenBeforeClassTime() {
+        val calendar = AttendanceTimeValidator.getCollegeCalendar()
+        // Simulate early morning before class (e.g. 8:15 AM)
+        calendar.set(Calendar.HOUR_OF_DAY, 8)
+        calendar.set(Calendar.MINUTE, 15)
+        val earlyMillis = calendar.timeInMillis
+
+        // Class scheduled for 09:00 AM
+        val isOpen = AttendanceTimeValidator.isClassOpenForAttendance(
+            startTime = "09:00 AM",
+            classTime = "09:00 AM - 10:00 AM",
+            currentTimeMillis = earlyMillis
+        )
+        assertFalse("Classes must NOT be open before class start time", isOpen)
     }
 }

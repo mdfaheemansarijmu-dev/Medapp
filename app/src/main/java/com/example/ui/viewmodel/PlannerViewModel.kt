@@ -453,12 +453,16 @@ class PlannerViewModel(
 
         // Start Clock updates
         viewModelScope.launch {
-            val format = SimpleDateFormat("hh:mm a", Locale.getDefault())
-            val dayFormat = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
+            val format = SimpleDateFormat("hh:mm a", Locale.getDefault()).apply {
+                timeZone = AttendanceTimeValidator.COLLEGE_TIMEZONE
+            }
+            val dayFormat = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).apply {
+                timeZone = AttendanceTimeValidator.COLLEGE_TIMEZONE
+            }
             var lastDateStr = dayFormat.format(Date())
             while (true) {
                 _currentTimeOfDay.value = format.format(Date())
-                _currentCalendarDate.value = Calendar.getInstance()
+                _currentCalendarDate.value = AttendanceTimeValidator.getCollegeCalendar()
                 
                 val currentDateStr = dayFormat.format(Date())
                 if (currentDateStr != lastDateStr) {
@@ -539,7 +543,7 @@ class PlannerViewModel(
         val todayClasses = getTimetableForDay(getCurrentDayOfWeek())
         if (todayClasses.isEmpty()) return DayClassSchedule()
 
-        val calendar = Calendar.getInstance()
+        val calendar = AttendanceTimeValidator.getCollegeCalendar()
         val currentMinutes = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
 
         var running: TimetableClass? = null
@@ -573,7 +577,7 @@ class PlannerViewModel(
     fun getCurrentDayOfWeek(): Int {
         // Calendar Sunday=1, Monday=2, ..., Saturday=7
         // Convert to our format: 1=Mon, 2=Tue, ..., 6=Sat, 7=Sun
-        val calDay = Calendar.getInstance().get(Calendar.DAY_OF_WEEK)
+        val calDay = AttendanceTimeValidator.getCollegeCalendar().get(Calendar.DAY_OF_WEEK)
         return when (calDay) {
             Calendar.MONDAY -> 1
             Calendar.TUESDAY -> 2
@@ -2386,8 +2390,7 @@ class PlannerViewModel(
         note: String? = null,
         reason: String? = null
     ) {
-        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
-        val actualDateString = dateString ?: sdf.format(java.util.Date())
+        val actualDateString = dateString ?: AttendanceTimeValidator.getTodayDateString()
 
         // Validate timing constraint: Attendance can only be accepted AFTER class start time, not before time!
         val effectiveStartTime = startTime

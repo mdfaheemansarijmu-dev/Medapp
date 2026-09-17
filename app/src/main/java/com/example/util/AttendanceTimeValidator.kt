@@ -4,6 +4,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 /**
  * Result of checking whether attendance can be recorded or changed for a given class session.
@@ -26,10 +27,34 @@ sealed class AttendanceValidationResult {
  * Validates attendance marking rules based on scheduled class start times.
  * Enforces rule: Students cannot mark present or absent before class start time.
  * Attendance is only accepted at or after the scheduled class start time.
+ *
+ * Supports Indian Standard Time (Asia/Kolkata, UTC+05:30) as standard for Indian medical institutions.
  */
 object AttendanceTimeValidator {
 
-    private val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+    /**
+     * Standard timezone for Indian Medical Colleges (NMC / AIIMS / MBBS curriculum).
+     */
+    val COLLEGE_TIMEZONE: TimeZone = TimeZone.getTimeZone("Asia/Kolkata")
+
+    /**
+     * Returns a Calendar configured in the College timezone for accurate schedule checks.
+     */
+    fun getCollegeCalendar(currentTimeMillis: Long = System.currentTimeMillis()): Calendar {
+        return Calendar.getInstance(COLLEGE_TIMEZONE).apply {
+            timeInMillis = currentTimeMillis
+        }
+    }
+
+    /**
+     * Returns today's date formatted as "yyyy-MM-dd" in the College timezone.
+     */
+    fun getTodayDateString(currentTimeMillis: Long = System.currentTimeMillis()): String {
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+            timeZone = COLLEGE_TIMEZONE
+        }
+        return sdf.format(Date(currentTimeMillis))
+    }
 
     /**
      * Parses a time string (e.g. "09:30 AM", "9:30 AM", "14:30", "09:30") into total minutes from midnight.
@@ -94,12 +119,10 @@ object AttendanceTimeValidator {
         classTime: String? = null,
         currentTimeMillis: Long = System.currentTimeMillis()
     ): AttendanceValidationResult {
-        val todayStr = synchronized(DATE_FORMAT) {
-            DATE_FORMAT.format(Date(currentTimeMillis))
-        }
+        val todayStr = getTodayDateString(currentTimeMillis)
         val targetDateStr = if (dateString.isNullOrBlank()) todayStr else dateString.trim()
 
-        // Compare target date with today
+        // Compare target date with today in college timezone
         if (targetDateStr > todayStr) {
             return AttendanceValidationResult.FutureDate(
                 dateString = targetDateStr,
@@ -119,7 +142,7 @@ object AttendanceTimeValidator {
             return AttendanceValidationResult.Allowed
         }
 
-        val calendar = Calendar.getInstance().apply { timeInMillis = currentTimeMillis }
+        val calendar = getCollegeCalendar(currentTimeMillis)
         val currentMinutes = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
 
         return if (currentMinutes < classStartMinutes) {
@@ -133,7 +156,7 @@ object AttendanceTimeValidator {
     }
 
     /**
-     * Convenience boolean check.
+     * Convenience boolean check whether attendance is allowed.
      */
     fun isAttendanceAllowed(
         dateString: String?,
@@ -142,5 +165,17 @@ object AttendanceTimeValidator {
         currentTimeMillis: Long = System.currentTimeMillis()
     ): Boolean {
         return validateAttendanceTime(dateString, startTime, classTime, currentTimeMillis) is AttendanceValidationResult.Allowed
+    }
+
+    /**
+     * Convenience boolean check if a class scheduled for today is open for attendance right now.
+     */
+    fun isClassOpenForAttendance(
+        startTime: String?,
+        classTime: String? = null,
+        currentTimeMillis: Long = System.currentTimeMillis()
+    ): Boolean {
+        val todayStr = getTodayDateString(currentTimeMillis)
+        return isAttendanceAllowed(todayStr, startTime, classTime, currentTimeMillis)
     }
 }

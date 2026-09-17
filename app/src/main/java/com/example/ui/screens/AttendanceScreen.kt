@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
@@ -19,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -63,6 +65,14 @@ fun AttendanceScreen(
     val currentSelectedSubject = selectedSubjectForDetails?.let { sel ->
         subjectSummaries.find { it.subject.equals(sel.subject, ignoreCase = true) } ?: sel
     }
+
+    // Today's classes and date resolved in college timezone
+    val currentDayOfWeek = viewModel.getCurrentDayOfWeek()
+    val todayDayName = viewModel.getDayName(currentDayOfWeek)
+    val todayClasses = remember(timetable, currentDayOfWeek) {
+        viewModel.getTimetableForDay(currentDayOfWeek).sortedBy { viewModel.parseTimeToMinutes(it.startTime) }
+    }
+    val todayDateStr = remember { AttendanceTimeValidator.getTodayDateString() }
 
     BackHandler { onBack() }
 
@@ -209,6 +219,31 @@ fun AttendanceScreen(
                                     )
                                 }
                             }
+                        }
+                    }
+
+                    // 3. Today's Section - Today's Classes Attendance Submission
+                    if (todayClasses.isNotEmpty()) {
+                        item {
+                            TodayAttendanceSection(
+                                todayDayName = todayDayName,
+                                todayDateStr = todayDateStr,
+                                todayClasses = todayClasses,
+                                allRecords = allRecords,
+                                onMarkAttendance = { cls, isPresent, status ->
+                                    viewModel.markAttendance(
+                                        subject = cls.subject,
+                                        isPresent = isPresent,
+                                        classTime = "${cls.startTime}-${cls.endTime}",
+                                        status = status,
+                                        startTime = cls.startTime,
+                                        endTime = cls.endTime
+                                    )
+                                },
+                                onEditRecord = { record ->
+                                    editingRecord = record
+                                }
+                            )
                         }
                     }
 
@@ -1780,6 +1815,319 @@ fun NoAttendanceRecordsEmptyState(
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Record First Class")
+            }
+        }
+    }
+}
+
+/**
+ * Today's Section: Displays all scheduled classes for today with live timing validation.
+ * Blocks attendance marking before class time and opens immediately once class time arrives.
+ */
+@Composable
+fun TodayAttendanceSection(
+    todayDayName: String,
+    todayDateStr: String,
+    todayClasses: List<TimetableClass>,
+    allRecords: List<AttendanceRecord>,
+    onMarkAttendance: (TimetableClass, Boolean, String) -> Unit,
+    onEditRecord: (AttendanceRecord) -> Unit
+) {
+    val context = LocalContext.current
+    val openClassCount = todayClasses.count {
+        AttendanceTimeValidator.isClassOpenForAttendance(it.startTime, "${it.startTime}-${it.endTime}")
+    }
+    val markedClassCount = todayClasses.count { cls ->
+        allRecords.any { rec ->
+            rec.dateString == todayDateStr &&
+            rec.subject.equals(cls.subject, ignoreCase = true) &&
+            (rec.startTime == cls.startTime || rec.classTime == "${cls.startTime}-${cls.endTime}")
+        }
+    }
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("card_today_section_attendance")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.EventAvailable,
+                            contentDescription = "Today's Attendance",
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "Today's Section • Class Attendance",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "$todayDayName • $todayDateStr",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Status chip
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (openClassCount == todayClasses.size) Color(0xFFE8F5E9) else MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    Text(
+                        text = if (openClassCount == todayClasses.size) "All Open ($markedClassCount/${todayClasses.size} Marked)" else "$openClassCount/${todayClasses.size} Open",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = if (openClassCount == todayClasses.size) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Classes list
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                todayClasses.forEach { cls ->
+                    val isClassOpen = AttendanceTimeValidator.isClassOpenForAttendance(cls.startTime, "${cls.startTime}-${cls.endTime}")
+                    val existingRecord = allRecords.find {
+                        it.dateString == todayDateStr &&
+                        it.subject.equals(cls.subject, ignoreCase = true) &&
+                        (it.startTime == cls.startTime || it.classTime == "${cls.startTime}-${cls.endTime}")
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("today_class_item_${cls.id}")
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp)
+                        ) {
+                            // Class info row
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = cls.subject,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (cls.periodNumber > 0) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                                            ) {
+                                                Text(
+                                                    text = "P${cls.periodNumber}",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "${cls.startTime} - ${cls.endTime}" + if (!cls.room.isNullOrBlank()) " • ${cls.room}" else "",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
+                                // Status badge if marked
+                                if (existingRecord != null) {
+                                    val (badgeText, badgeBg, badgeFg) = when {
+                                        existingRecord.status == "NO_CLASS" -> Triple("No Class", Color(0xFFFFF3E0), Color(0xFFE65100))
+                                        existingRecord.status == "ABSENT" -> Triple("Absent", Color(0xFFFFEBEE), Color(0xFFC62828))
+                                        existingRecord.status == "EXCUSED" -> Triple("Excused", Color(0xFFE3F2FD), Color(0xFF1565C0))
+                                        else -> Triple("Present", Color(0xFFE8F5E9), Color(0xFF2E7D32))
+                                    }
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = badgeBg
+                                    ) {
+                                        Text(
+                                            text = badgeText,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = badgeFg,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Action buttons row
+                            if (!isClassOpen) {
+                                // Locked before class time: Informative locked state
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Lock,
+                                                contentDescription = "Locked",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "Opens at ${cls.startTime}",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            Toast.makeText(
+                                                context,
+                                                "Attendance for ${cls.subject} opens at ${cls.startTime}. Students cannot mark attendance before class time.",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(30.dp)
+                                    ) {
+                                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(12.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Locked Before Time", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            } else if (existingRecord == null) {
+                                // Class open & not marked yet: Quick 1-tap submission buttons
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { onMarkAttendance(cls, false, "NO_CLASS") },
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                        modifier = Modifier
+                                            .height(32.dp)
+                                            .testTag("btn_today_no_class_${cls.id}")
+                                    ) {
+                                        Text("No Class", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    OutlinedButton(
+                                        onClick = { onMarkAttendance(cls, false, "ABSENT") },
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFC62828)),
+                                        border = BorderStroke(1.dp, Color(0xFFC62828).copy(alpha = 0.5f)),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier
+                                            .height(32.dp)
+                                            .testTag("btn_today_absent_${cls.id}")
+                                    ) {
+                                        Text("Absent", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                    }
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    FilledTonalButton(
+                                        onClick = { onMarkAttendance(cls, true, "PRESENT") },
+                                        colors = ButtonDefaults.filledTonalButtonColors(
+                                            containerColor = Color(0xFFE8F5E9),
+                                            contentColor = Color(0xFF2E7D32)
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                        modifier = Modifier
+                                            .height(32.dp)
+                                            .testTag("btn_today_present_${cls.id}")
+                                    ) {
+                                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(13.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Present ✓", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                    }
+                                }
+                            } else {
+                                // Class open & already marked: Show change status option
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Attendance recorded",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    OutlinedButton(
+                                        onClick = { onEditRecord(existingRecord) },
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier
+                                            .height(30.dp)
+                                            .testTag("btn_today_edit_${cls.id}")
+                                    ) {
+                                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(12.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Change Status", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

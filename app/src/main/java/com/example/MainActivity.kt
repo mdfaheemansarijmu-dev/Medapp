@@ -47,6 +47,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Set college timezone (Indian Standard Time, Asia/Kolkata) as standard for Indian medical institutions
+        java.util.TimeZone.setDefault(com.example.util.AttendanceTimeValidator.COLLEGE_TIMEZONE)
+
         // 1. Initialize Database & Repository locally (robust context-aware creation)
         database = Room.databaseBuilder(
             applicationContext,

@@ -41,6 +41,7 @@ import com.example.data.model.StudyTask
 import com.example.data.model.TimetableClass
 import com.example.data.university.UniversityHoliday
 import com.example.util.OverallAttendanceSummary
+import com.example.util.AttendanceTimeValidator
 import com.example.ui.viewmodel.PlannerViewModel
 import com.example.ui.viewmodel.Screen
 import java.text.SimpleDateFormat
@@ -990,7 +991,7 @@ fun LiveTimetableWidget(
                                         )
                                     }
                                 } else if (attendance == null) {
-                                    val calendar = java.util.Calendar.getInstance()
+                                    val calendar = AttendanceTimeValidator.getCollegeCalendar()
                                     val currentMinutes = calendar.get(java.util.Calendar.HOUR_OF_DAY) * 60 + calendar.get(java.util.Calendar.MINUTE)
                                     val classStartMinutes = viewModel.parseTimeToMinutes(cls.startTime)
                                     val isClassStarted = currentMinutes >= classStartMinutes
@@ -1102,7 +1103,7 @@ fun LiveTimetableWidget(
                                         }
                                     }
                                 } else {
-                                    val calendar = java.util.Calendar.getInstance()
+                                    val calendar = AttendanceTimeValidator.getCollegeCalendar()
                                     val currentMinutes = calendar.get(java.util.Calendar.HOUR_OF_DAY) * 60 + calendar.get(java.util.Calendar.MINUTE)
                                     val classStartMinutes = viewModel.parseTimeToMinutes(cls.startTime)
                                     val isClassStarted = currentMinutes >= classStartMinutes
