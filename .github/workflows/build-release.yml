@@ -27,11 +27,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Grant Execute Permission for Gradlew
-        run: chmod +x gradlew
-
       - name: Build with Gradle
-        run: ./gradlew assembleDebug
+        run: gradle assembleDebug
 
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
@@ -53,8 +50,3 @@ jobs:
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
-        with:
-          files: app-debug.apk
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
