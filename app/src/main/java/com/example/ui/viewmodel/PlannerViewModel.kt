@@ -2724,6 +2724,8 @@ class PlannerViewModel(
 
     fun dismissUpdateDialog() {
         _isUpdateDialogDismissed.value = true
+        _updateDownloadState.value = null
+        _updateDownloadProgress.value = null
         // Store dismissed version to avoid repeatedly showing it
         val config = _cachedUpdateConfig.value
         if (config != null) {
@@ -2732,9 +2734,27 @@ class PlannerViewModel(
         }
     }
 
+    fun resetDownloadState() {
+        _updateDownloadProgress.value = null
+        _updateDownloadState.value = null
+    }
+
+    fun installDownloadedUpdate() {
+        viewModelScope.launch(Dispatchers.Main) {
+            val context = getApplication<Application>()
+            _updateDownloadState.value = "Opening installer..."
+            val launched = DownloadManagerHelper.installLatestDownloadedApk(context)
+            if (!launched) {
+                _updateDownloadState.value = "Download complete! Tap 'Install Update' to install."
+            }
+        }
+    }
+
     fun clearUpdateResult() {
         _updateResult.value = null
         _updateAvailable.value = false
+        _updateDownloadProgress.value = null
+        _updateDownloadState.value = null
     }
 
     fun saveCustomUpdateUrl(url: String) {
@@ -2823,7 +2843,7 @@ class PlannerViewModel(
                             }
                             DownloadManager.STATUS_SUCCESSFUL -> {
                                 _updateDownloadProgress.value = 1f
-                                _updateDownloadState.value = "Download complete! Opening installer..."
+                                _updateDownloadState.value = "Download complete! Ready to install."
                                 isDownloading = false
                                 withContext(Dispatchers.Main) {
                                     DownloadManagerHelper.installApkFromDownloadId(getApplication(), downloadId)

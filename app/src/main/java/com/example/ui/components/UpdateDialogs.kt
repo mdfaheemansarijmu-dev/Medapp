@@ -28,14 +28,18 @@ fun OptionalUpdateDialog(
     downloadProgress: Float?,
     downloadState: String?,
     onUpdateClick: () -> Unit,
-    onDismissClick: () -> Unit
+    onDismissClick: () -> Unit,
+    onInstallClick: () -> Unit = onUpdateClick
 ) {
+    val isComplete = (downloadProgress != null && downloadProgress >= 1f) ||
+            (downloadState?.contains("complete", ignoreCase = true) == true) ||
+            (downloadState?.contains("ready", ignoreCase = true) == true)
+    val isFailed = downloadState?.contains("failed", ignoreCase = true) == true ||
+            downloadState?.contains("error", ignoreCase = true) == true
+    val isDownloading = downloadState != null && !isComplete && !isFailed
+
     AlertDialog(
-        onDismissRequest = {
-            if (downloadState == null) {
-                onDismissClick()
-            }
-        },
+        onDismissRequest = onDismissClick,
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
         icon = {
@@ -145,7 +149,8 @@ fun OptionalUpdateDialog(
                             Text(
                                 text = downloadState,
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.secondary
+                                color = MaterialTheme.colorScheme.secondary,
+                                textAlign = TextAlign.Center
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             downloadProgress?.let { progress ->
@@ -176,43 +181,85 @@ fun OptionalUpdateDialog(
             }
         },
         confirmButton = {
-            if (downloadState == null) {
-                Button(
-                    onClick = onUpdateClick,
-                    shape = RoundedCornerShape(100.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("update_dialog_now_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Download,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Update Now", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+            when {
+                isComplete -> {
+                    Button(
+                        onClick = onInstallClick,
+                        shape = RoundedCornerShape(100.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("update_dialog_install_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SystemUpdate,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Install Update", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+                    }
+                }
+                isFailed -> {
+                    Button(
+                        onClick = onUpdateClick,
+                        shape = RoundedCornerShape(100.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("update_dialog_retry_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Retry Download", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+                    }
+                }
+                downloadState == null -> {
+                    Button(
+                        onClick = onUpdateClick,
+                        shape = RoundedCornerShape(100.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("update_dialog_now_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Update Now", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+                    }
                 }
             }
         },
         dismissButton = {
-            if (downloadState == null) {
-                TextButton(
-                    onClick = onDismissClick,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(44.dp)
-                        .testTag("update_dialog_later_btn")
-                ) {
-                    Text(
-                        text = "Later",
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
+            TextButton(
+                onClick = onDismissClick,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .testTag("update_dialog_later_btn")
+            ) {
+                Text(
+                    text = if (isDownloading) "Run in Background" else "Later",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
         }
     )
@@ -223,7 +270,8 @@ fun ForceUpdateScreen(
     config: AppUpdateConfig,
     downloadProgress: Float?,
     downloadState: String?,
-    onUpdateClick: () -> Unit
+    onUpdateClick: () -> Unit,
+    onInstallClick: () -> Unit = onUpdateClick
 ) {
     Box(
         modifier = Modifier
@@ -354,6 +402,12 @@ fun ForceUpdateScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                val isComplete = (downloadProgress != null && downloadProgress >= 1f) ||
+                        (downloadState?.contains("complete", ignoreCase = true) == true) ||
+                        (downloadState?.contains("ready", ignoreCase = true) == true)
+                val isFailed = downloadState?.contains("failed", ignoreCase = true) == true ||
+                        downloadState?.contains("error", ignoreCase = true) == true
+
                 if (downloadState != null) {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f)),
@@ -367,7 +421,8 @@ fun ForceUpdateScreen(
                             Text(
                                 text = downloadState,
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.error
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = TextAlign.Center
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             downloadProgress?.let { progress ->
@@ -392,6 +447,53 @@ fun ForceUpdateScreen(
                                     )
                                 }
                             }
+                        }
+                    }
+                    if (isComplete) {
+                        Button(
+                            onClick = onInstallClick,
+                            shape = RoundedCornerShape(100.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp)
+                                .testTag("force_update_install_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SystemUpdate,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Install Update",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    } else if (isFailed) {
+                        Button(
+                            onClick = onUpdateClick,
+                            shape = RoundedCornerShape(100.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp)
+                                .testTag("force_update_retry_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Retry Download",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
                         }
                     }
                 } else {

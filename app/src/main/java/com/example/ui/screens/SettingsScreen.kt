@@ -950,6 +950,45 @@ fun SettingsScreen(
                                                 )
                                             }
                                         }
+
+                                        val currentProgress = downloadProgress
+                                        val isComplete = (currentProgress != null && currentProgress >= 1f) ||
+                                                (downloadState?.contains("complete", ignoreCase = true) == true) ||
+                                                (downloadState?.contains("ready", ignoreCase = true) == true)
+                                        val isFailed = downloadState?.contains("failed", ignoreCase = true) == true ||
+                                                downloadState?.contains("error", ignoreCase = true) == true
+
+                                        if (isComplete) {
+                                            Spacer(modifier = Modifier.height(10.dp))
+                                            Button(
+                                                onClick = { viewModel.installDownloadedUpdate() },
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = MaterialTheme.colorScheme.primary,
+                                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                                ),
+                                                shape = RoundedCornerShape(12.dp),
+                                                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("install_update_btn")
+                                            ) {
+                                                Icon(Icons.Default.SystemUpdate, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text("Install Update", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                                            }
+                                        } else if (isFailed) {
+                                            Spacer(modifier = Modifier.height(10.dp))
+                                            Button(
+                                                onClick = { viewModel.downloadAndInstallUpdate(result.config.apkUrl) },
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = MaterialTheme.colorScheme.error,
+                                                    contentColor = MaterialTheme.colorScheme.onError
+                                                ),
+                                                shape = RoundedCornerShape(12.dp),
+                                                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("retry_update_btn")
+                                            ) {
+                                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text("Retry Download", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                                            }
+                                        }
                                     } else {
                                         Button(
                                             onClick = { viewModel.downloadAndInstallUpdate(result.config.apkUrl) },

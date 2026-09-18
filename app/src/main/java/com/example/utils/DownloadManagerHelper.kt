@@ -11,6 +11,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import java.io.File
+import java.io.FileInputStream
 
 object DownloadManagerHelper {
     private const val TAG = "DownloadManagerHelper"
@@ -20,7 +21,7 @@ object DownloadManagerHelper {
 
     /**
      * Enqueues an APK download using Android's system DownloadManager.
-     * Saves to Environment.DIRECTORY_DOWNLOADS.
+     * Uses the app's external files directory to avoid Android 10+ Scoped Storage access restrictions.
      */
     fun downloadApk(
         context: Context,
@@ -36,14 +37,21 @@ object DownloadManagerHelper {
                 "MedPulse-Update.apk"
             }
 
-            // Remove existing file if present to avoid download collisions
+            // Clean up existing APK files in app directory to avoid conflicts
             try {
-                val existingFile = File(
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                    fileName
-                )
-                if (existingFile.exists()) {
-                    existingFile.delete()
+                val targetDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                if (targetDir != null) {
+                    val existingFile = File(targetDir, fileName)
+                    if (existingFile.exists()) {
+                        existingFile.delete()
+                    }
+                }
+                val cacheDir = File(context.cacheDir, "updates")
+                if (cacheDir.exists()) {
+                    val cacheFile = File(cacheDir, fileName)
+                    if (cacheFile.exists()) {
+                        cacheFile.delete()
+                    }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Could not delete old APK file: ${e.message}")
@@ -54,7 +62,15 @@ object DownloadManagerHelper {
                 val desc = if (cleanVersion.isNotEmpty()) "Downloading MedPulse v$cleanVersion..." else "Downloading MedPulse update..."
                 setDescription(desc)
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+
+                // Save to app's external files dir (fully accessible by app & FileProvider on Android 10+ without storage permissions)
+                try {
+                    setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not set destination in external files dir, falling back to public downloads: ${e.message}")
+                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+                }
+
                 setMimeType("application/vnd.android.package-archive")
                 setAllowedOverMetered(true)
                 setAllowedOverRoaming(true)
@@ -79,25 +95,19 @@ object DownloadManagerHelper {
     }
 
     /**
-     * Installs an APK file using FileProvider and ACTION_VIEW Intent.
+     * Checks if Unknown App Sources permission is granted on Android 8.0+.
+     * If not, prompts the user and opens the system settings screen.
      */
-    fun installApk(context: Context, file: File) {
-        if (!file.exists()) {
-            Log.e(TAG, "Cannot install: File does not exist at ${file.absolutePath}")
-            Toast.makeText(context, "Update file not found", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        try {
-            // Check for Unknown App Sources permission on Android 8.0+
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (!context.packageManager.canRequestPackageInstalls()) {
-                    Log.w(TAG, "Requesting unknown sources permission")
-                    Toast.makeText(
-                        context,
-                        "Please allow MedPulse to install packages from this source",
-                        Toast.LENGTH_LONG
-                    ).show()
+    fun checkAndRequestInstallPermission(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (!context.packageManager.canRequestPackageInstalls()) {
+                Log.w(TAG, "Requesting unknown sources permission")
+                Toast.makeText(
+                    context,
+                    "Please allow MedPulse to install apps, then tap Install",
+                    Toast.LENGTH_LONG
+                ).show()
+                try {
                     val manageIntent = Intent(
                         Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                         Uri.parse("package:${context.packageName}")
@@ -105,71 +115,197 @@ object DownloadManagerHelper {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                     }
                     context.startActivity(manageIntent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to launch ACTION_MANAGE_UNKNOWN_APP_SOURCES", e)
                 }
+                return false
+            }
+        }
+        return true
+    }
+
+    /**
+     * Installs an APK file using FileProvider and ACTION_VIEW Intent.
+     */
+    fun installApk(context: Context, file: File): Boolean {
+        if (!file.exists() || file.length() == 0L) {
+            Log.e(TAG, "Cannot install: File does not exist or empty at ${file.absolutePath}")
+            Toast.makeText(context, "Update file not found or corrupted", Toast.LENGTH_SHORT).show()
+            return false
+        }
+
+        try {
+            if (!checkAndRequestInstallPermission(context)) {
+                return false
             }
 
             val authority = "${context.packageName}.provider"
             val apkUri = FileProvider.getUriForFile(context, authority, file)
-            Log.d(TAG, "Prompting package installer for URI: $apkUri with authority $authority")
+            Log.d(TAG, "Prompting package installer for URI: $apkUri (File: ${file.absolutePath}, ${file.length()} bytes)")
 
             val installIntent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(apkUri, "application/vnd.android.package-archive")
-                flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+                flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
 
             context.startActivity(installIntent)
+            return true
         } catch (e: Exception) {
             Log.e(TAG, "Error launching package installer", e)
             Toast.makeText(context, "Error starting installation: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            return false
+        }
+    }
+
+    /**
+     * Installs an APK directly from a content URI (e.g. from DownloadManager).
+     */
+    fun installApkFromUri(context: Context, uri: Uri): Boolean {
+        try {
+            if (!checkAndRequestInstallPermission(context)) {
+                return false
+            }
+
+            Log.d(TAG, "Prompting package installer for content URI: $uri")
+            val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+
+            context.startActivity(installIntent)
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error installing from URI: $uri", e)
+            return false
         }
     }
 
     /**
      * Resolves downloaded APK from a DownloadManager downloadId and triggers installation.
      */
-    fun installApkFromDownloadId(context: Context, downloadId: Long) {
-        val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val query = DownloadManager.Query().setFilterById(downloadId)
-        val cursor = downloadManager.query(query)
+    fun installApkFromDownloadId(context: Context, downloadId: Long): Boolean {
+        val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+            ?: return false
 
-        var handled = false
-        if (cursor != null && cursor.moveToFirst()) {
-            val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-            val status = if (statusIndex >= 0) cursor.getInt(statusIndex) else -1
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val savedFileName = prefs.getString(KEY_LAST_FILE_NAME, "MedPulse-Update.apk") ?: "MedPulse-Update.apk"
 
-            if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                // Try resolving via local URI column
-                val localUriIndex = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
-                val localUriString = if (localUriIndex >= 0) cursor.getString(localUriIndex) else null
+        // 1. Check if the file is in context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        val extDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        if (extDir != null) {
+            val appFile = File(extDir, savedFileName)
+            if (appFile.exists() && appFile.length() > 0L) {
+                Log.d(TAG, "Found file in app external files dir: ${appFile.absolutePath}")
+                return installApk(context, appFile)
+            }
+        }
 
-                if (!localUriString.isNullOrBlank()) {
-                    val localUri = Uri.parse(localUriString)
-                    val filePath = localUri.path
-                    if (filePath != null) {
-                        val file = File(filePath)
-                        if (file.exists()) {
-                            installApk(context, file)
-                            handled = true
-                        }
-                    }
+        // 2. Try copying via downloadManager.openDownloadedFile(downloadId) into context.cacheDir/updates
+        try {
+            downloadManager.openDownloadedFile(downloadId)?.use { pfd ->
+                val inputStream = FileInputStream(pfd.fileDescriptor)
+                val updateDir = File(context.cacheDir, "updates")
+                updateDir.mkdirs()
+                val cacheFile = File(updateDir, savedFileName)
+                cacheFile.outputStream().use { out ->
+                    inputStream.copyTo(out)
+                }
+                if (cacheFile.exists() && cacheFile.length() > 0L) {
+                    Log.d(TAG, "Copied file from DownloadManager to cache: ${cacheFile.absolutePath} (${cacheFile.length()} bytes)")
+                    return installApk(context, cacheFile)
                 }
             }
-            cursor.close()
+        } catch (e: Exception) {
+            Log.w(TAG, "openDownloadedFile failed or not available for ID #$downloadId: ${e.message}")
         }
 
-        if (!handled) {
-            // Fallback: Check last known filename in Environment.DIRECTORY_DOWNLOADS
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val fileName = prefs.getString(KEY_LAST_FILE_NAME, "MedPulse-Update.apk") ?: "MedPulse-Update.apk"
-            val fallbackFile = File(
+        // 3. Try downloadManager.getUriForDownloadedFile(downloadId)
+        try {
+            val contentUri = downloadManager.getUriForDownloadedFile(downloadId)
+            if (contentUri != null) {
+                Log.d(TAG, "Attempting install directly with contentUri: $contentUri")
+                val installed = installApkFromUri(context, contentUri)
+                if (installed) return true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "getUriForDownloadedFile failed for ID #$downloadId: ${e.message}")
+        }
+
+        // 4. Try public Downloads folder fallback
+        try {
+            val publicFile = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                fileName
+                savedFileName
             )
-            if (fallbackFile.exists()) {
-                installApk(context, fallbackFile)
-            } else {
-                Log.w(TAG, "Could not locate downloaded APK file for ID #$downloadId")
+            if (publicFile.exists() && publicFile.length() > 0L) {
+                val updateDir = File(context.cacheDir, "updates")
+                updateDir.mkdirs()
+                val cacheFile = File(updateDir, savedFileName)
+                try {
+                    publicFile.inputStream().use { input ->
+                        cacheFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    if (cacheFile.exists() && cacheFile.length() > 0L) {
+                        return installApk(context, cacheFile)
+                    }
+                } catch (_: Exception) {}
+                return installApk(context, publicFile)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Public downloads check failed: ${e.message}")
+        }
+
+        // 5. Look for any existing .apk in cacheDir/updates
+        val updateDir = File(context.cacheDir, "updates")
+        if (updateDir.exists()) {
+            val apks = updateDir.listFiles { _, name -> name.endsWith(".apk") }
+            val latest = apks?.maxByOrNull { it.lastModified() }
+            if (latest != null && latest.length() > 0L) {
+                return installApk(context, latest)
             }
         }
+
+        Log.e(TAG, "Could not locate or read downloaded APK for ID #$downloadId")
+        Toast.makeText(context, "Could not locate downloaded update file. Please tap Install Update.", Toast.LENGTH_SHORT).show()
+        return false
+    }
+
+    /**
+     * Resolves the latest downloaded APK file and triggers installation.
+     */
+    fun installLatestDownloadedApk(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val lastId = prefs.getLong(KEY_LAST_DOWNLOAD_ID, -1L)
+        if (lastId != -1L) {
+            val installed = installApkFromDownloadId(context, lastId)
+            if (installed) return true
+        }
+
+        val savedFileName = prefs.getString(KEY_LAST_FILE_NAME, "MedPulse-Update.apk") ?: "MedPulse-Update.apk"
+        val extDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        if (extDir != null) {
+            val file = File(extDir, savedFileName)
+            if (file.exists() && file.length() > 0L) {
+                return installApk(context, file)
+            }
+        }
+
+        val updateDir = File(context.cacheDir, "updates")
+        if (updateDir.exists()) {
+            val apks = updateDir.listFiles { _, name -> name.endsWith(".apk") }
+            val latest = apks?.maxByOrNull { it.lastModified() }
+            if (latest != null && latest.length() > 0L) {
+                return installApk(context, latest)
+            }
+        }
+
+        Toast.makeText(context, "No downloaded update found. Please download again.", Toast.LENGTH_SHORT).show()
+        return false
     }
 }

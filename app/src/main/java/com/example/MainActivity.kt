@@ -96,6 +96,9 @@ class MainActivity : ComponentActivity() {
                                     downloadState = downloadState,
                                     onUpdateClick = {
                                         viewModel.downloadAndInstallUpdate(result.config.apkUrl)
+                                    },
+                                    onInstallClick = {
+                                        viewModel.installDownloadedUpdate()
                                     }
                                 )
                             } else {
@@ -109,6 +112,9 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onDismissClick = {
                                         viewModel.dismissUpdateDialog()
+                                    },
+                                    onInstallClick = {
+                                        viewModel.installDownloadedUpdate()
                                     }
                                 )
                             }
