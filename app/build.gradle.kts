@@ -18,8 +18,14 @@ android {
     applicationId = "com.example"
     minSdk = 24
     targetSdk = 36
-    versionCode = 2
-    versionName = "1.1"
+    val customVersionName = (project.findProperty("versionName") as? String)
+      ?: System.getenv("APP_VERSION_NAME")
+      ?: "1.2"
+    val customVersionCode = (project.findProperty("versionCode") as? String)?.toIntOrNull()
+      ?: System.getenv("APP_VERSION_CODE")?.toIntOrNull()
+      ?: 3
+    versionCode = customVersionCode
+    versionName = customVersionName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

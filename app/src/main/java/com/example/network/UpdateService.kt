@@ -54,7 +54,12 @@ class UpdateServiceImpl : UpdateService {
 
         val owner = GitHubUpdateClient.getRepoOwner(context)
         val repo = GitHubUpdateClient.getRepoName(context)
-        val currentVersion = BuildConfig.VERSION_NAME
+        val currentVersion = try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            pInfo.versionName?.takeIf { it.isNotBlank() } ?: BuildConfig.VERSION_NAME
+        } catch (_: Exception) {
+            BuildConfig.VERSION_NAME
+        }
 
         Log.d(TAG, "Checking for updates from GitHub repo $owner/$repo (installed: $currentVersion)...")
 
@@ -91,9 +96,10 @@ class UpdateServiceImpl : UpdateService {
                     AppUpdateResult.UpToDate
                 }
             }
-        } else {
-            Log.w(TAG, "GitHub API check failed: ${gitHubResult.exceptionOrNull()?.message}")
         }
+
+        val failureError = gitHubResult.exceptionOrNull()?.message ?: "Unable to fetch releases from GitHub"
+        Log.w(TAG, "GitHub API check failed: $failureError")
 
         // 2. Fallback: Check cached update info if available
         val cachedConfig = getCachedUpdateInfo(context)
@@ -103,7 +109,7 @@ class UpdateServiceImpl : UpdateService {
             }
         }
 
-        AppUpdateResult.UpToDate
+        AppUpdateResult.Error(failureError)
     }
 
     private fun cacheUpdateInfo(prefs: android.content.SharedPreferences, config: AppUpdateConfig) {

@@ -70,7 +70,15 @@ jobs:
       - name: Build Debug APK
         env:
           JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true"
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: |
+          if [ -n "$GITHUB_REF_NAME" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            TAG_VERSION="${TAG_VERSION#V}"
+            echo "Building APK for tag $GITHUB_REF_NAME -> Version $TAG_VERSION"
+            ./gradlew assembleDebug -PversionName="$TAG_VERSION" --no-daemon --stacktrace
+          else
+            ./gradlew assembleDebug --no-daemon --stacktrace
+          fi
 
       - name: Upload APK to GitHub Release
         uses: softprops/action-gh-release@v2

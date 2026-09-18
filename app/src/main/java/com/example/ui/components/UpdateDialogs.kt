@@ -84,8 +84,9 @@ fun OptionalUpdateDialog(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            val cleanCurrent = BuildConfig.VERSION_NAME.trim().removePrefix("v").removePrefix("V")
                             Text(
-                                text = "v${BuildConfig.VERSION_NAME}",
+                                text = "v$cleanCurrent",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -104,8 +105,9 @@ fun OptionalUpdateDialog(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            val cleanLatest = config.latestVersion.trim().removePrefix("v").removePrefix("V")
                             Text(
-                                text = "v${config.latestVersion}",
+                                text = "v$cleanLatest",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.primary
                             )
@@ -301,8 +303,9 @@ fun ForceUpdateScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            val cleanCurrent = BuildConfig.VERSION_NAME.trim().removePrefix("v").removePrefix("V")
                             Text(
-                                text = "v${BuildConfig.VERSION_NAME}",
+                                text = "v$cleanCurrent",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -321,8 +324,9 @@ fun ForceUpdateScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            val cleanRequired = config.latestVersion.trim().removePrefix("v").removePrefix("V")
                             Text(
-                                text = "v${config.latestVersion}",
+                                text = "v$cleanRequired",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.error
                             )

@@ -761,18 +761,29 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     // Version & Status Grid
+                    val currentVersionStr = remember {
+                        try {
+                            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+                            pInfo.versionName?.takeIf { it.isNotBlank() } ?: BuildConfig.VERSION_NAME
+                        } catch (_: Exception) {
+                            BuildConfig.VERSION_NAME
+                        }
+                    }
+                    val cleanCurrentVersion = currentVersionStr.trim().removePrefix("v").removePrefix("V")
+                    val cleanLatestVersion = cachedConfig?.latestVersion?.trim()?.removePrefix("v")?.removePrefix("V") ?: cleanCurrentVersion
+
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Current Version", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("v${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurface)
+                            Text("v$cleanCurrentVersion", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurface)
                         }
 
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Latest Version", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(
-                                text = cachedConfig?.let { "v${it.latestVersion}" } ?: "v${BuildConfig.VERSION_NAME}",
+                                text = "v$cleanLatestVersion",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = if (cachedConfig != null && cachedConfig!!.latestVersion != BuildConfig.VERSION_NAME) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                color = if (cachedConfig != null && cleanLatestVersion != cleanCurrentVersion) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                             )
                         }
 
@@ -956,7 +967,16 @@ fun SettingsScreen(
                                     }
                                 }
                             }
-                            else -> {} // Silently ignore error states so we never say "failed to check for update"
+                            is com.example.network.AppUpdateResult.Error -> {
+                                Text(
+                                    text = "⚠️ ${result.message}",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                    color = MaterialTheme.colorScheme.error,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                                )
+                            }
+                            else -> {}
                         }
                     }
 

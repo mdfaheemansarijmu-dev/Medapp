@@ -16,8 +16,8 @@ object GitHubUpdateClient {
     private const val KEY_REPO = "github_repo"
 
     // Default repository for MedPulse
-    const val DEFAULT_OWNER = "faheem-ansari"
-    const val DEFAULT_REPO = "student-planner-app"
+    const val DEFAULT_OWNER = "mdfaheemansarijmu-dev"
+    const val DEFAULT_REPO = "Medapp"
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -29,12 +29,22 @@ object GitHubUpdateClient {
 
     fun getRepoOwner(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getString(KEY_OWNER, DEFAULT_OWNER) ?: DEFAULT_OWNER
+        val saved = prefs.getString(KEY_OWNER, null)
+        if (saved.isNullOrBlank() || saved == "faheem-ansari") {
+            prefs.edit().putString(KEY_OWNER, DEFAULT_OWNER).apply()
+            return DEFAULT_OWNER
+        }
+        return saved
     }
 
     fun getRepoName(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getString(KEY_REPO, DEFAULT_REPO) ?: DEFAULT_REPO
+        val saved = prefs.getString(KEY_REPO, null)
+        if (saved.isNullOrBlank() || saved == "student-planner-app") {
+            prefs.edit().putString(KEY_REPO, DEFAULT_REPO).apply()
+            return DEFAULT_REPO
+        }
+        return saved
     }
 
     fun setRepoConfig(context: Context, owner: String, repo: String) {
@@ -47,18 +57,20 @@ object GitHubUpdateClient {
 
     /**
      * Fetches the latest release from the GitHub API.
-     * Endpoint: https://api.github.com/repos/{owner}/{repo}/releases/latest
+     * Tries /releases/latest first, and falls back to /releases list if latest returns 404 (e.g. pre-releases).
      */
     suspend fun fetchLatestRelease(
         owner: String,
         repo: String
     ): Result<GitHubRelease> = withContext(Dispatchers.IO) {
         try {
-            val url = "https://api.github.com/repos/$owner/$repo/releases/latest"
-            Log.d(TAG, "Fetching latest release from: $url")
+            val cleanOwner = owner.trim().ifEmpty { DEFAULT_OWNER }
+            val cleanRepo = repo.trim().ifEmpty { DEFAULT_REPO }
+            val latestUrl = "https://api.github.com/repos/$cleanOwner/$cleanRepo/releases/latest"
+            Log.d(TAG, "Fetching latest release from: $latestUrl")
 
             val request = Request.Builder()
-                .url(url)
+                .url(latestUrl)
                 .header("Accept", "application/vnd.github.v3+json")
                 .header("User-Agent", "MedPulse-Android-App")
                 .build()
@@ -66,15 +78,44 @@ object GitHubUpdateClient {
             val response = httpClient.newCall(request).execute()
             val responseBody = response.body?.string()
 
-            if (!response.isSuccessful || responseBody.isNullOrBlank()) {
-                val errorMsg = "GitHub API returned HTTP ${response.code}: ${response.message}"
-                Log.w(TAG, errorMsg)
-                return@withContext Result.failure(Exception(errorMsg))
+            if (response.isSuccessful && !responseBody.isNullOrBlank()) {
+                val release = parseReleaseJson(responseBody)
+                Log.d(TAG, "Successfully fetched GitHub release: tag=${release.tagName}, apkUrl=${release.apkDownloadUrl}")
+                return@withContext Result.success(release)
             }
 
-            val release = parseReleaseJson(responseBody)
-            Log.d(TAG, "Successfully fetched GitHub release: tag=${release.tagName}, apkUrl=${release.apkDownloadUrl}")
-            Result.success(release)
+            // If /releases/latest returns 404 or fails, fall back to /releases list
+            Log.d(TAG, "Checking /releases endpoint for $cleanOwner/$cleanRepo (latest returned code ${response.code})")
+            val listUrl = "https://api.github.com/repos/$cleanOwner/$cleanRepo/releases?per_page=10"
+            val listRequest = Request.Builder()
+                .url(listUrl)
+                .header("Accept", "application/vnd.github.v3+json")
+                .header("User-Agent", "MedPulse-Android-App")
+                .build()
+
+            val listResponse = httpClient.newCall(listRequest).execute()
+            val listBody = listResponse.body?.string()
+
+            if (listResponse.isSuccessful && !listBody.isNullOrBlank()) {
+                val releasesArray = org.json.JSONArray(listBody)
+                for (i in 0 until releasesArray.length()) {
+                    val obj = releasesArray.optJSONObject(i) ?: continue
+                    val isDraft = obj.optBoolean("draft", false)
+                    if (!isDraft) {
+                        val release = parseReleaseJson(obj.toString())
+                        Log.d(TAG, "Successfully found published release in list: tag=${release.tagName}")
+                        return@withContext Result.success(release)
+                    }
+                }
+            }
+
+            val errorMsg = if (response.code == 404) {
+                "No published releases found for GitHub repository $cleanOwner/$cleanRepo."
+            } else {
+                "GitHub API returned HTTP ${response.code}: ${response.message}"
+            }
+            Log.w(TAG, errorMsg)
+            Result.failure(Exception(errorMsg))
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching latest GitHub release", e)
             Result.failure(e)
