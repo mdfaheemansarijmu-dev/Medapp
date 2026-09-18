@@ -17,7 +17,9 @@ data class CollegeInfo(
     val state: String,
     val universityAffiliation: String,
     val campusLocation: String,
-    val isAyush: Boolean = false
+    val isAyush: Boolean = false,
+    val websiteUrl: String? = null,
+    val calendarNoticeUrl: String? = null
 )
 
 enum class HolidayType(val displayName: String, val badgeColorHex: String) {

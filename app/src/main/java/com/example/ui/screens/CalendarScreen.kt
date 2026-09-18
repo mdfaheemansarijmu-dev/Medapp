@@ -934,8 +934,11 @@ fun ChangeCollegeSelectionDialog(
     onSelectCollege: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf<CollegeCategory?>(null) }
+    var showCustomInput by remember { mutableStateOf(false) }
+    var customCollegeName by remember { mutableStateOf("") }
 
     val colleges = remember(query, selectedCategory) {
         UniversityDirectory.filterColleges(query, selectedCategory)
@@ -962,8 +965,15 @@ fun ChangeCollegeSelectionDialog(
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    placeholder = { Text("Search 40+ medical & AYUSH colleges...") },
+                    placeholder = { Text("Search medical, AYUSH, homeopathy colleges...") },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (query.isNotBlank()) {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear")
+                            }
+                        }
+                    },
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -971,7 +981,7 @@ fun ChangeCollegeSelectionDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Chips
+                // Chips for Quick Filtering
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -987,7 +997,7 @@ fun ChangeCollegeSelectionDialog(
                         FilterChip(
                             selected = selectedCategory == CollegeCategory.AYUSH,
                             onClick = { selectedCategory = if (selectedCategory == CollegeCategory.AYUSH) null else CollegeCategory.AYUSH },
-                            label = { Text("🌿 AYUSH") }
+                            label = { Text("🌿 AYUSH & Homeopathy") }
                         )
                     }
                     item {
@@ -997,9 +1007,64 @@ fun ChangeCollegeSelectionDialog(
                             label = { Text("AIIMS / INI") }
                         )
                     }
+                    item {
+                        FilterChip(
+                            selected = selectedCategory == CollegeCategory.ALLOPATHIC,
+                            onClick = { selectedCategory = if (selectedCategory == CollegeCategory.ALLOPATHIC) null else CollegeCategory.ALLOPATHIC },
+                            label = { Text("MBBS State") }
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
+
+                if (showCustomInput) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text(
+                                text = "Enter Custom Medical College / University:",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            OutlinedTextField(
+                                value = customCollegeName,
+                                onValueChange = { customCollegeName = it },
+                                placeholder = { Text("e.g. Government Medical College, Jammu") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(onClick = { showCustomInput = false }) {
+                                    Text("Cancel")
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Button(
+                                    onClick = {
+                                        if (customCollegeName.isNotBlank()) {
+                                            onSelectCollege(customCollegeName.trim())
+                                        }
+                                    },
+                                    enabled = customCollegeName.isNotBlank()
+                                ) {
+                                    Text("Save College")
+                                }
+                            }
+                        }
+                    }
+                }
 
                 LazyColumn(
                     modifier = Modifier
@@ -1021,31 +1086,103 @@ fun ChangeCollegeSelectionDialog(
                             ),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
-                                modifier = Modifier.padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = col.shortName,
-                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = "${col.name} • ${col.state}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = col.shortName,
+                                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            if (col.isAyush) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = Color(0xFFC8E6C9)
+                                                ) {
+                                                    Text(
+                                                        text = if (col.stream.contains("Homoeo", ignoreCase = true)) "BHMS" else "AYUSH",
+                                                        style = MaterialTheme.typography.labelSmall.copy(
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 9.sp,
+                                                            color = Color(0xFF1B5E20)
+                                                        ),
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        Text(
+                                            text = "${col.name} • ${col.state}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "Affiliated: ${col.universityAffiliation}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    if (isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = "Selected",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
                                 }
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = "Selected",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
+
+                                if (col.websiteUrl != null || col.calendarNoticeUrl != null) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        col.websiteUrl?.let { url ->
+                                            Text(
+                                                text = "🌐 Official Website",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                                color = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.clickable {
+                                                    try {
+                                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                                        }
+                                                        context.startActivity(intent)
+                                                    } catch (e: Exception) {
+                                                        Toast.makeText(context, "Could not open browser", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            )
+                                        }
+                                        col.calendarNoticeUrl?.let { url ->
+                                            Text(
+                                                text = "📅 Academic Notices",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                                color = MaterialTheme.colorScheme.secondary,
+                                                modifier = Modifier.clickable {
+                                                    try {
+                                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                                        }
+                                                        context.startActivity(intent)
+                                                    } catch (e: Exception) {
+                                                        Toast.makeText(context, "Could not open browser", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1054,8 +1191,18 @@ fun ChangeCollegeSelectionDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (!showCustomInput) {
+                    TextButton(onClick = { showCustomInput = true }) {
+                        Text("+ Custom College")
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
             }
         }
     )

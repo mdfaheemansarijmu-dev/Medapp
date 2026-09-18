@@ -365,6 +365,24 @@ class PlannerViewModel(
         _studentEmail.value = sharedPrefs.getString("student_email", "") ?: ""
         _googleUserId.value = sharedPrefs.getString("google_user_id", "") ?: ""
 
+        val savedCollege = sharedPrefs.getString("student_college", "") ?: ""
+        if (savedCollege.isNotBlank()) {
+            _studentCollege.value = savedCollege
+        }
+        val savedYear = sharedPrefs.getString("student_year", "") ?: ""
+        if (savedYear.isNotBlank()) {
+            _studentYear.value = savedYear
+        }
+        val savedSemester = sharedPrefs.getString("student_semester", "") ?: ""
+        if (savedSemester.isNotBlank()) {
+            _studentSemester.value = savedSemester
+        }
+        val savedBatch = sharedPrefs.getString("student_batch", "") ?: ""
+        if (savedBatch.isNotBlank()) {
+            _studentBatch.value = savedBatch
+        }
+        _isProfileCompleted.value = sharedPrefs.getBoolean("is_profile_completed", false)
+
         // Verify real Google or Firebase session
         if (savedLoginMode == LoginMode.GOOGLE.name) {
             try {
@@ -860,35 +878,39 @@ class PlannerViewModel(
 
                 val aiResponseText = if (!response.conversational_response.isNullOrEmpty()) {
                     response.conversational_response
-                } else if (response.document_type == "Weekly Timetable") {
+                } else if (response.document_type == "Weekly Timetable" && response.extracted_timetable.isNotEmpty()) {
                     val days = response.extracted_timetable.map { it.day_of_week }.distinct().size
                     val classesCount = response.extracted_timetable.filter { !it.is_lunch_break }.size
                     val teachersCount = response.extracted_timetable.mapNotNull { it.teacher_name }.distinct().size
                     val practicalsCount = response.extracted_timetable.count { it.is_practical }
 
-                    "I analyzed your **Weekly Timetable** and understood the structured table:\n\n" +
+                    "I analyzed your **Weekly Timetable** and extracted the structured routine:\n\n" +
                             "✓ $days Working Days\n" +
                             "✓ $classesCount Classes\n" +
                             "✓ $teachersCount Teachers\n" +
                             "✓ $practicalsCount Practical Sessions\n\n" +
-                            "Please review the preview and choose to replace your current timetable."
+                            "Please review the schedule preview below and tap **Replace Current Timetable** to apply it."
                 } else if (response.is_temporary_override) {
                     val total = response.extracted_items.size
-                    "I detected a **Temporary Schedule Override**:\n\n" +
-                            "This override is proposed for **${response.override_date ?: "Tomorrow"}** only. It will override specific classes rather than replacing your whole timetable.\n\n" +
-                            "✓ $total Temporary override details found."
+                    val categories = response.extracted_items.map { it.category }.distinct().joinToString(", ")
+                    "I detected a **Schedule Adjustment / Override** ($categories):\n\n" +
+                            "This adjustment is proposed for **${response.override_date ?: "Tomorrow"}**. It will adjust specific classes rather than replacing your whole timetable.\n\n" +
+                            "✓ $total Schedule adjustment${if (total > 1) "s" else ""} found.\n\n" +
+                            "Review details below and tap **Import Selected** to apply."
                 } else {
-                    val assignments = response.extracted_items.count { it.category == "Assignment" || it.category == "Homework" }
-                    val assessments = response.extracted_items.count { it.category == "Assessment" || it.category == "Exam" || it.category == "Viva" }
-                    val holidays = response.extracted_items.count { it.category == "Holiday" }
+                    val assignments = response.extracted_items.count { it.category.contains("Assignment", ignoreCase = true) || it.category.contains("Homework", ignoreCase = true) }
+                    val assessments = response.extracted_items.count { it.category.contains("Assessment", ignoreCase = true) || it.category.contains("Exam", ignoreCase = true) || it.category.contains("Viva", ignoreCase = true) || it.category.contains("Test", ignoreCase = true) }
+                    val holidays = response.extracted_items.count { it.category.contains("Holiday", ignoreCase = true) }
                     val other = response.extracted_items.size - assignments - assessments - holidays
 
-                    "I parsed the notice and found:\n" +
-                            "✓ $assignments Assignments\n" +
-                            "✓ $assessments Assessments / Exams\n" +
-                            "✓ $holidays Holidays\n" +
-                            (if (other > 0) "✓ $other General notices/seminars\n" else "") +
-                            "\nReview details in the Proposed Items panel below."
+                    buildString {
+                        append("I analyzed the announcement and classified the following:\n\n")
+                        if (assignments > 0) append("✓ $assignments Assignment${if (assignments > 1) "s" else ""}\n")
+                        if (assessments > 0) append("✓ $assessments Assessment${if (assessments > 1) "s" else ""} / Exam${if (assessments > 1) "s" else ""}\n")
+                        if (holidays > 0) append("✓ $holidays Holiday${if (holidays > 1) "s" else ""}\n")
+                        if (other > 0) append("✓ $other General Notice${if (other > 1) "s" else ""}\n")
+                        append("\nReview the proposed items below and tap **Import Selected** to schedule them.")
+                    }
                 }
 
                 val aiMsg = ChatMessage(

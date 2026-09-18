@@ -468,7 +468,9 @@ object UniversityDirectory {
             state = "West Bengal",
             universityAffiliation = "West Bengal University of Health Sciences (WBUHS)",
             campusLocation = "Block-GE, Sector-III, Salt Lake, Kolkata",
-            isAyush = true
+            isAyush = true,
+            websiteUrl = "http://www.nih.nic.in",
+            calendarNoticeUrl = "http://www.nih.nic.in/academic-notice-board"
         ),
         CollegeInfo(
             id = "nhmc_delhi",
@@ -479,7 +481,9 @@ object UniversityDirectory {
             state = "Delhi",
             universityAffiliation = "University of Delhi (DU)",
             campusLocation = "B-Block, Defence Colony, New Delhi",
-            isAyush = true
+            isAyush = true,
+            websiteUrl = "http://www.nhmc.delhigovt.nic.in",
+            calendarNoticeUrl = "http://www.nhmc.delhigovt.nic.in/academic-circulars"
         ),
         CollegeInfo(
             id = "ghmc_tvm",
@@ -490,7 +494,22 @@ object UniversityDirectory {
             state = "Kerala",
             universityAffiliation = "Kerala University of Health Sciences (KUHS)",
             campusLocation = "Iranimuttam, Manacaud, Thiruvananthapuram",
-            isAyush = true
+            isAyush = true,
+            websiteUrl = "http://www.ghmctvm.nic.in",
+            calendarNoticeUrl = "http://kuhs.ac.in/academic-calendar"
+        ),
+        CollegeInfo(
+            id = "ghmc_kozhikode",
+            name = "Government Homoeopathic Medical College, Kozhikode",
+            shortName = "Govt Homoeopathic College Kozhikode",
+            category = CollegeCategory.AYUSH,
+            stream = "BHMS (Homoeopathy) / MD (Homoeopathy)",
+            state = "Kerala",
+            universityAffiliation = "Kerala University of Health Sciences (KUHS)",
+            campusLocation = "Karaparamba, Kozhikode, Kerala",
+            isAyush = true,
+            websiteUrl = "http://ghmcko.org",
+            calendarNoticeUrl = "http://kuhs.ac.in/academic-calendar"
         ),
         CollegeInfo(
             id = "national_homoeopathic_lucknow",
@@ -501,7 +520,9 @@ object UniversityDirectory {
             state = "Uttar Pradesh",
             universityAffiliation = "Atal Bihari Vajpayee Medical University (ABVMU)",
             campusLocation = "1, Cantonment Road, Lucknow",
-            isAyush = true
+            isAyush = true,
+            websiteUrl = "http://nhmclucknow.in",
+            calendarNoticeUrl = "https://abvmuup.edu.in/academic-calendar"
         ),
         CollegeInfo(
             id = "bakson_homoeopathic",
@@ -512,7 +533,9 @@ object UniversityDirectory {
             state = "Uttar Pradesh",
             universityAffiliation = "Atal Bihari Vajpayee Medical University (ABVMU)",
             campusLocation = "Knowledge Park-I, Greater Noida",
-            isAyush = true
+            isAyush = true,
+            websiteUrl = "https://bakson.net/college",
+            calendarNoticeUrl = "https://abvmuup.edu.in/academic-calendar"
         ),
         CollegeInfo(
             id = "father_muller_homoeopathic",
@@ -523,7 +546,9 @@ object UniversityDirectory {
             state = "Karnataka",
             universityAffiliation = "Rajiv Gandhi University of Health Sciences (RGUHS)",
             campusLocation = "Deralakatte, Mangaluru, Karnataka",
-            isAyush = true
+            isAyush = true,
+            websiteUrl = "https://fathermuller.edu.in/homeopathic",
+            calendarNoticeUrl = "https://rguhs.ac.in/academic-calendar"
         ),
         CollegeInfo(
             id = "calcutta_homoeopathic",
@@ -534,7 +559,87 @@ object UniversityDirectory {
             state = "West Bengal",
             universityAffiliation = "West Bengal University of Health Sciences (WBUHS)",
             campusLocation = "Acharya Prafulla Chandra Road, Kolkata",
-            isAyush = true
+            isAyush = true,
+            websiteUrl = "http://chmch.org",
+            calendarNoticeUrl = "https://wbuhs.ac.in/academic-calendar"
+        ),
+        CollegeInfo(
+            id = "jsps_govt_homoeo_hyd",
+            name = "JSPS Government Homoeopathic Medical College, Hyderabad",
+            shortName = "JSPS Govt Homoeopathic Hyderabad",
+            category = CollegeCategory.AYUSH,
+            stream = "BHMS (Homoeopathy) / MD (Homoeopathy)",
+            state = "Telangana",
+            universityAffiliation = "Kaloji Narayana Rao University of Health Sciences (KNRUHS)",
+            campusLocation = "Ramanthapur, Hyderabad, Telangana",
+            isAyush = true,
+            websiteUrl = "https://knruhs.telangana.gov.in",
+            calendarNoticeUrl = "https://knruhs.telangana.gov.in/notifications"
+        ),
+        CollegeInfo(
+            id = "dy_patil_homoeo_pune",
+            name = "Dr. D.Y. Patil Homoeopathic Medical College and Research Centre, Pimpri, Pune",
+            shortName = "Dr DY Patil Homoeopathic Pune",
+            category = CollegeCategory.AYUSH,
+            stream = "BHMS (Homoeopathy) / MD (Homoeopathy)",
+            state = "Maharashtra",
+            universityAffiliation = "Dr. D.Y. Patil Vidyapeeth (Deemed University)",
+            campusLocation = "Sant Tukaram Nagar, Pimpri, Pune",
+            isAyush = true,
+            websiteUrl = "https://homoeopathy.dpu.edu.in",
+            calendarNoticeUrl = "https://homoeopathy.dpu.edu.in/academic-calendar"
+        ),
+        CollegeInfo(
+            id = "govt_homoeo_bhopal",
+            name = "Government Homoeopathic Medical College and Hospital, Bhopal",
+            shortName = "Govt Homoeopathic College Bhopal",
+            category = CollegeCategory.AYUSH,
+            stream = "BHMS (Homoeopathy) / MD (Homoeopathy)",
+            state = "Madhya Pradesh",
+            universityAffiliation = "Madhya Pradesh Medical Science University (MPMSU)",
+            campusLocation = "AYUSH Parisar, Kolar Road, Bhopal",
+            isAyush = true,
+            websiteUrl = "http://ghmcbhopal.in",
+            calendarNoticeUrl = "http://mpmsu.edu.in/notifications"
+        ),
+        CollegeInfo(
+            id = "rbts_govt_homoeo_muzaffarpur",
+            name = "R.B.T.S. Government Homoeopathic Medical College and Hospital, Muzaffarpur",
+            shortName = "RBTS Govt Homoeopathic Muzaffarpur",
+            category = CollegeCategory.AYUSH,
+            stream = "BHMS (Homoeopathy)",
+            state = "Bihar",
+            universityAffiliation = "Babasaheb Bhimrao Ambedkar Bihar University (BRABU)",
+            campusLocation = "Ramna, Muzaffarpur, Bihar",
+            isAyush = true,
+            websiteUrl = "https://rbtsghmc.org",
+            calendarNoticeUrl = "https://rbtsghmc.org/notices"
+        ),
+        CollegeInfo(
+            id = "dr_gururaju_govt_gudivada",
+            name = "Dr. Gururaju Government Homoeopathic Medical College, Gudivada",
+            shortName = "Dr Gururaju Govt Homoeopathic Gudivada",
+            category = CollegeCategory.AYUSH,
+            stream = "BHMS (Homoeopathy)",
+            state = "Andhra Pradesh",
+            universityAffiliation = "Dr. YSR University of Health Sciences (YSRUHS)",
+            campusLocation = "Gudivada, Krishna District, Andhra Pradesh",
+            isAyush = true,
+            websiteUrl = "http://drgghmc.in",
+            calendarNoticeUrl = "https://drysr.uhsap.in/notifications"
+        ),
+        CollegeInfo(
+            id = "dr_hahnemann_homoeo_bhopal",
+            name = "Hahnemann Homoeopathic Medical College and Research Centre, Bhopal",
+            shortName = "Hahnemann Homoeopathic Bhopal",
+            category = CollegeCategory.AYUSH,
+            stream = "BHMS (Homoeopathy)",
+            state = "Madhya Pradesh",
+            universityAffiliation = "MPMSU Jabalpur",
+            campusLocation = "Bhopal, Madhya Pradesh",
+            isAyush = true,
+            websiteUrl = "http://hhmcbhopal.com",
+            calendarNoticeUrl = "http://mpmsu.edu.in/notifications"
         ),
 
         // --- UNANI (BUMS) ---

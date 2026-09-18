@@ -317,7 +317,7 @@ fun AIChatScreen(
             }
 
             // Draft / Timetable Preview Panel (Appears if Gemini successfully parsed items)
-            if (activeResponse?.document_type == "Weekly Timetable") {
+            if (activeResponse?.document_type == "Weekly Timetable" && activeResponse?.extracted_timetable?.isNotEmpty() == true) {
                 TimetablePreviewPanel(
                     response = activeResponse!!,
                     onReplaceClick = { editedList ->
@@ -329,9 +329,17 @@ fun AIChatScreen(
                     }
                 )
             } else if (activeDrafts.isNotEmpty()) {
+                val draftPanelTitle = when {
+                    activeResponse?.is_temporary_override == true -> "Proposed Schedule Adjustments"
+                    activeResponse?.document_type == "Assessment Notice" -> "Proposed Assessments & Exams"
+                    activeResponse?.document_type == "Assignment Notice" -> "Proposed Assignments & Tasks"
+                    activeResponse?.document_type == "Holiday Notice" -> "Proposed Holiday Notice"
+                    else -> "Proposed Calendar Items"
+                }
                 DraftReviewPanel(
                     drafts = activeDrafts,
                     selectedMap = selectedDraftsMap,
+                    panelTitle = draftPanelTitle,
                     onImportClick = {
                         val approvedList = selectedDraftsMap.entries.filter { it.value }.map { it.key }
                         viewModel.approveAndImportDrafts(approvedList)
@@ -588,7 +596,7 @@ fun AIChatScreen(
                 },
                 onWhatsAppClick = {
                     showAttachmentSheet = false
-                    textInput = "Weekly Timetable:\nMonday\n08:30 Anatomy\n09:30 Physiology\n12:00 Lunch Break\n01:00 Anatomy Practical"
+                    textInput = "Notice for 1st Year Batch:\n1. Anatomy assignment on Embryology due next Monday.\n2. Physiology internal assessment test on Friday at 09:00 AM.\n3. Tomorrow's 10:30 AM Histology class shifted to Lecture Hall B."
                 },
                 onPresetsClick = {
                     showAttachmentSheet = false
@@ -748,9 +756,9 @@ fun AIChatWelcomeCard(
                 icon = Icons.Default.Chat,
                 iconTint = Color(0xFFF59E0B),
                 title = "Parse WhatsApp Announcement",
-                subtitle = "Extract assignments and room changes from class group",
+                subtitle = "Extract assignments, tests, and room changes from class group",
                 onClick = {
-                    onSuggestionClick("Weekly Timetable:\nMonday\n08:30 Anatomy\n09:30 Physiology\n12:00 Lunch Break\n01:00 Anatomy Practical")
+                    onSuggestionClick("Notice for 1st Year Batch:\n1. Anatomy assignment on Embryology due next Monday.\n2. Physiology internal assessment test on Friday at 09:00 AM.\n3. Tomorrow's 10:30 AM Histology class shifted to Lecture Hall B.")
                 }
             )
 
@@ -920,6 +928,7 @@ fun AIParsingLoadingRow(modelOption: GeminiModelOption = GeminiModelOption.DEFAU
 fun DraftReviewPanel(
     drafts: List<ParsedItem>,
     selectedMap: MutableMap<ParsedItem, Boolean>,
+    panelTitle: String = "Proposed Calendar Items",
     onImportClick: () -> Unit,
     onCancelClick: () -> Unit
 ) {
@@ -944,7 +953,7 @@ fun DraftReviewPanel(
                     Icon(Icons.Default.DownloadDone, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        "Proposed Calendar Items",
+                        panelTitle,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )

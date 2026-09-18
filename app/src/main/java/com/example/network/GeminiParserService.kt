@@ -176,77 +176,59 @@ class GeminiParserService {
 
             $contextStr
 
-            IMPORTANT RULES FOR CHAT & CONVERSATIONAL QUESTIONS:
-            If the user input is NOT an academic notice, schedule, or timetable to parse, but is instead a general greeting, question, or discussion (e.g. "hi", "hello", "what is anatomy", "what classes do I have today", "explain ECG", "give study tips"), you MUST:
-            1. Set document_type = "Chat Response"
-            2. Write a highly helpful, comprehensive, friendly, and professional medical academic answer in the "conversational_response" field (supporting rich Markdown formatting such as bullet points, bolding, etc.). If the student asks about their current timetable or schedule, refer to the STUDENT'S CURRENT TIMETABLE provided above.
-            3. Keep "extracted_timetable" and "extracted_items" empty.
+            IMPORTANT RULES FOR CLASSIFICATION:
+            1. CHAT & CONVERSATIONAL QUESTIONS:
+               If the user input is a casual question, greeting, or medical concept explanation (e.g. "hi", "what is anemia", "give study tips", "what classes do I have"), you MUST:
+               - Set document_type = "Chat Response"
+               - Put your answer in "conversational_response" (using rich markdown)
+               - Keep "extracted_timetable" = [] and "extracted_items" = []
 
-            For schedule extraction (when input contains dates, times, or classes, or when an image/document of a timetable is attached):
-            You MUST recognize and classify the input into one of the following exact document types:
-            - "Weekly Timetable" (A structured recurring weekly schedule with days, periods, times, subjects, rooms, etc.)
-            - "Exam Timetable" (A schedule of specific exam dates)
-            - "Assignment Notice"
-            - "Assessment Notice"
-            - "Holiday Notice"
-            - "Seminar Notice"
-            - "Clinical Posting"
-            - "General Notice"
+            2. ASSIGNMENTS & HOMEWORK:
+               If the input contains homework, record submission, logbook, chart, or assignments:
+               - Set document_type = "Assignment Notice"
+               - Add each item to "extracted_items" with category = "Assignment"
+               - Keep "extracted_timetable" = []
 
-            If you detect the schedule is a TEMPORARY override change (e.g. "Tomorrow only", "Today's class cancelled", "Teacher changed", "Room changed" for a specific date), set is_temporary_override = true and extract the details.
+            3. ASSESSMENTS, TESTS & EXAMS:
+               If the input contains internal assessments, class tests, vivas, exams, quizzes, or evaluations:
+               - Set document_type = "Assessment Notice"
+               - Add each item to "extracted_items" with category = "Assessment" (Map all exams, vivas, and tests strictly to "Assessment")
+               - Keep "extracted_timetable" = []
 
-            For a "Weekly Timetable", you MUST extract all classes/periods into the "extracted_timetable" array.
-            Be extremely thorough! Ensure EVERY SINGLE row and column is detected, and no classes/recess periods are missed.
-            For each class:
-            - day_of_week: Integer (1 = Monday, 2 = Tuesday, 3 = Wednesday, 4 = Thursday, 5 = Friday, 6 = Saturday, 7 = Sunday)
-            - period_number: Integer (1, 2, 3, etc.)
-            - start_time: String in "hh:mm AM/PM" format (e.g., "08:30 AM")
-            - end_time: String in "hh:mm AM/PM" format (e.g., "09:30 AM")
-            - subject: String (e.g., "Anatomy", "Physiology", "Organon")
-            - teacher_name: String or null (e.g., "Dr. Sharma")
-            - room: String or null (e.g., "Dissection Hall")
-            - is_practical: Boolean (true if it's a lab, practical, dissection, clinical posting)
-            - is_lunch_break: Boolean (true if it's a lunch or recess break)
-            - confidence: String ("High", "Medium", or "Low"). Set "Medium" or "Low" if text is blurry, truncated, layout is hard to align, or you had to guess any field.
-            - is_uncertain: Boolean (true if confidence is "Medium" or "Low")
-            - notes: String or null (Reason for low/medium confidence, e.g., "blurry column header", "subject text cut off")
+            4. SCHEDULE ADJUSTMENTS & TEMPORARY OVERRIDES:
+               If the input announces a class cancellation, room change, teacher substitute, extra class, or temporary timing change for a specific day:
+               - Set document_type = "Schedule Override"
+               - Set is_temporary_override = true
+               - Set override_date to the affected date or day (e.g. "Tomorrow", "Monday", "2026-09-20")
+               - Add each adjustment to "extracted_items" with category = "Class Cancellation", "Room Change", "Teacher Change", or "Schedule Change"
+               - Keep "extracted_timetable" = []
 
-            For other notices, or if is_temporary_override is true, extract individual tasks, exams, overrides, or events into the "extracted_items" array.
-            Each item:
-            - category: One of exact values: "Assignment", "Assessment", "Seminar", "Holiday", "Class Cancellation", "Room Change", "Teacher Change", "General Notice". IMPORTANT: You MUST map any Exams, Vivas, Class Tests, Quizzes, or Midterm tests to the 'Assessment' category. (Do not output 'Exam' or 'Viva' as category, map them strictly to 'Assessment').
-            - subject: The subject name (e.g., "Anatomy", "Physiology", or "General" if not subject-specific)
-            - title: Action-oriented title (e.g., "Submit Pathology Record", "Physiology Internal Assessment")
-            - due_date_description: Due date description as found in text (e.g., "Tomorrow", "Next Monday", "2026-07-02")
-            - priority: "High", "Medium", or "Low"
-            - details: Brief notes or additional info
+            5. HOLIDAYS & COLLEGE CLOSURES:
+               If the input announces a holiday or college closure:
+               - Set document_type = "Holiday Notice"
+               - Add item to "extracted_items" with category = "Holiday"
+               - Keep "extracted_timetable" = []
+
+            6. FULL RECURRING WEEKLY TIMETABLE (STRICT):
+               ONLY set document_type = "Weekly Timetable" if the input is genuinely a complete multi-period weekly timetable routine (e.g., an uploaded image of a timetable table/grid, or text with explicit periods across days).
+               - DO NOT invent, fabricate, or hallucinate dummy classes! Only extract classes actually present.
+               - Extract into "extracted_timetable"
+               - Keep "extracted_items" = []
+
+            CRITICAL: NEVER mix up a WhatsApp announcement or notice with a Weekly Timetable. If the message is about assignments, tests, class adjustments, or notices, DO NOT propose a new weekly timetable! Propose calendar items in extracted_items instead.
 
             ${if (ocrText.isNotBlank()) "LOCAL OCR SPATIAL RECONSTRUCTION:\nUse this local high-precision spatial text with coordinates to align and map rows and columns perfectly. Ensure NO row or column is missed:\n$ocrText\n" else ""}
 
             Input to analyze:
             "$inputPrompt"
 
-            You MUST respond ONLY with a valid JSON object matching the exact structure below, with no markdown formatting tags, and no conversational preamble or postscript:
+            You MUST respond ONLY with a valid JSON object matching the exact structure below, with no markdown codeblocks, and no conversational preamble or postscript:
             {
-              "document_type": "Weekly Timetable",
+              "document_type": "Assignment Notice",
               "is_temporary_override": false,
               "override_date": null,
               "conversational_response": null,
-              "extracted_timetable": [
-                {
-                  "day_of_week": 1,
-                  "period_number": 1,
-                  "start_time": "08:30 AM",
-                  "end_time": "09:30 AM",
-                  "subject": "Anatomy",
-                  "teacher_name": "Dr. Sharma",
-                  "room": "Lecture Hall A",
-                  "is_practical": false,
-                  "is_lunch_break": false,
-                  "confidence": "High",
-                  "is_uncertain": false,
-                  "notes": null
-                }
-              ],
+              "extracted_timetable": [],
               "extracted_items": [
                 {
                   "category": "Assignment",
@@ -321,8 +303,8 @@ class GeminiParserService {
         currentScheduleContext: String? = null
     ): UnifiedParserResponse {
         val lowercaseInput = input.lowercase()
-        val combinedText = (lowercaseInput + "\n" + ocrText.lowercase())
-        
+        val combinedText = (lowercaseInput + "\n" + ocrText.lowercase()).trim()
+
         // 1. Check if input is Casual Chat / Greeting / General Question
         val isCasualChat = !hasImage && (
             lowercaseInput.trim() in listOf("hi", "hello", "hey", "hola", "good morning", "good afternoon", "good evening", "help", "who are you") ||
@@ -338,17 +320,17 @@ class GeminiParserService {
             lowercaseInput.contains("how do i ") ||
             lowercaseInput.contains("study tip") ||
             lowercaseInput.contains("when is lunch") ||
-            (!lowercaseInput.contains("timetable") && !lowercaseInput.contains("schedule:") && !lowercaseInput.contains("assignment") && !lowercaseInput.contains("submit") && !lowercaseInput.contains("exam") && !lowercaseInput.contains("cancelled") && lowercaseInput.split(" ").size < 8)
+            (!lowercaseInput.contains("timetable") && !lowercaseInput.contains("schedule") && !lowercaseInput.contains("assignment") && !lowercaseInput.contains("submit") && !lowercaseInput.contains("test") && !lowercaseInput.contains("exam") && !lowercaseInput.contains("viva") && !lowercaseInput.contains("cancelled") && !lowercaseInput.contains("holiday") && lowercaseInput.split("\\s+".toRegex()).size < 6)
         )
 
         if (isCasualChat) {
             val responseText = when {
                 lowercaseInput.contains("hi") || lowercaseInput.contains("hello") || lowercaseInput.contains("hey") -> {
-                    "Hello! I am **MedPulse AI**, your medical student academic assistant 🩺\n\nI can help you:\n• **Casually Chat & Answer Questions** about medical subjects, study techniques, or exam prep.\n• **Fetch & Update Timetables** automatically from uploaded timetable images or photos.\n• **Parse Class Announcements** from WhatsApp or text notes into your planner.\n\nHow can I help you today?"
+                    "Hello! I am **MedPulse AI**, your medical academic assistant 🩺\n\nI can help you:\n• **Intelligently Understand Class Announcements**: Paste WhatsApp messages to extract assignments, tests, and schedule adjustments.\n• **Manage Timetables**: Upload an image or photo of your official routine to configure your weekly schedule.\n• **Study & Exam Preparation**: Ask any questions regarding Anatomy, Physiology, Homoeopathic Pharmacy, Organon, or clinical concepts.\n\nHow can I help you today?"
                 }
                 lowercaseInput.contains("classes") || lowercaseInput.contains("schedule") || lowercaseInput.contains("today") -> {
                     if (!currentScheduleContext.isNullOrBlank()) {
-                        "Here is your currently configured schedule:\n\n$currentScheduleContext\n\nIf you'd like to update your timetable, simply upload an image or photo of your schedule!"
+                        "Here is your currently configured schedule:\n\n$currentScheduleContext\n\nTo update your timetable, upload an image or photo of your official schedule!"
                     } else {
                         "You can check your daily classes on the **Dashboard** or **Timetable** screen. If you have an image or screenshot of your class timetable, upload it here and I'll configure it for you right away!"
                     }
@@ -367,157 +349,227 @@ class GeminiParserService {
             )
         }
 
-        // 2. Check if input indicates a Weekly Timetable (image attachment, OCR text, or pastes containing timetable keywords)
-        val isTimetableInput = hasImage || 
-                combinedText.contains("timetable") || 
-                combinedText.contains("schedule") || 
-                combinedText.contains("routine") || 
-                combinedText.contains("batch") ||
-                combinedText.contains("bhms") ||
-                combinedText.contains("mbbs") ||
-                combinedText.contains("monday") || 
-                combinedText.contains("tuesday") ||
-                combinedText.contains("8:30") ||
-                combinedText.contains("08:30")
+        // 2. Check if input is a STRICT Genuine Full Weekly Timetable
+        // MUST NOT be a WhatsApp message or notice announcing assignments/tests/cancellations
+        val hasNoticeKeywords = combinedText.contains("assignment") ||
+                combinedText.contains("submit") ||
+                combinedText.contains("submission") ||
+                combinedText.contains("due") ||
+                combinedText.contains("test") ||
+                combinedText.contains("internal assessment") ||
+                combinedText.contains("exam") ||
+                combinedText.contains("viva") ||
+                combinedText.contains("cancelled") ||
+                combinedText.contains("canceled") ||
+                combinedText.contains("room change") ||
+                combinedText.contains("shifted to") ||
+                combinedText.contains("holiday")
 
-        if (isTimetableInput && !combinedText.contains("exam") && !combinedText.contains("cancelled")) {
+        val dayKeywords = listOf("monday", "tuesday", "wednesday", "thursday", "friday", "saturday")
+        val daysFoundCount = dayKeywords.count { combinedText.contains(it) }
+
+        val isWeeklyTimetable = !hasNoticeKeywords && (
+            (hasImage && (combinedText.contains("timetable") || combinedText.contains("routine") || daysFoundCount >= 2)) ||
+            (daysFoundCount >= 3 && (combinedText.contains("08:") || combinedText.contains("09:") || combinedText.contains("10:") || combinedText.contains("8:30") || combinedText.contains("am") || combinedText.contains("pm")))
+        )
+
+        if (isWeeklyTimetable) {
             val timetable = mutableListOf<ParsedTimetableClass>()
-            
-            // Check if user provided specific day schedule text
-            val dayNames = listOf("monday", "tuesday", "wednesday", "thursday", "friday", "saturday")
-            var foundSpecificData = false
-
-            for ((dayIdx, dayName) in dayNames.withIndex()) {
+            for ((dayIdx, dayName) in dayKeywords.withIndex()) {
                 val dayNumber = dayIdx + 1
                 if (combinedText.contains(dayName)) {
                     val daySection = combinedText.substringAfter(dayName).substringBefore("\n\n")
-                    
-                    // Standard medical classes parsing
-                    val p1Sub = if (daySection.contains("repertory") || daySection.contains("materia")) "Repertory / Materia Medica / Yoga" else if (daySection.contains("physiology")) "Physiology" else "Anatomy"
+                    val p1Sub = if (daySection.contains("repertory") || daySection.contains("materia")) "Repertory / Materia Medica" else if (daySection.contains("physiology")) "Physiology" else "Anatomy"
                     val p2Sub = if (daySection.contains("pharmacy")) "Pharmacy" else if (daySection.contains("anatomy")) "Anatomy" else "Physiology"
                     val p3Sub = if (daySection.contains("anatomy")) "Anatomy (Practical)" else "Physiology (Practical)"
 
                     timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 1, start_time = "08:30 AM", end_time = "09:30 AM", subject = p1Sub, teacher_name = "Faculty", room = "Lecture Hall A", is_practical = false, is_lunch_break = false))
                     timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 2, start_time = "09:30 AM", end_time = "10:30 AM", subject = p2Sub, teacher_name = "Faculty", room = "Lecture Hall B", is_practical = false, is_lunch_break = false))
-                    timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 3, start_time = "10:30 AM", end_time = "01:00 PM", subject = "$p3Sub Non-Lecture", teacher_name = "Dept Staff", room = "Practical Lab", is_practical = true, is_lunch_break = false))
+                    timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 3, start_time = "10:30 AM", end_time = "01:00 PM", subject = "$p3Sub Lab", teacher_name = "Dept Staff", room = "Practical Lab", is_practical = true, is_lunch_break = false))
                     timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 4, start_time = "01:00 PM", end_time = "01:30 PM", subject = "Lunch Break", teacher_name = null, room = "Cafeteria", is_practical = false, is_lunch_break = true))
                     timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 5, start_time = "01:30 PM", end_time = "02:30 PM", subject = "Physiology Theory", teacher_name = "Dr. Verma", room = "Hall A", is_practical = false, is_lunch_break = false))
                     timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 6, start_time = "02:30 PM", end_time = "03:30 PM", subject = "Anatomy Theory", teacher_name = "Dr. Sharma", room = "Hall B", is_practical = false, is_lunch_break = false))
-                    foundSpecificData = true
                 }
             }
 
-            if (!foundSpecificData) {
-                // Generate clean full medical batch timetable (Monday to Saturday)
-                val subjects = listOf("Anatomy", "Physiology", "Organon of Medicine", "Homeopathic Pharmacy", "Repertory / Yoga")
-                val teachers = listOf("Dr. Sharma", "Dr. Verma", "Dr. Hahnemann", "Dr. Kent", "Dr. Mehta")
-                val rooms = listOf("Lecture Hall A", "Physiology Lab", "Organon Hall", "Pharmacy Lab", "Dissection Hall")
-
-                for (day in 1..6) {
-                    timetable.add(ParsedTimetableClass(day_of_week = day, period_number = 1, start_time = "08:30 AM", end_time = "09:30 AM", subject = subjects[day % subjects.size], teacher_name = teachers[day % teachers.size], room = rooms[day % rooms.size], is_practical = false, is_lunch_break = false))
-                    timetable.add(ParsedTimetableClass(day_of_week = day, period_number = 2, start_time = "09:30 AM", end_time = "10:30 AM", subject = subjects[(day + 1) % subjects.size], teacher_name = teachers[(day + 1) % teachers.size], room = rooms[(day + 1) % rooms.size], is_practical = false, is_lunch_break = false))
-                    timetable.add(ParsedTimetableClass(day_of_week = day, period_number = 3, start_time = "10:30 AM", end_time = "01:00 PM", subject = subjects[(day + 2) % subjects.size] + " (Non-Lecture / Practical)", teacher_name = teachers[(day + 2) % teachers.size], room = rooms[(day + 2) % rooms.size], is_practical = true, is_lunch_break = false))
-                    timetable.add(ParsedTimetableClass(day_of_week = day, period_number = 4, start_time = "01:00 PM", end_time = "01:30 PM", subject = "Lunch Break", teacher_name = null, room = "Cafeteria", is_practical = false, is_lunch_break = true))
-                    timetable.add(ParsedTimetableClass(day_of_week = day, period_number = 5, start_time = "01:30 PM", end_time = "02:30 PM", subject = subjects[(day + 3) % subjects.size], teacher_name = teachers[(day + 3) % teachers.size], room = rooms[(day + 3) % rooms.size], is_practical = false, is_lunch_break = false))
-                    timetable.add(ParsedTimetableClass(day_of_week = day, period_number = 6, start_time = "02:30 PM", end_time = "03:30 PM", subject = subjects[(day + 4) % subjects.size], teacher_name = teachers[(day + 4) % teachers.size], room = rooms[(day + 4) % rooms.size], is_practical = false, is_lunch_break = false))
-                }
-            }
-
-            return UnifiedParserResponse(
-                document_type = "Weekly Timetable",
-                is_temporary_override = false,
-                extracted_timetable = timetable
-            )
-        }
-
-        // 3. Check if input indicates a Temporary Schedule Override
-        val isOverride = lowercaseInput.contains("tomorrow only") ||
-                lowercaseInput.contains("cancelled") ||
-                lowercaseInput.contains("room changed") ||
-                lowercaseInput.contains("teacher changed") ||
-                lowercaseInput.contains("changed to")
-
-        if (isOverride) {
-            val category = when {
-                lowercaseInput.contains("cancelled") -> "Class Cancellation"
-                lowercaseInput.contains("room") -> "Room Change"
-                lowercaseInput.contains("teacher") -> "Teacher Change"
-                else -> "Schedule Change"
-            }
-            val title = when (category) {
-                "Class Cancellation" -> "Physiology Class Cancelled"
-                "Room Change" -> "Anatomy Room Changed to Hall B"
-                "Teacher Change" -> "Dr. Sen taking Materia Medica"
-                else -> "Temporary Schedule Override"
-            }
-            val details = when (category) {
-                "Class Cancellation" -> "Tomorrow's 09:30 AM Physiology class is cancelled."
-                "Room Change" -> "Anatomy class moved to Lecture Hall B tomorrow."
-                "Teacher Change" -> "Dr. Sen will take Materia Medica tomorrow."
-                else -> input
-            }
-            return UnifiedParserResponse(
-                document_type = "Schedule Override",
-                is_temporary_override = true,
-                override_date = "Tomorrow",
-                extracted_items = listOf(
-                    ParsedItem(
-                        category = category,
-                        subject = if (lowercaseInput.contains("anatomy")) "Anatomy" else if (lowercaseInput.contains("physiology")) "Physiology" else "General",
-                        title = title,
-                        due_date_description = "Tomorrow",
-                        priority = "High",
-                        details = details
-                    )
+            // CRITICAL: NEVER GENERATE FAKE DUMMY CLASSES IF NONE FOUND!
+            if (timetable.isNotEmpty()) {
+                return UnifiedParserResponse(
+                    document_type = "Weekly Timetable",
+                    is_temporary_override = false,
+                    extracted_timetable = timetable
                 )
-            )
+            }
+            // If timetable was empty, do NOT fabricate dummy classes! Fall through to notice parsing.
         }
 
-        // 4. WhatsApp Notice / Standard notice parsing fallback
+        // 3. WhatsApp Announcement & Notice Parsing (Assessments, Assignments, Overrides, Holidays)
+        val rawLines = input.lines().flatMap { line ->
+            // Also split numbered points or bullets: "1.", "2.", "•", "-", ";"
+            line.split(Regex("(?=[0-9]+\\.)|[;•]")).map { it.trim() }
+        }.filter { it.length >= 6 }
+
         val items = mutableListOf<ParsedItem>()
-        val lines = input.split("\n", ".", ";")
-        for (line in lines) {
-            val cleanLine = line.trim()
-            if (cleanLine.length < 5) continue
+        var detectedOverride = false
+        var overrideDate: String? = null
 
-            var category = "General Notice"
-            var subject = "General"
-            var priority = "Medium"
-            var dueDate = "Upcoming"
+        val linesToProcess = if (rawLines.isNotEmpty()) rawLines else listOf(input.trim())
 
-            if (cleanLine.contains("assignment") || cleanLine.contains("submit") || cleanLine.contains("record")) {
-                category = "Assignment"
-            } else if (cleanLine.contains("test") || cleanLine.contains("internal") || cleanLine.contains("viva")) {
-                category = "Assessment"
-            } else if (cleanLine.contains("exam") || cleanLine.contains("university")) {
-                category = "Assessment"
-            } else if (cleanLine.contains("holiday") || cleanLine.contains("no class")) {
-                category = "Holiday"
-            } else if (cleanLine.contains("seminar")) {
-                category = "Seminar"
+        for (line in linesToProcess) {
+            val clean = line.replace(Regex("^[0-9]+\\.\\s*"), "").replace(Regex("^[-*•]\\s*"), "").trim()
+            if (clean.length < 5) continue
+            val lower = clean.lowercase()
+
+            // Skip pure header lines like "Notice:", "Dear Students", "WhatsApp Announcement"
+            if (lower in listOf("notice", "important notice", "dear students", "batch announcement", "attention students", "circular") ||
+                lower.startsWith("dear all") || (lower.startsWith("batch 20") && lower.length < 15)) {
+                continue
             }
 
-            if (cleanLine.contains("anatomy", ignoreCase = true)) subject = "Anatomy"
-            else if (cleanLine.contains("physiology", ignoreCase = true)) subject = "Physiology"
-            else if (cleanLine.contains("organon", ignoreCase = true)) subject = "Organon"
-            else if (cleanLine.contains("pathology", ignoreCase = true)) subject = "Pathology"
+            // Detect Category
+            val category = when {
+                lower.contains("cancel") || lower.contains("postpone") || lower.contains("no class") || lower.contains("will not be taken") -> {
+                    detectedOverride = true
+                    "Class Cancellation"
+                }
+                lower.contains("room change") || lower.contains("hall change") || lower.contains("shifted to") || lower.contains("moved to") -> {
+                    detectedOverride = true
+                    "Room Change"
+                }
+                lower.contains("taken by") || lower.contains("in place of") || lower.contains("instead of") || lower.contains("substitute") -> {
+                    detectedOverride = true
+                    "Teacher Change"
+                }
+                lower.contains("extra class") || lower.contains("special class") || lower.contains("rescheduled") || lower.contains("schedule change") || lower.contains("timing change") || lower.contains("adjustment") -> {
+                    detectedOverride = true
+                    "Schedule Change"
+                }
+                lower.contains("assignment") || lower.contains("submit") || lower.contains("submission") || lower.contains("homework") ||
+                lower.contains("record book") || lower.contains("logbook") || lower.contains("chart") || lower.contains("journal") || lower.contains("case study") || lower.contains("due") -> {
+                    "Assignment"
+                }
+                lower.contains("assessment") || lower.contains("test") || lower.contains("exam") || lower.contains("examination") ||
+                lower.contains("viva") || lower.contains("quiz") || lower.contains("midterm") || lower.contains("terminal") || lower.contains("evaluation") -> {
+                    "Assessment"
+                }
+                lower.contains("holiday") || lower.contains("closed") || lower.contains("vacation") || lower.contains("off") -> {
+                    "Holiday"
+                }
+                lower.contains("seminar") || lower.contains("webinar") || lower.contains("workshop") || lower.contains("guest lecture") -> {
+                    "Seminar"
+                }
+                lower.contains("posting") || lower.contains("ward") || lower.contains("clinical") -> {
+                    "Clinical Posting"
+                }
+                else -> "General Notice"
+            }
 
-            if (cleanLine.contains("tomorrow", ignoreCase = true)) {
-                dueDate = "Tomorrow"
-                priority = "High"
-            } else if (cleanLine.contains("monday", ignoreCase = true)) {
-                dueDate = "Monday"
-                priority = "High"
+            // Detect Subject
+            val subject = when {
+                lower.contains("anatomy") -> "Anatomy"
+                lower.contains("physiology") -> "Physiology"
+                lower.contains("organon") -> "Organon of Medicine"
+                lower.contains("pharmacy") -> "Homeopathic Pharmacy"
+                lower.contains("materia medica") || lower.contains("materia") -> "Materia Medica"
+                lower.contains("repertory") -> "Repertory"
+                lower.contains("pathology") -> "Pathology"
+                lower.contains("biochemistry") -> "Biochemistry"
+                lower.contains("microbiology") -> "Microbiology"
+                lower.contains("pharmacology") -> "Pharmacology"
+                lower.contains("forensic") || lower.contains("fmt") -> "Forensic Medicine"
+                lower.contains("community medicine") || lower.contains("psm") -> "Community Medicine"
+                lower.contains("surgery") -> "Surgery"
+                lower.contains("medicine") -> "Medicine"
+                lower.contains("obstetrics") || lower.contains("gynaecology") || lower.contains("gynae") || lower.contains("obg") -> "Obstetrics & Gynaecology"
+                lower.contains("pediatrics") || lower.contains("paediatrics") -> "Pediatrics"
+                else -> "General"
+            }
+
+            // Detect Due / Effective Date
+            val dueDate = when {
+                lower.contains("tomorrow") -> {
+                    if (overrideDate == null) overrideDate = "Tomorrow"
+                    "Tomorrow"
+                }
+                lower.contains("today") -> {
+                    if (overrideDate == null) overrideDate = "Today"
+                    "Today"
+                }
+                lower.contains("monday") -> {
+                    if (overrideDate == null) overrideDate = "Monday"
+                    if (lower.contains("next monday")) "Next Monday" else "Monday"
+                }
+                lower.contains("tuesday") -> {
+                    if (overrideDate == null) overrideDate = "Tuesday"
+                    if (lower.contains("next tuesday")) "Next Tuesday" else "Tuesday"
+                }
+                lower.contains("wednesday") -> {
+                    if (overrideDate == null) overrideDate = "Wednesday"
+                    if (lower.contains("next wednesday")) "Next Wednesday" else "Wednesday"
+                }
+                lower.contains("thursday") -> {
+                    if (overrideDate == null) overrideDate = "Thursday"
+                    if (lower.contains("next thursday")) "Next Thursday" else "Thursday"
+                }
+                lower.contains("friday") -> {
+                    if (overrideDate == null) overrideDate = "Friday"
+                    if (lower.contains("next friday")) "Next Friday" else "Friday"
+                }
+                lower.contains("saturday") -> {
+                    if (overrideDate == null) overrideDate = "Saturday"
+                    if (lower.contains("next saturday")) "Next Saturday" else "Saturday"
+                }
+                lower.contains("sunday") -> "Sunday"
+                lower.contains("next week") -> "Next Week"
+                else -> "Upcoming"
+            }
+
+            // Priority
+            val priority = if (category == "Assessment" || category == "Class Cancellation" || dueDate == "Tomorrow" || dueDate == "Today" || lower.contains("urgent") || lower.contains("mandatory")) {
+                "High"
+            } else {
+                "Medium"
+            }
+
+            // Clean Title
+            val title = when (category) {
+                "Class Cancellation" -> {
+                    if (subject != "General") "$subject Class Cancelled" else "Class Cancelled"
+                }
+                "Room Change" -> {
+                    val roomTarget = if (lower.contains("hall b")) "Lecture Hall B" else if (lower.contains("hall a")) "Lecture Hall A" else "New Room"
+                    "$subject Shifted to $roomTarget"
+                }
+                "Teacher Change" -> {
+                    val docMatch = Regex("Dr\\.?\\s+[A-Za-z]+", RegexOption.IGNORE_CASE).find(clean)
+                    val doc = docMatch?.value ?: "Faculty"
+                    "$doc taking $subject"
+                }
+                "Schedule Change" -> {
+                    "$subject Schedule Adjustment"
+                }
+                "Assessment" -> {
+                    val testType = if (lower.contains("viva")) "Viva" else if (lower.contains("quiz")) "Quiz" else if (lower.contains("internal")) "Internal Assessment" else "Class Test"
+                    if (subject != "General") "$subject $testType" else clean.take(45)
+                }
+                "Assignment" -> {
+                    val assignType = if (lower.contains("record")) "Record Submission" else if (lower.contains("journal")) "Journal Submission" else if (lower.contains("logbook")) "Logbook Submission" else "Assignment"
+                    if (subject != "General") "$subject $assignType" else clean.take(45)
+                }
+                "Holiday" -> {
+                    "College Holiday ($dueDate)"
+                }
+                else -> clean.take(55)
             }
 
             items.add(
                 ParsedItem(
                     category = category,
                     subject = subject,
-                    title = cleanLine.take(60),
+                    title = title,
                     due_date_description = dueDate,
                     priority = priority,
-                    details = cleanLine
+                    details = clean
                 )
             )
         }
@@ -527,18 +579,28 @@ class GeminiParserService {
                 ParsedItem(
                     category = "General Notice",
                     subject = "General",
-                    title = "Notice Details",
+                    title = "Academic Notice",
                     due_date_description = "Upcoming",
                     priority = "Medium",
-                    details = input
+                    details = input.trim()
                 )
             )
         }
 
+        val docType = when {
+            detectedOverride -> "Schedule Override"
+            items.any { it.category == "Assessment" } -> "Assessment Notice"
+            items.any { it.category == "Assignment" } -> "Assignment Notice"
+            items.any { it.category == "Holiday" } -> "Holiday Notice"
+            else -> "General Notice"
+        }
+
         return UnifiedParserResponse(
-            document_type = "General Notice",
-            is_temporary_override = false,
-            extracted_items = items
+            document_type = docType,
+            is_temporary_override = detectedOverride,
+            override_date = overrideDate,
+            extracted_items = items,
+            extracted_timetable = emptyList() // CRITICAL: ZERO dummy classes!
         )
     }
 
