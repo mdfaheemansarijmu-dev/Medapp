@@ -15,5 +15,4 @@
 .cxx
 local.properties
 .env
-debug.keystore
 google-services.json.base64
