@@ -28,19 +28,22 @@ jobs:
         env:
           DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
+          set -e
           if [ -f debug.keystore ]; then
             echo "debug.keystore already present"
           elif [ -f debug.keystore.base64 ]; then
             base64 -d debug.keystore.base64 > debug.keystore
             echo "Restored debug.keystore from debug.keystore.base64"
           elif [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
-            echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > debug.keystore
+            printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 --decode > debug.keystore
             echo "Restored debug.keystore from secret"
           else
-            echo "debug.keystore not found. Generating a standard debug keystore..."
+            echo "debug.keystore not found. Generating standard debug keystore..."
             keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
             echo "Successfully generated debug.keystore"
           fi
+          chmod 600 debug.keystore
+          test -s debug.keystore
           ls -l debug.keystore
 
       - name: Restore Google Services Configuration
