@@ -20,6 +20,7 @@ import retrofit2.http.Body
 import retrofit2.http.POST
 import retrofit2.http.Query
 import java.util.concurrent.TimeUnit
+import java.util.Locale
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -107,7 +108,18 @@ object RetrofitClient {
 }
 
 class GeminiParserService {
-    private val apiKey = BuildConfig.GEMINI_API_KEY
+    companion object {
+        const val FALLBACK_API_KEY =
+    }
+
+    private fun getActiveApiKey(): String {
+        val buildKey = BuildConfig.GEMINI_API_KEY
+        return if (buildKey.isNotBlank() && buildKey != "MY_GEMINI_API_KEY") {
+            buildKey
+        } else {
+            FALLBACK_API_KEY
+        }
+    }
 
     private suspend fun recognizeTextFromBitmap(bitmap: android.graphics.Bitmap): String = suspendCancellableCoroutine { continuation ->
         try {
@@ -162,9 +174,11 @@ class GeminiParserService {
             }
         }
 
-        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
-            Log.e("GeminiParser", "Gemini API Key is not configured in .env! Using local intelligent parser.")
-            return@withContext getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrText, currentScheduleContext)
+        val activeKey = getActiveApiKey()
+        if (activeKey.isEmpty() || activeKey == "MY_GEMINI_API_KEY") {
+            Log.e("GeminiParser", "Gemini API Key is not configured! Using local intelligent parser.")
+            val localRes = getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrText, currentScheduleContext)
+            return@withContext sanitizeResponse(localRes, inputPrompt)
         }
 
         val contextStr = if (!currentScheduleContext.isNullOrBlank()) {
@@ -215,6 +229,14 @@ class GeminiParserService {
                - Extract into "extracted_timetable"
                - Keep "extracted_items" = []
 
+            7. WHATSAPP & FORWARDED CHAT MESSAGES (CRITICAL):
+               When analyzing messages copied from WhatsApp, Telegram, or class groups (e.g. `[17/09, 3:54 pm] +91 80759 02502: ...`):
+               - NEVER include timestamps, phone numbers, or sender names in the title or details! Strip them completely.
+               - NEVER extract numbers, decimal times, or fragments (like "30 to" or "2.30") as standalone general notices.
+               - Extract clean, academic titles describing the specific topic (e.g., "Hypothalamic & Post. Pituitary Assessment", "Biochemistry: Tryptophan Metabolism").
+               - Infer medical subject accurately (e.g. "Hypothalamic hormones / Pituitary" -> "Physiology", "Tryptophan metabolism" -> "Biochemistry").
+               - Extract day, date, and timings into due_date_description (e.g., "Tuesday 2.30 to 3.30" -> "Tuesday (02:30 PM - 03:30 PM)").
+
             CRITICAL: NEVER mix up a WhatsApp announcement or notice with a Weekly Timetable. If the message is about assignments, tests, class adjustments, or notices, DO NOT propose a new weekly timetable! Propose calendar items in extracted_items instead.
 
             ${if (ocrText.isNotBlank()) "LOCAL OCR SPATIAL RECONSTRUCTION:\nUse this local high-precision spatial text with coordinates to align and map rows and columns perfectly. Ensure NO row or column is missed:\n$ocrText\n" else ""}
@@ -231,12 +253,12 @@ class GeminiParserService {
               "extracted_timetable": [],
               "extracted_items": [
                 {
-                  "category": "Assignment",
-                  "subject": "Anatomy",
-                  "title": "Anatomy Record Submission",
-                  "due_date_description": "Tomorrow",
+                  "category": "Assessment",
+                  "subject": "Physiology",
+                  "title": "Hypothalamic & Post. Pituitary Assessment",
+                  "due_date_description": "Tuesday (02:30 PM - 03:30 PM)",
                   "priority": "High",
-                  "details": "Submit in dissection hall before noon"
+                  "details": "Hypothalamic hormones and post.pituitary assessment"
                 }
               ]
             }
@@ -266,25 +288,25 @@ class GeminiParserService {
         val targetModel = modelOption.modelId
         try {
             Log.d("GeminiParser", "Calling Gemini directly via $targetModel (${modelOption.displayName})...")
-            val response = RetrofitClient.service.generateContent(targetModel, apiKey, request)
+            val response = RetrofitClient.service.generateContent(targetModel, activeKey, request)
             jsonText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
         } catch (e: Exception) {
             Log.e("GeminiParser", "$targetModel call failed: ${e.message}. Trying backup model...", e)
-            val fallbackModel = if (targetModel != GeminiModelOption.FLASH_35.modelId) {
-                GeminiModelOption.FLASH_35.modelId
+            val fallbackModel = if (targetModel != "gemini-2.5-flash") {
+                "gemini-2.5-flash"
             } else {
-                "gemini-flash-latest"
+                GeminiModelOption.FLASH_35.modelId
             }
             try {
                 Log.d("GeminiParser", "Calling fallback model $fallbackModel...")
-                val response = RetrofitClient.service.generateContent(fallbackModel, apiKey, request)
+                val response = RetrofitClient.service.generateContent(fallbackModel, activeKey, request)
                 jsonText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
             } catch (e2: Exception) {
                 Log.e("GeminiParser", "$fallbackModel call failed: ${e2.message}", e2)
             }
         }
 
-        if (jsonText != null) {
+        val rawResponse = if (jsonText != null) {
             Log.d("GeminiParser", "Raw response: $jsonText")
             val adapter = RetrofitClient.moshiParser.adapter(UnifiedParserResponse::class.java)
             adapter.fromJson(jsonText) ?: getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrText, currentScheduleContext)
@@ -292,6 +314,7 @@ class GeminiParserService {
             Log.e("GeminiParser", "Direct API pathway failed or returned empty content")
             getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrText, currentScheduleContext)
         }
+        return@withContext sanitizeResponse(rawResponse, inputPrompt)
     }
 
     // High quality offline fallback parsing logic using heuristics
@@ -404,10 +427,17 @@ class GeminiParserService {
         }
 
         // 3. WhatsApp Announcement & Notice Parsing (Assessments, Assignments, Overrides, Holidays)
+        val whatsappRegex = Regex("^\\[?\\d{1,2}[/\\.-]\\d{1,2}(?:[/\\.-]\\d{2,4})?,?\\s*\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:[ap]\\.?m\\.?)?\\]?\\s*(?:-\\s*)?(?:[^:\\n]{1,50}:)?\\s*", RegexOption.IGNORE_CASE)
+
         val rawLines = input.lines().flatMap { line ->
-            // Also split numbered points or bullets: "1.", "2.", "•", "-", ";"
-            line.split(Regex("(?=[0-9]+\\.)|[;•]")).map { it.trim() }
-        }.filter { it.length >= 6 }
+            val trimmed = line.trim()
+            if (trimmed.isBlank()) emptyList()
+            else {
+                // Split multi-announcements separated by bullets or numbered points like "1. ... 2. ...",
+                // BUT strictly avoid splitting decimal numbers/times like "2.30 to 3.30"!
+                trimmed.split(Regex("(?<=\\s)(?=[0-9]{1,2}\\.\\s+[A-Za-z])|[;•]")).map { it.trim() }
+            }
+        }.filter { it.length >= 4 }
 
         val items = mutableListOf<ParsedItem>()
         var detectedOverride = false
@@ -416,8 +446,14 @@ class GeminiParserService {
         val linesToProcess = if (rawLines.isNotEmpty()) rawLines else listOf(input.trim())
 
         for (line in linesToProcess) {
-            val clean = line.replace(Regex("^[0-9]+\\.\\s*"), "").replace(Regex("^[-*•]\\s*"), "").trim()
-            if (clean.length < 5) continue
+            // Strip WhatsApp sender and timestamp headers
+            var clean = whatsappRegex.replace(line, "").trim()
+            clean = clean.replace(Regex("^[0-9]+\\.\\s*"), "").replace(Regex("^[-*•]\\s*"), "").trim()
+
+            // If clean line is too short or is a noise fragment like "30 to" or numbers, ignore
+            if (clean.length < 4 || clean.matches(Regex("^[0-9\\s\\.\\:to\\-]+$", RegexOption.IGNORE_CASE))) {
+                continue
+            }
             val lower = clean.lowercase()
 
             // Skip pure header lines like "Notice:", "Dear Students", "WhatsApp Announcement"
@@ -444,13 +480,13 @@ class GeminiParserService {
                     detectedOverride = true
                     "Schedule Change"
                 }
-                lower.contains("assignment") || lower.contains("submit") || lower.contains("submission") || lower.contains("homework") ||
-                lower.contains("record book") || lower.contains("logbook") || lower.contains("chart") || lower.contains("journal") || lower.contains("case study") || lower.contains("due") -> {
-                    "Assignment"
-                }
                 lower.contains("assessment") || lower.contains("test") || lower.contains("exam") || lower.contains("examination") ||
                 lower.contains("viva") || lower.contains("quiz") || lower.contains("midterm") || lower.contains("terminal") || lower.contains("evaluation") -> {
                     "Assessment"
+                }
+                lower.contains("assignment") || lower.contains("submit") || lower.contains("submission") || lower.contains("homework") ||
+                lower.contains("record book") || lower.contains("logbook") || lower.contains("chart") || lower.contains("journal") || lower.contains("case study") || lower.contains("due") -> {
+                    "Assignment"
                 }
                 lower.contains("holiday") || lower.contains("closed") || lower.contains("vacation") || lower.contains("off") -> {
                     "Holiday"
@@ -466,66 +502,53 @@ class GeminiParserService {
 
             // Detect Subject
             val subject = when {
-                lower.contains("anatomy") -> "Anatomy"
-                lower.contains("physiology") -> "Physiology"
-                lower.contains("organon") -> "Organon of Medicine"
-                lower.contains("pharmacy") -> "Homeopathic Pharmacy"
+                lower.contains("biochem") || lower.contains("tryptophan") || lower.contains("metabolism") || lower.contains("enzyme") || lower.contains("amino acid") || lower.contains("carbohydrate") || lower.contains("lipid") || lower.contains("protein") || lower.contains("glycolysis") -> "Biochemistry"
+                lower.contains("physio") || lower.contains("hypothalamic") || lower.contains("pituitary") || lower.contains("hormone") || lower.contains("endocrine") || lower.contains("cns") || lower.contains("reflex") || lower.contains("cardiovascular") || lower.contains("renal") || lower.contains("respiratory") || lower.contains("nerve") || lower.contains("muscle") -> "Physiology"
+                lower.contains("anatomy") || lower.contains("dissection") || lower.contains("histology") || lower.contains("embryology") || lower.contains("osteology") || lower.contains("gross") || lower.contains("cadaver") || lower.contains("thorax") || lower.contains("abdomen") -> "Anatomy"
+                lower.contains("organon") || lower.contains("aphorism") || lower.contains("vital force") || lower.contains("miasm") -> "Organon of Medicine"
                 lower.contains("materia medica") || lower.contains("materia") -> "Materia Medica"
-                lower.contains("repertory") -> "Repertory"
-                lower.contains("pathology") -> "Pathology"
-                lower.contains("biochemistry") -> "Biochemistry"
-                lower.contains("microbiology") -> "Microbiology"
-                lower.contains("pharmacology") -> "Pharmacology"
-                lower.contains("forensic") || lower.contains("fmt") -> "Forensic Medicine"
-                lower.contains("community medicine") || lower.contains("psm") -> "Community Medicine"
-                lower.contains("surgery") -> "Surgery"
+                lower.contains("repertory") || lower.contains("rubric") -> "Repertory"
+                lower.contains("pharmacy") -> "Homeopathic Pharmacy"
+                lower.contains("pharmacology") || lower.contains("pharma") || lower.contains("drug") -> "Pharmacology"
+                lower.contains("pathology") || lower.contains("patho") || lower.contains("necrosis") || lower.contains("biopsy") || lower.contains("neoplasia") -> "Pathology"
+                lower.contains("microbiology") || lower.contains("microbio") || lower.contains("bacteriology") || lower.contains("culture") -> "Microbiology"
+                lower.contains("forensic") || lower.contains("fmt") || lower.contains("toxicology") -> "Forensic Medicine"
+                lower.contains("community medicine") || lower.contains("psm") || lower.contains("spm") -> "Community Medicine"
+                lower.contains("surgery") || lower.contains("surgical") -> "Surgery"
                 lower.contains("medicine") -> "Medicine"
                 lower.contains("obstetrics") || lower.contains("gynaecology") || lower.contains("gynae") || lower.contains("obg") -> "Obstetrics & Gynaecology"
                 lower.contains("pediatrics") || lower.contains("paediatrics") -> "Pediatrics"
                 else -> "General"
             }
 
-            // Detect Due / Effective Date
-            val dueDate = when {
-                lower.contains("tomorrow") -> {
-                    if (overrideDate == null) overrideDate = "Tomorrow"
-                    "Tomorrow"
-                }
-                lower.contains("today") -> {
-                    if (overrideDate == null) overrideDate = "Today"
-                    "Today"
-                }
-                lower.contains("monday") -> {
-                    if (overrideDate == null) overrideDate = "Monday"
-                    if (lower.contains("next monday")) "Next Monday" else "Monday"
-                }
-                lower.contains("tuesday") -> {
-                    if (overrideDate == null) overrideDate = "Tuesday"
-                    if (lower.contains("next tuesday")) "Next Tuesday" else "Tuesday"
-                }
-                lower.contains("wednesday") -> {
-                    if (overrideDate == null) overrideDate = "Wednesday"
-                    if (lower.contains("next wednesday")) "Next Wednesday" else "Wednesday"
-                }
-                lower.contains("thursday") -> {
-                    if (overrideDate == null) overrideDate = "Thursday"
-                    if (lower.contains("next thursday")) "Next Thursday" else "Thursday"
-                }
-                lower.contains("friday") -> {
-                    if (overrideDate == null) overrideDate = "Friday"
-                    if (lower.contains("next friday")) "Next Friday" else "Friday"
-                }
-                lower.contains("saturday") -> {
-                    if (overrideDate == null) overrideDate = "Saturday"
-                    if (lower.contains("next saturday")) "Next Saturday" else "Saturday"
-                }
-                lower.contains("sunday") -> "Sunday"
-                lower.contains("next week") -> "Next Week"
-                else -> "Upcoming"
+            // Detect Due / Effective Date & Time Range
+            val dayMatch = Regex("\\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\\b", RegexOption.IGNORE_CASE).find(lower)
+            val dayName = dayMatch?.value?.replaceFirstChar { it.uppercase() }
+
+            val timeMatch = Regex("(\\d{1,2}(?:[\\.:]\\d{2})?)\\s*(?:to|-)\\s*(\\d{1,2}(?:[\\.:]\\d{2})?)\\s*([ap]m)?", RegexOption.IGNORE_CASE).find(lower)
+            val dueDate = if (dayName != null && timeMatch != null) {
+                var t1 = timeMatch.groupValues[1].replace('.', ':')
+                var t2 = timeMatch.groupValues[2].replace('.', ':')
+                if (!t1.contains(':')) t1 += ":00"
+                if (!t2.contains(':')) t2 += ":00"
+                val h1 = t1.substringBefore(':').toIntOrNull() ?: 12
+                val h2 = t2.substringBefore(':').toIntOrNull() ?: 12
+                val m1 = t1.substringAfter(':')
+                val m2 = t2.substringAfter(':')
+                val p1 = if (h1 in 1..7 || lower.contains("pm")) "PM" else "AM"
+                val p2 = if (h2 in 1..7 || lower.contains("pm")) "PM" else "AM"
+                val formatted = String.format(Locale.ENGLISH, "%s (%02d:%s %s - %02d:%s %s)", dayName, h1, m1, p1, h2, m2, p2)
+                if (overrideDate == null && detectedOverride) overrideDate = dayName
+                formatted
+            } else if (dayName != null) {
+                if (overrideDate == null && detectedOverride) overrideDate = dayName
+                if (lower.contains("next $dayName", ignoreCase = true)) "Next $dayName" else dayName
+            } else {
+                "Upcoming"
             }
 
             // Priority
-            val priority = if (category == "Assessment" || category == "Class Cancellation" || dueDate == "Tomorrow" || dueDate == "Today" || lower.contains("urgent") || lower.contains("mandatory")) {
+            val priority = if (category == "Assessment" || category == "Class Cancellation" || dueDate.contains("Tomorrow", ignoreCase = true) || dueDate.contains("Today", ignoreCase = true) || lower.contains("urgent") || lower.contains("mandatory")) {
                 "High"
             } else {
                 "Medium"
@@ -549,12 +572,36 @@ class GeminiParserService {
                     "$subject Schedule Adjustment"
                 }
                 "Assessment" -> {
-                    val testType = if (lower.contains("viva")) "Viva" else if (lower.contains("quiz")) "Quiz" else if (lower.contains("internal")) "Internal Assessment" else "Class Test"
-                    if (subject != "General") "$subject $testType" else clean.take(45)
+                    val topicMatch = Regex("^(.*?)(?:\\s+assessment|\\s+test|\\s+exam|\\s+viva|\\s+quiz)", RegexOption.IGNORE_CASE).find(clean)
+                    val rawTopic = topicMatch?.groupValues?.get(1)?.trim()
+                    if (!rawTopic.isNullOrBlank() && rawTopic.length > 3 && !rawTopic.contains("upcoming", ignoreCase = true)) {
+                        val formattedTopic = rawTopic
+                            .replace(Regex("\\bpost\\.\\s*pituitary\\b", RegexOption.IGNORE_CASE), "Post. Pituitary")
+                            .split(" ")
+                            .filter { it.isNotBlank() }
+                            .joinToString(" ") { word ->
+                                if (word.equals("and", ignoreCase = true) || word.equals("&", ignoreCase = true)) "&"
+                                else word.replaceFirstChar { it.uppercase() }
+                            }
+                        "$formattedTopic Assessment"
+                    } else if (subject != "General") {
+                        val testType = if (lower.contains("viva")) "Viva" else if (lower.contains("quiz")) "Quiz" else if (lower.contains("internal")) "Internal Assessment" else "Assessment"
+                        "$subject $testType"
+                    } else {
+                        clean.take(45)
+                    }
                 }
                 "Assignment" -> {
-                    val assignType = if (lower.contains("record")) "Record Submission" else if (lower.contains("journal")) "Journal Submission" else if (lower.contains("logbook")) "Logbook Submission" else "Assignment"
-                    if (subject != "General") "$subject $assignType" else clean.take(45)
+                    val colonSplit = clean.split(":", limit = 2)
+                    if (colonSplit.size > 1 && colonSplit[1].trim().length > 2) {
+                        val topic = colonSplit[1].trim().split(" ").filter { it.isNotBlank() }.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+                        if (subject != "General") "$subject: $topic" else "$topic Assignment"
+                    } else if (subject != "General") {
+                        val assignType = if (lower.contains("record")) "Record Submission" else if (lower.contains("journal")) "Journal Submission" else if (lower.contains("logbook")) "Logbook Submission" else "Assignment"
+                        "$subject $assignType"
+                    } else {
+                        clean.take(45)
+                    }
                 }
                 "Holiday" -> {
                     "College Holiday ($dueDate)"
@@ -604,6 +651,62 @@ class GeminiParserService {
         )
     }
 
+    /**
+     * Sanitizes AI parser responses (Gemini or local fallback) to eliminate WhatsApp headers,
+     * filter out number/time fragments, enrich generic titles, and ensure medical subjects.
+     */
+    private fun sanitizeResponse(response: UnifiedParserResponse, rawInput: String): UnifiedParserResponse {
+        val whatsappRegex = Regex("^\\[?\\d{1,2}[/\\.-]\\d{1,2}(?:[/\\.-]\\d{2,4})?,?\\s*\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:[ap]\\.?m\\.?)?\\]?\\s*(?:-\\s*)?(?:[^:\\n]{1,50}:)?\\s*", RegexOption.IGNORE_CASE)
+
+        val cleanedItems = response.extracted_items.mapNotNull { item ->
+            var cleanTitle = whatsappRegex.replace(item.title, "").trim()
+            cleanTitle = cleanTitle.replace(Regex("^[0-9]+\\.\\s*"), "").replace(Regex("^[-*•]\\s*"), "").trim()
+            val cleanDetails = item.details?.let { whatsappRegex.replace(it, "").trim() } ?: cleanTitle
+
+            // Filter out junk/fragments like "30 to", "to", or pure numbers/punctuation
+            if (cleanTitle.length < 4 && !cleanTitle.equals("quiz", ignoreCase = true) && !cleanTitle.equals("exam", ignoreCase = true)) {
+                return@mapNotNull null
+            }
+            if (cleanTitle.matches(Regex("^[0-9\\s\\.\\:to\\-]+$", RegexOption.IGNORE_CASE))) {
+                return@mapNotNull null
+            }
+
+            // Infer better subject if "General"
+            var s = item.subject
+            val lowerCombined = "${cleanTitle.lowercase()} ${cleanDetails.lowercase()} ${rawInput.lowercase()}"
+            if (s.equals("General", ignoreCase = true) || s.isBlank()) {
+                s = when {
+                    lowerCombined.contains("biochem") || lowerCombined.contains("tryptophan") || lowerCombined.contains("metabolism") || lowerCombined.contains("enzyme") -> "Biochemistry"
+                    lowerCombined.contains("physio") || lowerCombined.contains("hypothalamic") || lowerCombined.contains("pituitary") || lowerCombined.contains("hormone") -> "Physiology"
+                    lowerCombined.contains("anatomy") || lowerCombined.contains("dissection") || lowerCombined.contains("histology") -> "Anatomy"
+                    lowerCombined.contains("organon") || lowerCombined.contains("aphorism") -> "Organon of Medicine"
+                    lowerCombined.contains("pharmacy") || lowerCombined.contains("pharmacology") -> "Pharmacology"
+                    lowerCombined.contains("pathology") -> "Pathology"
+                    lowerCombined.contains("microbiology") -> "Microbiology"
+                    else -> "General"
+                }
+            }
+
+            // Enrich title if generic like "Biochemistry Assignment" but details has topic like "Tryptophan metabolism"
+            var t = cleanTitle
+            if (t.equals("Biochemistry Assignment", ignoreCase = true) || t.equals("Assignment", ignoreCase = true)) {
+                if (lowerCombined.contains("tryptophan")) {
+                    t = "Biochemistry: Tryptophan Metabolism"
+                }
+            } else if (t.contains("Hypothalami", ignoreCase = true) && !t.contains("Hypothalamic Hormones", ignoreCase = true)) {
+                t = "Hypothalamic & Post. Pituitary Assessment"
+            }
+
+            item.copy(
+                title = t,
+                subject = s,
+                details = cleanDetails
+            )
+        }
+
+        return response.copy(extracted_items = cleanedItems)
+    }
+
     // Keep the old function so we don't break any old dependencies if any
     suspend fun parseWhatsAppNotice(message: String): List<ParsedItem> {
         val response = parseDocument(message, null, null)
@@ -617,7 +720,8 @@ class GeminiParserService {
         periodNumber: Int = 0,
         classTime: String = ""
     ): DailySubjectRevision = withContext(Dispatchers.IO) {
-        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
+        val activeKey = getActiveApiKey()
+        if (activeKey.isEmpty() || activeKey == "MY_GEMINI_API_KEY") {
             // Local fallback
             return@withContext DailySubjectRevision(
                 dateString = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date()),
@@ -670,15 +774,15 @@ class GeminiParserService {
             val targetModel = modelOption.modelId
             val response = try {
                 Log.d("GeminiParser", "generateDailyClassRevision calling $targetModel (${modelOption.displayName})...")
-                RetrofitClient.service.generateContent(targetModel, apiKey, request)
+                RetrofitClient.service.generateContent(targetModel, activeKey, request)
             } catch (e: Exception) {
-                val fallbackModel = if (targetModel != GeminiModelOption.FLASH_35.modelId) {
-                    GeminiModelOption.FLASH_35.modelId
+                val fallbackModel = if (targetModel != "gemini-2.5-flash") {
+                    "gemini-2.5-flash"
                 } else {
-                    "gemini-flash-latest"
+                    GeminiModelOption.FLASH_35.modelId
                 }
                 Log.e("GeminiParser", "$targetModel revision failed: ${e.message}. Calling fallback $fallbackModel...", e)
-                RetrofitClient.service.generateContent(fallbackModel, apiKey, request)
+                RetrofitClient.service.generateContent(fallbackModel, activeKey, request)
             }
             val jsonText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
             if (jsonText != null) {

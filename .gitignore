@@ -1,6 +1,6 @@
 *.iml
-.gradle
-.kotlin
+.gradle/
+.kotlin/
 /local.properties
 /.idea/caches
 /.idea/libraries
@@ -9,10 +9,13 @@
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
 .DS_Store
-/build
+/build/
+/app/build/
+/.build-outputs/
 /captures
 .externalNativeBuild
 .cxx
 local.properties
 .env
 google-services.json.base64
+

@@ -67,6 +67,21 @@ jobs:
             echo "Successfully restored app/google-services.json from secret"
           fi
 
+      - name: Restore Environment Configuration
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -n "$GEMINI_API_KEY" ]; then
+            echo "GEMINI_API_KEY=$GEMINI_API_KEY" > .env
+          elif [ -f .env ]; then
+            echo ".env already present"
+          elif [ -f .env.example ]; then
+            cp .env.example .env
+          else
+            echo "GEMINI_API_KEY= > .env
+          fi
+          echo "Restored .env for release build"
+
       - name: Make gradlew executable
         run: |
           if [ ! -f ./gradlew ]; then
