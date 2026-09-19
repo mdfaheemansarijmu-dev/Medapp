@@ -108,16 +108,12 @@ object RetrofitClient {
 }
 
 class GeminiParserService {
-    companion object {
-        const val FALLBACK_API_KEY =
-    }
-
     private fun getActiveApiKey(): String {
         val buildKey = BuildConfig.GEMINI_API_KEY
-        return if (buildKey.isNotBlank() && buildKey != "MY_GEMINI_API_KEY") {
+        return if (!buildKey.isNullOrBlank() && buildKey != "MY_GEMINI_API_KEY") {
             buildKey
         } else {
-            FALLBACK_API_KEY
+            ""
         }
     }
 
