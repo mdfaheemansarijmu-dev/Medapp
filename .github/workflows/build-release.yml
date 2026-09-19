@@ -69,16 +69,17 @@ jobs:
 
       - name: Restore Environment Configuration
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RAW_GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          if [ -n "$GEMINI_API_KEY" ]; then
-            echo "GEMINI_API_KEY=$GEMINI_API_KEY" > .env
-          elif [ -f .env ]; then
-            echo ".env already present"
+          CLEAN_KEY=$(printf '%s' "$RAW_GEMINI_KEY" | tr -d '"' | tr -d "'" | tr -d '\r' | xargs || true)
+          if [ -n "$CLEAN_KEY" ]; then
+            printf 'GEMINI_API_KEY=%s\n' "$CLEAN_KEY" > .env
+            echo "Successfully configured GEMINI_API_KEY from GitHub secret"
           elif [ -f .env.example ]; then
             cp .env.example .env
+            echo "Used .env.example fallback"
           else
-            echo "GEMINI_API_KEY= > .env
+            echo "GEMINI_API_KEY=" > .env
           fi
           echo "Restored .env for release build"
 
