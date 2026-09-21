@@ -20,6 +20,8 @@ import com.example.data.local.PlannerDatabase
 import com.example.data.model.*
 import com.example.data.university.*
 import com.example.data.repository.PlannerRepository
+import com.example.data.sync.BatchNotificationSyncManager
+import com.example.data.sync.SharedBatchNotice
 import com.example.util.AcademicNotificationManager
 import com.example.util.*
 import com.example.util.GoogleCalendarSyncManager
@@ -238,6 +240,26 @@ class PlannerViewModel(
 
     private val _studentBatch = MutableStateFlow("")
     val studentBatch: StateFlow<String> = _studentBatch.asStateFlow()
+
+    // Shared Batch Notification System (Option 1: Real-Time Firestore Batch Feed)
+    private val batchSyncManager = BatchNotificationSyncManager(application, repository)
+    val sharedBatchNotices: StateFlow<List<SharedBatchNotice>> = batchSyncManager.sharedNotices
+    val isBatchSyncListening: StateFlow<Boolean> = batchSyncManager.isListening
+    val batchSyncStatus: StateFlow<String> = batchSyncManager.syncStatus
+    val activeBatchKey: StateFlow<String> = combine(
+        _studentCollege,
+        _selectedCourse,
+        _studentAdmissionYear,
+        _studentBatch
+    ) { col, crs, admYr, btch ->
+        BatchNotificationSyncManager.computeBatchKey(col, crs?.code ?: "MBBS", admYr, btch)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    private val _isPostingBatchNotice = MutableStateFlow(false)
+    val isPostingBatchNotice: StateFlow<Boolean> = _isPostingBatchNotice.asStateFlow()
+
+    private val _batchPostError = MutableStateFlow<String?>(null)
+    val batchPostError: StateFlow<String?> = _batchPostError.asStateFlow()
 
     private val _isProfileCompleted = MutableStateFlow(false)
     val isProfileCompleted: StateFlow<Boolean> = _isProfileCompleted.asStateFlow()
@@ -465,6 +487,7 @@ class PlannerViewModel(
                     com.example.util.AcademicNotificationManager.rescheduleAllFutureNotifications(application)
                     scheduleTimetableClassNotifications()
                     generateSmartNotifications()
+                    startBatchNotificationSync()
                 }
             } catch (e: Exception) {
                 _currentScreen.value = Screen.Welcome
@@ -2083,6 +2106,7 @@ class PlannerViewModel(
                 Log.e("PlannerViewModel", "Failed to sync profile to Firestore: ${e.message}", e)
             }
             checkAndNotifyTomorrowHoliday()
+            startBatchNotificationSync()
         }
     }
 
@@ -2939,6 +2963,65 @@ class PlannerViewModel(
         }
     }
 
+
+    fun startBatchNotificationSync() {
+        val col = _studentCollege.value
+        val crs = _selectedCourse.value?.code ?: "MBBS"
+        val admYr = _studentAdmissionYear.value
+        val btch = _studentBatch.value
+        if (col.isNotBlank() || btch.isNotBlank()) {
+            batchSyncManager.startListeningToBatch(col, crs, admYr, btch)
+        }
+    }
+
+    fun stopBatchNotificationSync() {
+        batchSyncManager.stopListening()
+    }
+
+    fun postNoticeToBatch(
+        title: String,
+        message: String,
+        category: String = "batch_notice",
+        urgent: Boolean = false,
+        onComplete: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        val col = _studentCollege.value.ifBlank { "Medical College" }
+        val crs = _selectedCourse.value?.code ?: "MBBS"
+        val admYr = _studentAdmissionYear.value
+        val btch = _studentBatch.value.ifBlank { "Batch A" }
+        val author = _studentName.value.ifBlank { "Peer Student" }
+
+        viewModelScope.launch {
+            _isPostingBatchNotice.value = true
+            _batchPostError.value = null
+            val result = batchSyncManager.postBatchNotice(
+                college = col,
+                course = crs,
+                admissionYear = admYr,
+                batch = btch,
+                title = title,
+                message = message,
+                authorName = author,
+                category = category,
+                urgent = urgent
+            )
+            _isPostingBatchNotice.value = false
+            result.fold(
+                onSuccess = { docId ->
+                    onComplete(true, null)
+                },
+                onFailure = { error ->
+                    _batchPostError.value = error.localizedMessage
+                    onComplete(false, error.localizedMessage)
+                }
+            )
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        batchSyncManager.stopListening()
+    }
 
 }
 

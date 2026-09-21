@@ -124,6 +124,9 @@ fun DashboardScreen(
     val todayHoliday by viewModel.todayHoliday.collectAsStateWithLifecycle()
     val tomorrowHoliday by viewModel.tomorrowHoliday.collectAsStateWithLifecycle()
     val studentCollege by viewModel.studentCollege.collectAsStateWithLifecycle()
+    val studentBatch by viewModel.studentBatch.collectAsStateWithLifecycle()
+    val studentAdmissionYear by viewModel.studentAdmissionYear.collectAsStateWithLifecycle()
+    val isBatchListening by viewModel.isBatchSyncListening.collectAsStateWithLifecycle()
 
     val today = remember(liveClock) { Calendar.getInstance() }
 
@@ -201,6 +204,11 @@ fun DashboardScreen(
     }
 
     var showNotificationsTray by remember { mutableStateOf(false) }
+    var showPostBatchNoticeDialog by remember { mutableStateOf(false) }
+    var newNoticeTitle by remember { mutableStateOf("") }
+    var newNoticeMessage by remember { mutableStateOf("") }
+    var newNoticeCategory by remember { mutableStateOf("batch_notice") }
+    var newNoticeUrgent by remember { mutableStateOf(false) }
     var showPendingDialog by remember { mutableStateOf(false) }
     var showUpcomingDialog by remember { mutableStateOf(false) }
     var showRemainingDialog by remember { mutableStateOf(false) }
@@ -465,12 +473,42 @@ fun DashboardScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "MedPulse Alerts Inbox",
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Row {
+                        Column {
+                            Text(
+                                text = "MedPulse Alerts Inbox",
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            if (studentBatch.isNotBlank()) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(top = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "$studentBatch • ${if (isBatchListening) "Sync Active" else "Sync Idle"}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isBatchListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            FilledTonalButton(
+                                onClick = {
+                                    newNoticeTitle = ""
+                                    newNoticeMessage = ""
+                                    newNoticeCategory = "batch_notice"
+                                    newNoticeUrgent = false
+                                    showPostBatchNoticeDialog = true
+                                },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.padding(end = 4.dp).testTag("inbox_post_notice_btn")
+                            ) {
+                                Icon(Icons.Default.Campaign, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Broadcast", style = MaterialTheme.typography.labelSmall)
+                            }
                             TextButton(onClick = { viewModel.clearInbox() }) {
                                 Text("Clear All")
                             }
@@ -498,7 +536,7 @@ fun DashboardScreen(
                     } else {
                         Column(
                             verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.heightIn(max = 280.dp)
+                            modifier = Modifier.heightIn(max = 340.dp)
                         ) {
                             LazyColumn(
                                 modifier = Modifier.weight(1f, fill = false),
@@ -519,28 +557,52 @@ fun DashboardScreen(
                                     ) {
                                         val icon = when (alert.type) {
                                             "class" -> Icons.Default.School
-                                            "assignment" -> Icons.Default.Assignment
-                                            "exam" -> Icons.Default.Assessment
+                                            "assignment", "shared_assignment" -> Icons.Default.Assignment
+                                            "exam", "exam_alert" -> Icons.Default.Assessment
+                                            "batch_notice" -> Icons.Default.Campaign
                                             else -> Icons.Default.Notifications
                                         }
                                         Icon(
                                             imageVector = icon,
                                             contentDescription = null,
-                                            tint = if (alert.isRead) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                                            tint = if (alert.isRead) MaterialTheme.colorScheme.onSurfaceVariant 
+                                                   else if (alert.type == "batch_notice") MaterialTheme.colorScheme.tertiary
+                                                   else MaterialTheme.colorScheme.primary,
                                             modifier = Modifier.size(24.dp)
                                         )
                                         Spacer(modifier = Modifier.width(12.dp))
                                         Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = alert.title,
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = alert.title,
+                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    modifier = Modifier.weight(1f, fill = false)
+                                                )
+                                                if (alert.type == "batch_notice") {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(6.dp),
+                                                        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.7f),
+                                                        modifier = Modifier.padding(start = 6.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "BATCH",
+                                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 9.sp),
+                                                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
                                             Text(
                                                 text = alert.message,
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 2,
+                                                maxLines = 3,
                                                 overflow = TextOverflow.Ellipsis
                                             )
                                         }
@@ -579,6 +641,148 @@ fun DashboardScreen(
             RemainingClassesDialog(
                 classes = liveSchedule.remainingClasses,
                 onDismiss = { showRemainingDialog = false }
+            )
+        }
+
+        // Post Notice to Batch Dialog
+        if (showPostBatchNoticeDialog) {
+            val isPosting by viewModel.isPostingBatchNotice.collectAsStateWithLifecycle()
+            val postError by viewModel.batchPostError.collectAsStateWithLifecycle()
+
+            AlertDialog(
+                onDismissRequest = { if (!isPosting) showPostBatchNoticeDialog = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Campaign, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Broadcast to $studentBatch",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                },
+                text = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Instantly notifies all batchmates in $studentBatch (Admission Year $studentAdmissionYear).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        OutlinedTextField(
+                            value = newNoticeTitle,
+                            onValueChange = { newNoticeTitle = it },
+                            label = { Text("Title / Subject") },
+                            placeholder = { Text("e.g. Lab schedule moved to 2 PM") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("dashboard_notice_title_input")
+                        )
+
+                        OutlinedTextField(
+                            value = newNoticeMessage,
+                            onValueChange = { newNoticeMessage = it },
+                            label = { Text("Notice Details") },
+                            placeholder = { Text("e.g. Please bring dissection kit & histology manual.") },
+                            minLines = 3,
+                            maxLines = 5,
+                            modifier = Modifier.fillMaxWidth().testTag("dashboard_notice_message_input")
+                        )
+
+                        // Category Selector
+                        Text(
+                            text = "Notice Category",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                "batch_notice" to "General",
+                                "shared_assignment" to "Assignment",
+                                "exam_alert" to "Test/Exam"
+                            ).forEach { (catKey, catLabel) ->
+                                FilterChip(
+                                    selected = newNoticeCategory == catKey,
+                                    onClick = { newNoticeCategory = catKey },
+                                    label = { Text(catLabel, style = MaterialTheme.typography.labelSmall) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        // Urgent Toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = newNoticeUrgent,
+                                onCheckedChange = { newNoticeUrgent = it }
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Mark as Urgent / Priority Alert",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (newNoticeUrgent) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        if (postError != null) {
+                            Text(
+                                text = "Error: $postError",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (newNoticeTitle.isNotBlank() && newNoticeMessage.isNotBlank()) {
+                                viewModel.postNoticeToBatch(
+                                    title = newNoticeTitle,
+                                    message = newNoticeMessage,
+                                    category = newNoticeCategory,
+                                    urgent = newNoticeUrgent
+                                ) { success, err ->
+                                    if (success) {
+                                        Toast.makeText(context, "Notice broadcasted to $studentBatch!", Toast.LENGTH_SHORT).show()
+                                        showPostBatchNoticeDialog = false
+                                    } else {
+                                        Toast.makeText(context, "Failed: ${err ?: "Network error"}", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            } else {
+                                Toast.makeText(context, "Please enter title and message", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        enabled = !isPosting && newNoticeTitle.isNotBlank() && newNoticeMessage.isNotBlank(),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("dashboard_submit_notice_btn")
+                    ) {
+                        if (isPosting) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = MaterialTheme.colorScheme.onPrimary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Broadcasting...")
+                        } else {
+                            Text("Post Notice")
+                        }
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showPostBatchNoticeDialog = false },
+                        enabled = !isPosting
+                    ) {
+                        Text("Cancel")
+                    }
+                }
             )
         }
     }
