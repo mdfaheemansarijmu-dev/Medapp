@@ -317,7 +317,7 @@ fun AIChatScreen(
             }
 
             // Draft / Timetable Preview Panel (Appears if Gemini successfully parsed items)
-            if (activeResponse?.document_type == "Weekly Timetable" && activeResponse?.extracted_timetable?.isNotEmpty() == true) {
+            if (activeResponse?.extracted_timetable?.isNotEmpty() == true) {
                 TimetablePreviewPanel(
                     response = activeResponse!!,
                     onReplaceClick = { editedList ->

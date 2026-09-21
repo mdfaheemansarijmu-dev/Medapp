@@ -29,6 +29,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
 import com.example.data.model.MedicalCourse
+import com.example.data.university.CollegeCategory
+import com.example.data.university.CollegeInfo
+import com.example.data.university.UniversityDirectory
 import com.example.ui.viewmodel.PlannerViewModel
 import com.example.ui.viewmodel.LoginMode
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -63,11 +66,31 @@ fun SettingsScreen(
     val studentEmail by viewModel.studentEmail.collectAsStateWithLifecycle()
     val googleUserId by viewModel.googleUserId.collectAsStateWithLifecycle()
     val loginMode by viewModel.loginMode.collectAsStateWithLifecycle()
+    val studentCollege by viewModel.studentCollege.collectAsStateWithLifecycle()
+    val studentYear by viewModel.studentYear.collectAsStateWithLifecycle()
+    val studentAdmissionYear by viewModel.studentAdmissionYear.collectAsStateWithLifecycle()
+    val studentBatch by viewModel.studentBatch.collectAsStateWithLifecycle()
+    val studentSemester by viewModel.studentSemester.collectAsStateWithLifecycle()
 
     var showDpDialog by remember { mutableStateOf(false) }
     var showPhotoSourceChooser by remember { mutableStateOf(false) }
     var showGoogleChooserInSettings by remember { mutableStateOf(false) }
     var tempName by remember(studentName) { mutableStateOf(studentName) }
+
+    // Student Info Center Dialog States
+    var showEditNameDialog by remember { mutableStateOf(false) }
+    var showCollegeSelectorDialog by remember { mutableStateOf(false) }
+    var showYearBatchDialog by remember { mutableStateOf(false) }
+    var showAdmissionYearDialog by remember { mutableStateOf(false) }
+
+    var editNameInput by remember(studentName) { mutableStateOf(studentName) }
+    var collegeSearchQuery by remember { mutableStateOf("") }
+    var customCollegeInput by remember { mutableStateOf("") }
+    var isEnteringCustomCollege by remember { mutableStateOf(false) }
+    var editYearInput by remember(studentYear) { mutableStateOf(studentYear) }
+    var editBatchInput by remember(studentBatch) { mutableStateOf(studentBatch) }
+    var editSemesterInput by remember(studentSemester) { mutableStateOf(studentSemester) }
+    var editAdmissionYearInput by remember(studentAdmissionYear) { mutableStateOf(studentAdmissionYear.toString()) }
 
     val context = LocalContext.current
     val tempUri = remember {
@@ -562,20 +585,21 @@ fun SettingsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
                     ) {
+                        val isCloudSyncActive = loginMode == LoginMode.GOOGLE || loginMode == LoginMode.FIREBASE
                         Box(
                             modifier = Modifier
                                 .size(48.dp)
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(
-                                    if (loginMode == LoginMode.GOOGLE) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                    if (isCloudSyncActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
                                     else MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = if (loginMode == LoginMode.GOOGLE) Icons.Default.Cloud else Icons.Default.CloudOff,
+                                imageVector = if (isCloudSyncActive) Icons.Default.Cloud else Icons.Default.CloudOff,
                                 contentDescription = null,
-                                tint = if (loginMode == LoginMode.GOOGLE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                tint = if (isCloudSyncActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                                 modifier = Modifier.size(24.dp)
                             )
                         }
@@ -584,19 +608,19 @@ fun SettingsScreen(
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = if (loginMode == LoginMode.GOOGLE) "Firebase Sync Enabled" else "Local Only Mode",
+                                text = if (isCloudSyncActive) "Firebase Cloud Sync Active" else "Cloud Sync Pending",
                                 style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = if (loginMode == LoginMode.GOOGLE) "Your data is automatically backed up to Firebase Firestore." else "Sign in to Google to enable production-grade Firebase cloud backups.",
+                                text = if (isCloudSyncActive) "Your schedule, attendance, and notes are securely backed up to Firebase Firestore in real-time." else "Please sign in to MedPulse account to protect your data.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
 
-                    if (loginMode == LoginMode.GOOGLE) {
+                    if (loginMode == LoginMode.GOOGLE || loginMode == LoginMode.FIREBASE) {
                         Spacer(modifier = Modifier.height(16.dp))
                         Divider(color = MaterialTheme.colorScheme.outlineVariant)
                         Spacer(modifier = Modifier.height(16.dp))
@@ -675,8 +699,8 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Course Profile Settings Group
-            SettingsSectionHeader(title = "ProfileSpecialization")
+            // Student Info Center Group
+            SettingsSectionHeader(title = "Student Info Center")
 
             Card(
                 shape = RoundedCornerShape(20.dp),
@@ -685,12 +709,64 @@ fun SettingsScreen(
             ) {
                 Column {
                     SettingsRow(
-                        title = "Selected Specialty Course",
-                        subtitle = selectedCourse?.displayName ?: "None Selected",
+                        title = "Full Name",
+                        subtitle = studentName.ifBlank { "Med Student" },
+                        icon = Icons.Default.Person,
+                        color = MaterialTheme.colorScheme.primary,
+                        onClick = {
+                            editNameInput = studentName
+                            showEditNameDialog = true
+                        },
+                        tag = "settings_edit_name"
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f), modifier = Modifier.padding(horizontal = 16.dp))
+                    SettingsRow(
+                        title = "College / University",
+                        subtitle = studentCollege.ifBlank { "AIIMS New Delhi" },
+                        icon = Icons.Default.School,
+                        color = MaterialTheme.colorScheme.secondary,
+                        onClick = {
+                            collegeSearchQuery = ""
+                            customCollegeInput = ""
+                            isEnteringCustomCollege = false
+                            showCollegeSelectorDialog = true
+                        },
+                        tag = "settings_college_info"
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f), modifier = Modifier.padding(horizontal = 16.dp))
+                    SettingsRow(
+                        title = "Course & Specialization",
+                        subtitle = selectedCourse?.displayName ?: "MBBS (Bachelor of Medicine, Bachelor of Surgery)",
                         icon = Icons.Default.MedicalServices,
                         color = MaterialTheme.colorScheme.primary,
                         onClick = { showCourseSelector = true },
                         tag = "settings_change_course"
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f), modifier = Modifier.padding(horizontal = 16.dp))
+                    SettingsRow(
+                        title = "Academic Year, Semester & Batch",
+                        subtitle = "${studentYear.ifBlank { "1st Year" }} • ${studentSemester.ifBlank { "Semester 1" }} • ${studentBatch.ifBlank { "Batch A" }}",
+                        icon = Icons.Default.Groups,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        onClick = {
+                            editYearInput = studentYear.ifBlank { "1st Year" }
+                            editSemesterInput = studentSemester.ifBlank { "Semester 1" }
+                            editBatchInput = studentBatch.ifBlank { "Batch A" }
+                            showYearBatchDialog = true
+                        },
+                        tag = "settings_year_batch_info"
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f), modifier = Modifier.padding(horizontal = 16.dp))
+                    SettingsRow(
+                        title = "Year of Admission (Batch Sync)",
+                        subtitle = "Admitted in $studentAdmissionYear • Batch assignments active",
+                        icon = Icons.Default.Event,
+                        color = MaterialTheme.colorScheme.primary,
+                        onClick = {
+                            editAdmissionYearInput = studentAdmissionYear.toString()
+                            showAdmissionYearDialog = true
+                        },
+                        tag = "settings_admission_year_info"
                     )
                 }
             }
@@ -1286,118 +1362,6 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Notification Diagnostics Panel
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)),
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Diagnostics & Troubleshooting",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Verify that background reminders and precise lock screen alarms deliver reliably on your device.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Diagnostic row 1: Test alarm
-                    DiagnosticItem(
-                        title = "Test Alarm Delivery",
-                        description = "Fires a real system heads-up notification in 5 seconds to test lockscreeen & channels.",
-                        icon = Icons.Default.BugReport,
-                        actionLabel = "Test Now",
-                        onClick = {
-                            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-                            val intent = Intent(context, com.example.receivers.NotificationReceiver::class.java).apply {
-                                putExtra("title", "Test Reminder Alert 🔔")
-                                putExtra("message", "This is a real-time high-importance heads-up notification testing lockscreen & channels.")
-                                putExtra("id", 99999)
-                                putExtra("type", "general")
-                            }
-                            val pendingIntent = PendingIntent.getBroadcast(
-                                context,
-                                99999,
-                                intent,
-                                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                            )
-                            val triggerTime = System.currentTimeMillis() + 5000L // 5 seconds
-                            
-                            try {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                    if (alarmManager.canScheduleExactAlarms()) {
-                                        alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-                                    } else {
-                                        alarmManager.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-                                    }
-                                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                    alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-                                } else {
-                                    alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-                                }
-                                Toast.makeText(context, "Test alarm scheduled! Close the app or lock your screen to test.", Toast.LENGTH_LONG).show()
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Failed to schedule test alarm: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
-                            }
-                        },
-                        tag = "diagnostic_test_alarm"
-                    )
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                    // Diagnostic row 2: System notifications channels settings
-                    DiagnosticItem(
-                        title = "Notification Channel Settings",
-                        description = "Configure custom sounds, lock screen visibility, and vibration priorities.",
-                        icon = Icons.Default.Settings,
-                        actionLabel = "Configure",
-                        onClick = {
-                            val intent = Intent().apply {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                    action = Settings.ACTION_APP_NOTIFICATION_SETTINGS
-                                    putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-                                } else {
-                                    action = "android.settings.APP_NOTIFICATION_SETTINGS"
-                                    putExtra("app_package", context.packageName)
-                                    putExtra("app_uid", context.applicationInfo.uid)
-                                }
-                            }
-                            context.startActivity(intent)
-                        },
-                        tag = "diagnostic_notif_channels"
-                    )
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                    // Diagnostic row 3: Reliable Background Reminders
-                    DiagnosticItem(
-                        title = "Reliable Background Reminders",
-                        description = "Want reliable reminders even when MedPulse hasn't been opened recently? Allow reminders to arrive right on time.",
-                        icon = Icons.Default.BatteryChargingFull,
-                        actionLabel = "Adjust",
-                        onClick = {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                context.startActivity(intent)
-                                Toast.makeText(context, "Set MedPulse to 'Unrestricted' so class alarms arrive right on time.", Toast.LENGTH_LONG).show()
-                            } else {
-                                Toast.makeText(context, "Background restrictions are not required on this Android version.", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        tag = "diagnostic_battery_exclusion"
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
             // Sync Database Group
             SettingsSectionHeader(title = "Local Database Persistence")
 
@@ -1427,42 +1391,6 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.error,
                         onClick = { viewModel.resetWholeApp() },
                         tag = "settings_erase_database"
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Security Group
-            SettingsSectionHeader(title = "System Security Warning")
-
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f)),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "MedPulse Security Advisory",
-                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Security Warning: I have included your API keys in the generated APK file for this prototype. Please be aware that Android APKs can be easily decompiled, and these keys can be extracted by anyone who has access to the file. Do not share this APK file publicly or with unauthorized individuals to prevent potential misuse.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        lineHeight = 16.sp
                     )
                 }
             }
@@ -1515,6 +1443,502 @@ fun SettingsScreen(
                                 }
                             }
                         }
+                    }
+                }
+            )
+        }
+
+        // Student Info Center Dialogs
+        // 1. Edit Name Dialog
+        if (showEditNameDialog) {
+            AlertDialog(
+                onDismissRequest = { showEditNameDialog = false },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                },
+                title = {
+                    Text(
+                        "Edit Student Name",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "Enter your full name as you would like it to appear across your academic records and timetable.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        OutlinedTextField(
+                            value = editNameInput,
+                            onValueChange = { editNameInput = it },
+                            label = { Text("Student Name") },
+                            placeholder = { Text("e.g. Dr. Alex Smith") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("edit_student_name_dialog_field")
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val trimmed = editNameInput.trim()
+                            if (trimmed.isNotBlank()) {
+                                viewModel.saveUserProfile(
+                                    name = trimmed,
+                                    college = studentCollege.ifBlank { "AIIMS New Delhi" },
+                                    course = selectedCourse?.displayName ?: "MBBS",
+                                    year = studentYear.ifBlank { "1st Year" },
+                                    semester = studentSemester.ifBlank { "Semester 1" },
+                                    batch = studentBatch.ifBlank { "Batch A" },
+                                    admissionYear = studentAdmissionYear,
+                                    currentYear = studentYear.ifBlank { "1st Year" }
+                                )
+                                tempName = trimmed
+                            }
+                            showEditNameDialog = false
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("save_student_name_btn")
+                    ) {
+                        Text("Save")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showEditNameDialog = false },
+                        modifier = Modifier.testTag("cancel_edit_student_name_btn")
+                    ) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        // 2. Edit College/University Dialog
+        if (showCollegeSelectorDialog) {
+            val allColleges = remember { UniversityDirectory.colleges }
+            val filteredColleges = remember(collegeSearchQuery) {
+                if (collegeSearchQuery.isBlank()) allColleges
+                else allColleges.filter {
+                    it.name.contains(collegeSearchQuery, ignoreCase = true) ||
+                    it.shortName.contains(collegeSearchQuery, ignoreCase = true) ||
+                    it.state.contains(collegeSearchQuery, ignoreCase = true)
+                }
+            }
+
+            AlertDialog(
+                onDismissRequest = { showCollegeSelectorDialog = false },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.School,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                },
+                title = {
+                    Text(
+                        "Select College / University",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = collegeSearchQuery,
+                            onValueChange = { collegeSearchQuery = it },
+                            label = { Text("Search College") },
+                            placeholder = { Text("Search by name, AIIMS, state...") },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("search_college_field")
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        if (isEnteringCustomCollege) {
+                            OutlinedTextField(
+                                value = customCollegeInput,
+                                onValueChange = { customCollegeInput = it },
+                                label = { Text("Enter Custom Institution Name") },
+                                placeholder = { Text("e.g. Government Medical College") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth().testTag("custom_college_name_field")
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            TextButton(
+                                onClick = { isEnteringCustomCollege = false },
+                                modifier = Modifier.align(Alignment.End)
+                            ) {
+                                Text("Back to Directory List")
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(
+                                    onClick = { isEnteringCustomCollege = true },
+                                    modifier = Modifier.testTag("other_college_btn")
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("My College Not Listed")
+                                }
+                            }
+
+                            Box(modifier = Modifier.weight(1f, fill = false).heightIn(max = 280.dp)) {
+                                androidx.compose.foundation.lazy.LazyColumn(
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    items(filteredColleges.size) { index ->
+                                        val college = filteredColleges[index]
+                                        val isSelected = studentCollege.equals(college.name, ignoreCase = true)
+                                        Surface(
+                                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    viewModel.saveUserProfile(
+                                                        name = studentName.ifBlank { "Med Student" },
+                                                        college = college.name,
+                                                        course = selectedCourse?.displayName ?: "MBBS",
+                                                        year = studentYear.ifBlank { "1st Year" },
+                                                        semester = studentSemester.ifBlank { "Semester 1" },
+                                                        batch = studentBatch.ifBlank { "Batch A" },
+                                                        admissionYear = studentAdmissionYear,
+                                                        currentYear = studentYear.ifBlank { "1st Year" }
+                                                    )
+                                                    showCollegeSelectorDialog = false
+                                                }
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(12.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = college.name,
+                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    Text(
+                                                        text = "${college.state} • ${college.category.displayName}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                                if (isSelected) {
+                                                    Icon(
+                                                        Icons.Default.Check,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    if (isEnteringCustomCollege) {
+                        Button(
+                            onClick = {
+                                val trimmed = customCollegeInput.trim()
+                                if (trimmed.isNotBlank()) {
+                                    viewModel.saveUserProfile(
+                                        name = studentName.ifBlank { "Med Student" },
+                                        college = trimmed,
+                                        course = selectedCourse?.displayName ?: "MBBS",
+                                        year = studentYear.ifBlank { "1st Year" },
+                                        semester = studentSemester.ifBlank { "Semester 1" },
+                                        batch = studentBatch.ifBlank { "Batch A" },
+                                        admissionYear = studentAdmissionYear,
+                                        currentYear = studentYear.ifBlank { "1st Year" }
+                                    )
+                                }
+                                showCollegeSelectorDialog = false
+                            },
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Save College")
+                        }
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showCollegeSelectorDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        // 3. Edit Academic Year, Semester & Batch Dialog
+        if (showYearBatchDialog) {
+            val academicYears = listOf("1st Year", "2nd Year", "3rd Year", "4th Year", "Final Year", "Intern")
+            val semesters = listOf("Semester 1", "Semester 2", "Semester 3", "Semester 4", "Semester 5", "Semester 6", "Semester 7", "Semester 8", "Semester 9")
+            val batches = listOf("Batch A", "Batch B", "Batch C", "Batch D", "Batch 1", "Batch 2")
+
+            AlertDialog(
+                onDismissRequest = { showYearBatchDialog = false },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.Groups,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                },
+                title = {
+                    Text(
+                        "Academic Details",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                },
+                text = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        // Academic Year
+                        Text(
+                            "Academic Year",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            academicYears.take(3).forEach { yr ->
+                                FilterChip(
+                                    selected = editYearInput == yr,
+                                    onClick = { editYearInput = yr },
+                                    label = { Text(yr, style = MaterialTheme.typography.labelMedium) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            academicYears.drop(3).forEach { yr ->
+                                FilterChip(
+                                    selected = editYearInput == yr,
+                                    onClick = { editYearInput = yr },
+                                    label = { Text(yr, style = MaterialTheme.typography.labelMedium) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        // Semester
+                        Text(
+                            "Current Semester",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            semesters.take(3).forEach { sem ->
+                                FilterChip(
+                                    selected = editSemesterInput == sem,
+                                    onClick = { editSemesterInput = sem },
+                                    label = { Text(sem.replace("Semester ", "Sem "), style = MaterialTheme.typography.labelSmall) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            semesters.drop(3).take(3).forEach { sem ->
+                                FilterChip(
+                                    selected = editSemesterInput == sem,
+                                    onClick = { editSemesterInput = sem },
+                                    label = { Text(sem.replace("Semester ", "Sem "), style = MaterialTheme.typography.labelSmall) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        // Batch
+                        Text(
+                            "Practical / Clinical Batch",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            batches.take(3).forEach { b ->
+                                FilterChip(
+                                    selected = editBatchInput == b,
+                                    onClick = { editBatchInput = b },
+                                    label = { Text(b, style = MaterialTheme.typography.labelMedium) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            batches.drop(3).forEach { b ->
+                                FilterChip(
+                                    selected = editBatchInput == b,
+                                    onClick = { editBatchInput = b },
+                                    label = { Text(b, style = MaterialTheme.typography.labelMedium) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            viewModel.saveUserProfile(
+                                name = studentName.ifBlank { "Med Student" },
+                                college = studentCollege.ifBlank { "AIIMS New Delhi" },
+                                course = selectedCourse?.displayName ?: "MBBS",
+                                year = editYearInput,
+                                semester = editSemesterInput,
+                                batch = editBatchInput,
+                                admissionYear = studentAdmissionYear,
+                                currentYear = editYearInput
+                            )
+                            showYearBatchDialog = false
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("save_year_batch_btn")
+                    ) {
+                        Text("Save Details")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showYearBatchDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        // 4. Edit Admission Year Dialog (Batch Sync)
+        if (showAdmissionYearDialog) {
+            val admissionYears = (2018..2026).toList()
+
+            AlertDialog(
+                onDismissRequest = { showAdmissionYearDialog = false },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.Event,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                },
+                title = {
+                    Text(
+                        "Year of Admission",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "Your admission year links you with peers in the same batch for auto-syncing shared assignments, tests, and department notices.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Box(modifier = Modifier.heightIn(max = 240.dp)) {
+                            androidx.compose.foundation.lazy.LazyColumn(
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(admissionYears.size) { idx ->
+                                    val yr = admissionYears[idx]
+                                    val isSelected = editAdmissionYearInput == yr.toString()
+                                    Surface(
+                                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { editAdmissionYearInput = yr.toString() }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Batch of $yr",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            if (isSelected) {
+                                                Icon(
+                                                    Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val parsedYear = editAdmissionYearInput.toIntOrNull() ?: studentAdmissionYear
+                            viewModel.saveUserProfile(
+                                name = studentName.ifBlank { "Med Student" },
+                                college = studentCollege.ifBlank { "AIIMS New Delhi" },
+                                course = selectedCourse?.displayName ?: "MBBS",
+                                year = studentYear.ifBlank { "1st Year" },
+                                semester = studentSemester.ifBlank { "Semester 1" },
+                                batch = studentBatch.ifBlank { "Batch A" },
+                                admissionYear = parsedYear,
+                                currentYear = studentYear.ifBlank { "1st Year" }
+                            )
+                            showAdmissionYearDialog = false
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("save_admission_year_btn")
+                    ) {
+                        Text("Save Year")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAdmissionYearDialog = false }) {
+                        Text("Cancel")
                     }
                 }
             )
@@ -1674,54 +2098,6 @@ fun ProfilePictureSourceDialog(
             }
         }
     )
-}
-
-@Composable
-fun DiagnosticItem(
-    title: String,
-    description: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    actionLabel: String,
-    onClick: () -> Unit,
-    tag: String,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(24.dp)
-        )
-        
-        Spacer(modifier = Modifier.width(12.dp))
-        
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = description,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        
-        Spacer(modifier = Modifier.width(8.dp))
-        
-        TextButton(
-            onClick = onClick,
-            modifier = Modifier.testTag(tag),
-            contentPadding = PaddingValues(horizontal = 8.dp)
-        ) {
-            Text(text = actionLabel, style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
-        }
-    }
 }
 
 

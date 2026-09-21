@@ -279,7 +279,7 @@ interface PlannerDao {
         AttendanceRecord::class,
         DailySubjectRevision::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class PlannerDatabase : RoomDatabase() {

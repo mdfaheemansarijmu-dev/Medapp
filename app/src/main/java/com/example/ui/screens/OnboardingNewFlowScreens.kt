@@ -777,7 +777,7 @@ fun OnboardingAuthChoiceScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // 1. PRIMARY CTA: "Start Now (Without Log In)"
+            // 1. PRIMARY CTA: Confirm & Finish Setup (Account Linked)
             Button(
                 onClick = onStartNowWithoutLogin,
                 shape = RoundedCornerShape(16.dp),
@@ -794,13 +794,13 @@ fun OnboardingAuthChoiceScreen(
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.FlashOn,
+                        imageVector = Icons.Default.CloudDone,
                         contentDescription = null,
                         modifier = Modifier.size(22.dp)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Start Now (Without Log In)",
+                        text = "Confirm & Finish Setup",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -821,7 +821,7 @@ fun OnboardingAuthChoiceScreen(
             ) {
                 HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 Text(
-                    text = "or log in to sync schedule",
+                    text = "switch account or sync method",
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 10.dp)
@@ -852,7 +852,7 @@ fun OnboardingAuthChoiceScreen(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Continue with Google",
+                        text = "Switch Google Account",
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -882,7 +882,7 @@ fun OnboardingAuthChoiceScreen(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Continue with Mobile",
+                        text = "Sign in with Mobile OTP",
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -895,16 +895,16 @@ fun OnboardingAuthChoiceScreen(
                 modifier = Modifier.testTag("login_link_button")
             ) {
                 Text(
-                    text = "Sign in with Email & Password",
+                    text = "Sign in with different Email & Password",
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.primary
                 )
             }
 
             Text(
-                text = "Guest mode works 100% offline. You can link an account anytime later in Settings.",
+                text = "🔒 Cloud Auto-Backup Active: All schedules and attendance records are continuously backed up to your account.",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                color = MaterialTheme.colorScheme.primary,
                 textAlign = TextAlign.Center
             )
         }

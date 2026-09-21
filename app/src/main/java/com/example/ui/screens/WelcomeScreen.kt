@@ -19,6 +19,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -137,6 +138,7 @@ fun WelcomeScreen(
     var selectedCourse by remember { mutableStateOf<MedicalCourse?>(null) }
     var selectedCollege by remember { mutableStateOf("All India Institute of Medical Sciences (AIIMS), New Delhi") }
     var selectedYear by remember { mutableStateOf<String?>(null) }
+    var admissionYearStr by remember { mutableStateOf("") }
     var selectedSemester by remember { mutableStateOf("Semester 1") }
     var selectedBatch by remember { mutableStateOf("Batch A") }
     var studentName by remember { mutableStateOf("") }
@@ -168,6 +170,7 @@ fun WelcomeScreen(
                 }
                 selectedCollege = onboardingDraftPrefs.getString("draft_college", "All India Institute of Medical Sciences (AIIMS), New Delhi") ?: "All India Institute of Medical Sciences (AIIMS), New Delhi"
                 selectedYear = onboardingDraftPrefs.getString("draft_year", null)
+                admissionYearStr = onboardingDraftPrefs.getString("draft_admission_year", "") ?: ""
                 selectedSemester = onboardingDraftPrefs.getString("draft_semester", "Semester 1") ?: "Semester 1"
                 selectedBatch = onboardingDraftPrefs.getString("draft_batch", "Batch A") ?: "Batch A"
                 studentName = onboardingDraftPrefs.getString("draft_name", "") ?: ""
@@ -180,7 +183,7 @@ fun WelcomeScreen(
         }
     }
 
-    LaunchedEffect(currentStep, selectedCourse, selectedCollege, selectedYear, selectedSemester, selectedBatch, studentName) {
+    LaunchedEffect(currentStep, selectedCourse, selectedCollege, selectedYear, admissionYearStr, selectedSemester, selectedBatch, studentName) {
         if (currentStep == OnboardingStep.APP_FUNCTIONS || currentStep == OnboardingStep.WELCOME || currentStep == OnboardingStep.COMPLETION) {
             onboardingDraftPrefs.edit().clear().apply()
         } else {
@@ -189,6 +192,7 @@ fun WelcomeScreen(
                 .putString("draft_course", selectedCourse?.name)
                 .putString("draft_college", selectedCollege)
                 .putString("draft_year", selectedYear)
+                .putString("draft_admission_year", admissionYearStr)
                 .putString("draft_semester", selectedSemester)
                 .putString("draft_batch", selectedBatch)
                 .putString("draft_name", studentName)
@@ -199,13 +203,17 @@ fun WelcomeScreen(
     fun persistProfileAndTimetable(course: MedicalCourse) {
         val chosenCollege = if (selectedCollege.isNotBlank()) selectedCollege else "All India Institute of Medical Sciences (AIIMS), New Delhi"
         val finalName = if (studentName.isNotBlank()) studentName else "Medical Student"
+        val currentYr = selectedYear ?: "1st Year"
+        val admYear = admissionYearStr.trim().toIntOrNull() ?: 2024
         viewModel.saveUserProfile(
             name = finalName,
             college = chosenCollege,
             course = course.displayName,
-            year = selectedYear ?: "1st Year",
+            year = currentYr,
             semester = selectedSemester,
-            batch = selectedBatch
+            batch = selectedBatch,
+            admissionYear = admYear,
+            currentYear = currentYr
         )
         viewModel.setStudentCollege(chosenCollege)
         val timetableToSave = if (extractedClasses.isNotEmpty()) {
@@ -441,6 +449,22 @@ fun WelcomeScreen(
         currentStep = OnboardingStep.COMPLETION
     }
 
+    // Mandatory Cloud Authentication Gateway: Guarantees user data is never lost
+    if (loginMode == LoginMode.UNDECIDED || loginMode == LoginMode.GUEST) {
+        AuthScreen(
+            viewModel = viewModel,
+            onAuthSuccess = { isNewUser ->
+                if (viewModel.isOnboardingCompleted()) {
+                    viewModel.navigateTo(com.example.ui.viewmodel.Screen.Dashboard)
+                } else {
+                    currentStep = OnboardingStep.STUDENT_NAME
+                }
+            },
+            modifier = modifier
+        )
+        return
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -521,10 +545,12 @@ fun WelcomeScreen(
                 OnboardingStep.ACADEMIC_DETAILS -> {
                     OnboardingAcademicDetailsScreen(
                         selectedYear = selectedYear,
+                        admissionYear = admissionYearStr,
                         selectedSemester = selectedSemester,
                         selectedBatch = selectedBatch,
                         studentName = studentName,
                         onYearSelected = { selectedYear = it },
+                        onAdmissionYearChanged = { admissionYearStr = it },
                         onSemesterSelected = { selectedSemester = it },
                         onBatchSelected = { selectedBatch = it },
                         onNameChanged = { studentName = it },
@@ -548,11 +574,10 @@ fun WelcomeScreen(
                         authError = authError,
                         onBack = { currentStep = OnboardingStep.ACADEMIC_DETAILS },
                         onStartNowWithoutLogin = {
-                            viewModel.setGuestMode()
                             val course = selectedCourse ?: MedicalCourse.MBBS
                             persistProfileAndTimetable(course)
                             viewModel.completeOnboarding(course)
-                            Toast.makeText(context, "Welcome! You can create an account anytime later in Settings.", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "Welcome! Your medical routine is securely synced to cloud.", Toast.LENGTH_SHORT).show()
                         },
                         onGoogleClick = {
                             viewModel.setAuthenticating(true)
@@ -627,6 +652,7 @@ fun WelcomeScreen(
                         selectedCourse = selectedCourse ?: MedicalCourse.MBBS,
                         selectedYear = selectedYear ?: "1st Year",
                         selectedBatch = selectedBatch,
+                        admissionYear = admissionYearStr,
                         classCount = extractedClasses.size,
                         notificationsEnabled = viewModel.areNotificationsEnabled.value,
                         onGoToDashboard = {
@@ -735,11 +761,13 @@ fun WelcomeScreen(
                             onBack = { authSubView = AuthSubView.NONE },
                             onSendCode = { phone ->
                                 (context as? Activity)?.let { act ->
-                                    viewModel.sendPhoneOtp(act, phone, "Medical Student")
+                                    val nameToUse = studentName.ifBlank { "Medical Student" }
+                                    viewModel.sendPhoneOtp(act, phone, nameToUse)
                                 }
                             },
-                            onVerifyCode = { otp ->
-                                viewModel.verifyPhoneOtp(phoneNumber = "", otp = otp, name = "Medical Student")
+                            onVerifyCode = { phone, otp ->
+                                val nameToUse = studentName.ifBlank { "Medical Student" }
+                                viewModel.verifyPhoneOtp(phoneNumber = phone, otp = otp, name = nameToUse)
                             }
                         )
                     }
@@ -1324,10 +1352,12 @@ fun CourseSelectCard(
 @Composable
 fun OnboardingAcademicDetailsScreen(
     selectedYear: String?,
+    admissionYear: String,
     selectedSemester: String,
     selectedBatch: String,
     studentName: String,
     onYearSelected: (String) -> Unit,
+    onAdmissionYearChanged: (String) -> Unit,
     onSemesterSelected: (String) -> Unit,
     onBatchSelected: (String) -> Unit,
     onNameChanged: (String) -> Unit,
@@ -1340,6 +1370,15 @@ fun OnboardingAcademicDetailsScreen(
     val years = listOf("1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year", "Internship")
     val semesters = listOf("Semester 1", "Semester 2", "Annual System")
     val batches = listOf("Batch A", "Batch B", "Batch C", "Full Batch")
+    val currentCalendarYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+    val admissionYearSuggestions = listOf(
+        currentCalendarYear.toString(),
+        (currentCalendarYear - 1).toString(),
+        (currentCalendarYear - 2).toString(),
+        (currentCalendarYear - 3).toString(),
+        (currentCalendarYear - 4).toString(),
+        (currentCalendarYear - 5).toString()
+    )
 
     Column(
         modifier = modifier
@@ -1494,6 +1533,51 @@ fun OnboardingAcademicDetailsScreen(
                                 )
                             }
                         }
+                    }
+
+                    // Admission Year Selection
+                    Column {
+                        Text(
+                            text = "Year of Admission (Batch Year)",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Used to sync assignments & notices with your university batchmates.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            admissionYearSuggestions.forEach { yr ->
+                                FilterChip(
+                                    selected = admissionYear == yr,
+                                    onClick = { onAdmissionYearChanged(yr) },
+                                    label = { Text(yr) },
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = admissionYear,
+                            onValueChange = { newVal ->
+                                if (newVal.all { it.isDigit() } && newVal.length <= 4) {
+                                    onAdmissionYearChanged(newVal)
+                                }
+                            },
+                            placeholder = { Text("Or enter year, e.g. 2023") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
 
                     // Optional Student Name
@@ -2544,7 +2628,7 @@ fun PhoneSignInForm(
     phoneOtpSent: Boolean,
     onBack: () -> Unit,
     onSendCode: (String) -> Unit,
-    onVerifyCode: (String) -> Unit
+    onVerifyCode: (String, String) -> Unit
 ) {
     var phoneNumber by remember { mutableStateOf("") }
     var otpCode by remember { mutableStateOf("") }
@@ -2615,7 +2699,7 @@ fun PhoneSignInForm(
 
         Button(
             onClick = {
-                if (!phoneOtpSent) onSendCode(phoneNumber) else onVerifyCode(otpCode)
+                if (!phoneOtpSent) onSendCode(phoneNumber) else onVerifyCode(phoneNumber, otpCode)
             },
             enabled = (if (!phoneOtpSent) phoneNumber.length >= 10 else otpCode.length >= 6) && !isAuthenticating,
             shape = RoundedCornerShape(16.dp),
@@ -2741,6 +2825,7 @@ fun OnboardingCompletionScreen(
     selectedCourse: MedicalCourse,
     selectedYear: String,
     selectedBatch: String,
+    admissionYear: String = "",
     classCount: Int,
     notificationsEnabled: Boolean,
     onGoToDashboard: () -> Unit,
@@ -2822,7 +2907,7 @@ fun OnboardingCompletionScreen(
                     CompletionSummaryRow(
                         icon = Icons.Default.Groups,
                         label = "Clinical Section",
-                        value = selectedBatch
+                        value = if (admissionYear.isNotBlank()) "$selectedBatch (Admitted $admissionYear)" else selectedBatch
                     )
                     CompletionSummaryRow(
                         icon = Icons.Default.CalendarMonth,

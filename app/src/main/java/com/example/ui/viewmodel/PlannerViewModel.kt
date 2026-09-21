@@ -230,6 +230,9 @@ class PlannerViewModel(
     private val _studentYear = MutableStateFlow("")
     val studentYear: StateFlow<String> = _studentYear.asStateFlow()
 
+    private val _studentAdmissionYear = MutableStateFlow(2024)
+    val studentAdmissionYear: StateFlow<Int> = _studentAdmissionYear.asStateFlow()
+
     private val _studentSemester = MutableStateFlow("")
     val studentSemester: StateFlow<String> = _studentSemester.asStateFlow()
 
@@ -373,6 +376,7 @@ class PlannerViewModel(
         if (savedYear.isNotBlank()) {
             _studentYear.value = savedYear
         }
+        _studentAdmissionYear.value = sharedPrefs.getInt("student_admission_year", 2024)
         val savedSemester = sharedPrefs.getString("student_semester", "") ?: ""
         if (savedSemester.isNotBlank()) {
             _studentSemester.value = savedSemester
@@ -878,7 +882,7 @@ class PlannerViewModel(
 
                 val aiResponseText = if (!response.conversational_response.isNullOrEmpty()) {
                     response.conversational_response
-                } else if (response.document_type == "Weekly Timetable" && response.extracted_timetable.isNotEmpty()) {
+                } else if (response.extracted_timetable.isNotEmpty()) {
                     val days = response.extracted_timetable.map { it.day_of_week }.distinct().size
                     val classesCount = response.extracted_timetable.filter { !it.is_lunch_break }.size
                     val teachersCount = response.extracted_timetable.mapNotNull { it.teacher_name }.distinct().size
@@ -961,6 +965,9 @@ class PlannerViewModel(
         onboardingPrefs.edit().clear().apply()
 
         selectCourse(course)
+
+        // Automatically sync fresh user profile and timetable to Firebase Cloud
+        syncDataToFirebase()
     }
 
     fun isOnboardingCompleted(): Boolean {
@@ -1717,6 +1724,13 @@ class PlannerViewModel(
                 )
             )
         }
+
+        // Automatically restore cloud backup data
+        restoreDataFromFirebase { success ->
+            if (success && isOnboardingCompleted()) {
+                _currentScreen.value = Screen.Dashboard
+            }
+        }
     }
 
     fun signInWithEmailAndPassword(email: String, password: String) {
@@ -1758,6 +1772,13 @@ class PlannerViewModel(
                                     type = "alert"
                                 )
                             )
+                        }
+
+                        // Automatically restore cloud backup data
+                        restoreDataFromFirebase { success ->
+                            if (success && isOnboardingCompleted()) {
+                                _currentScreen.value = Screen.Dashboard
+                            }
                         }
                     } else {
                         _isAuthenticating.value = false
@@ -2000,14 +2021,26 @@ class PlannerViewModel(
         }
     }
 
-    fun saveUserProfile(name: String, college: String, course: String, year: String, semester: String, batch: String) {
+    fun saveUserProfile(
+        name: String,
+        college: String,
+        course: String,
+        year: String,
+        semester: String,
+        batch: String,
+        admissionYear: Int = 2024,
+        currentYear: String = year
+    ) {
         val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "local_user"
+        val effectiveCurrentYear = if (currentYear.isNotBlank()) currentYear else year
         val profile = UserProfile(
             uid = uid,
             fullName = name,
             college = college,
             course = course,
-            year = year,
+            year = effectiveCurrentYear,
+            admissionYear = admissionYear,
+            currentYear = effectiveCurrentYear,
             semester = semester,
             batch = batch
         )
@@ -2021,7 +2054,8 @@ class PlannerViewModel(
             sharedPrefs.edit()
                 .putString("student_name", name)
                 .putString("student_college", college)
-                .putString("student_year", year)
+                .putString("student_year", effectiveCurrentYear)
+                .putInt("student_admission_year", admissionYear)
                 .putString("student_semester", semester)
                 .putString("student_batch", batch)
                 .putBoolean("is_profile_completed", true)
@@ -2029,7 +2063,8 @@ class PlannerViewModel(
 
             _studentName.value = name
             _studentCollege.value = college
-            _studentYear.value = year
+            _studentYear.value = effectiveCurrentYear
+            _studentAdmissionYear.value = admissionYear
             _studentSemester.value = semester
             _studentBatch.value = batch
             _isProfileCompleted.value = true
@@ -2160,6 +2195,8 @@ class PlannerViewModel(
                     college = _studentCollege.value,
                     course = _selectedCourse.value?.code ?: "",
                     year = _studentYear.value,
+                    admissionYear = _studentAdmissionYear.value,
+                    currentYear = _studentYear.value,
                     semester = _studentSemester.value,
                     batch = _studentBatch.value
                 )
@@ -2247,13 +2284,15 @@ class PlannerViewModel(
                             val name = doc.getString("fullName") ?: ""
                             val college = doc.getString("college") ?: ""
                             val courseCode = doc.getString("course") ?: ""
-                            val year = doc.getString("year") ?: ""
+                            val year = doc.getString("currentYear") ?: doc.getString("year") ?: ""
+                            val admissionYearVal = doc.getLong("admissionYear")?.toInt() ?: 2024
                             val semester = doc.getString("semester") ?: ""
                             val batch = doc.getString("batch") ?: ""
                             
                             _studentName.value = name
                             _studentCollege.value = college
                             _studentYear.value = year
+                            _studentAdmissionYear.value = admissionYearVal
                             _studentSemester.value = semester
                             _studentBatch.value = batch
                             _isProfileCompleted.value = true
@@ -2269,9 +2308,11 @@ class PlannerViewModel(
                                         .putString("selected_course_code", courseObj.name)
                                         .putString("student_college", college)
                                         .putString("student_year", year)
+                                        .putInt("student_admission_year", admissionYearVal)
                                         .putString("student_semester", semester)
                                         .putString("student_batch", batch)
                                         .putBoolean("is_profile_completed", true)
+                                        .putBoolean("is_onboarding_completed", true)
                                         .apply()
                                 } catch (e: Exception) {
                                     // ignore

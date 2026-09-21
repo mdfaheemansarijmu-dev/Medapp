@@ -193,47 +193,47 @@ class GeminiParserService {
                - Put your answer in "conversational_response" (using rich markdown)
                - Keep "extracted_timetable" = [] and "extracted_items" = []
 
-            2. ASSIGNMENTS & HOMEWORK:
+            2. TIMETABLE & CLASS SCHEDULES (CRITICAL):
+               If the input contains a timetable, routine, or class schedule (whether an image of a weekly routine/grid, handwritten/printed timetable, a single-day routine, or plain text with class timings):
+               - Set document_type = "Weekly Timetable"
+               - Extract EVERY period/class found into "extracted_timetable"
+               - Map days to day_of_week: 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday, 7=Sunday (default to 1 if no day specified)
+               - Extract period_number (1, 2, 3...), start_time (e.g. "09:00 AM"), end_time (e.g. "10:00 AM"), subject, teacher_name (if any), room (if any), is_practical (true for labs, dissection, practicals, clinics), is_lunch_break (true for recess, lunch)
+               - Keep "extracted_items" = []
+
+            3. ASSIGNMENTS & HOMEWORK:
                If the input contains homework, record submission, logbook, chart, or assignments:
                - Set document_type = "Assignment Notice"
                - Add each item to "extracted_items" with category = "Assignment"
                - Keep "extracted_timetable" = []
 
-            3. ASSESSMENTS, TESTS & EXAMS:
+            4. ASSESSMENTS, TESTS & EXAMS:
                If the input contains internal assessments, class tests, vivas, exams, quizzes, or evaluations:
                - Set document_type = "Assessment Notice"
                - Add each item to "extracted_items" with category = "Assessment" (Map all exams, vivas, and tests strictly to "Assessment")
                - Keep "extracted_timetable" = []
 
-            4. SCHEDULE ADJUSTMENTS & TEMPORARY OVERRIDES:
-               If the input announces a class cancellation, room change, teacher substitute, extra class, or temporary timing change for a specific day:
+            5. SCHEDULE ADJUSTMENTS & TEMPORARY OVERRIDES:
+               If the input announces a specific class cancellation, room change, teacher substitute, extra class, or temporary timing change for a specific day (NOT a routine timetable):
                - Set document_type = "Schedule Override"
                - Set is_temporary_override = true
                - Set override_date to the affected date or day (e.g. "Tomorrow", "Monday", "2026-09-20")
                - Add each adjustment to "extracted_items" with category = "Class Cancellation", "Room Change", "Teacher Change", or "Schedule Change"
                - Keep "extracted_timetable" = []
 
-            5. HOLIDAYS & COLLEGE CLOSURES:
+            6. HOLIDAYS & COLLEGE CLOSURES:
                If the input announces a holiday or college closure:
                - Set document_type = "Holiday Notice"
                - Add item to "extracted_items" with category = "Holiday"
                - Keep "extracted_timetable" = []
 
-            6. FULL RECURRING WEEKLY TIMETABLE (STRICT):
-               ONLY set document_type = "Weekly Timetable" if the input is genuinely a complete multi-period weekly timetable routine (e.g., an uploaded image of a timetable table/grid, or text with explicit periods across days).
-               - DO NOT invent, fabricate, or hallucinate dummy classes! Only extract classes actually present.
-               - Extract into "extracted_timetable"
-               - Keep "extracted_items" = []
-
             7. WHATSAPP & FORWARDED CHAT MESSAGES (CRITICAL):
                When analyzing messages copied from WhatsApp, Telegram, or class groups (e.g. `[17/09, 3:54 pm] +91 80759 02502: ...`):
-               - NEVER include timestamps, phone numbers, or sender names in the title or details! Strip them completely.
+               - Strip timestamps, phone numbers, and sender names completely from titles/details.
                - NEVER extract numbers, decimal times, or fragments (like "30 to" or "2.30") as standalone general notices.
                - Extract clean, academic titles describing the specific topic (e.g., "Hypothalamic & Post. Pituitary Assessment", "Biochemistry: Tryptophan Metabolism").
                - Infer medical subject accurately (e.g. "Hypothalamic hormones / Pituitary" -> "Physiology", "Tryptophan metabolism" -> "Biochemistry").
                - Extract day, date, and timings into due_date_description (e.g., "Tuesday 2.30 to 3.30" -> "Tuesday (02:30 PM - 03:30 PM)").
-
-            CRITICAL: NEVER mix up a WhatsApp announcement or notice with a Weekly Timetable. If the message is about assignments, tests, class adjustments, or notices, DO NOT propose a new weekly timetable! Propose calendar items in extracted_items instead.
 
             ${if (ocrText.isNotBlank()) "LOCAL OCR SPATIAL RECONSTRUCTION:\nUse this local high-precision spatial text with coordinates to align and map rows and columns perfectly. Ensure NO row or column is missed:\n$ocrText\n" else ""}
 
@@ -242,11 +242,23 @@ class GeminiParserService {
 
             You MUST respond ONLY with a valid JSON object matching the exact structure below, with no markdown codeblocks, and no conversational preamble or postscript:
             {
-              "document_type": "Assignment Notice",
+              "document_type": "Weekly Timetable",
               "is_temporary_override": false,
               "override_date": null,
               "conversational_response": null,
-              "extracted_timetable": [],
+              "extracted_timetable": [
+                {
+                  "day_of_week": 1,
+                  "period_number": 1,
+                  "start_time": "09:00 AM",
+                  "end_time": "10:00 AM",
+                  "subject": "Anatomy",
+                  "teacher_name": "Dr. Sharma",
+                  "room": "Hall A",
+                  "is_practical": false,
+                  "is_lunch_break": false
+                }
+              ],
               "extracted_items": [
                 {
                   "category": "Assessment",
@@ -368,50 +380,117 @@ class GeminiParserService {
             )
         }
 
-        // 2. Check if input is a STRICT Genuine Full Weekly Timetable
-        // MUST NOT be a WhatsApp message or notice announcing assignments/tests/cancellations
+        // 2. Check if input is a Class Schedule or Timetable
         val hasNoticeKeywords = combinedText.contains("assignment") ||
-                combinedText.contains("submit") ||
                 combinedText.contains("submission") ||
-                combinedText.contains("due") ||
-                combinedText.contains("test") ||
+                combinedText.contains("record book") ||
                 combinedText.contains("internal assessment") ||
-                combinedText.contains("exam") ||
                 combinedText.contains("viva") ||
                 combinedText.contains("cancelled") ||
-                combinedText.contains("canceled") ||
                 combinedText.contains("room change") ||
                 combinedText.contains("shifted to") ||
                 combinedText.contains("holiday")
 
-        val dayKeywords = listOf("monday", "tuesday", "wednesday", "thursday", "friday", "saturday")
-        val daysFoundCount = dayKeywords.count { combinedText.contains(it) }
-
-        val isWeeklyTimetable = !hasNoticeKeywords && (
-            (hasImage && (combinedText.contains("timetable") || combinedText.contains("routine") || daysFoundCount >= 2)) ||
-            (daysFoundCount >= 3 && (combinedText.contains("08:") || combinedText.contains("09:") || combinedText.contains("10:") || combinedText.contains("8:30") || combinedText.contains("am") || combinedText.contains("pm")))
+        val dayKeywords = listOf("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+        val dayMap = mapOf(
+            "monday" to 1, "mon" to 1,
+            "tuesday" to 2, "tue" to 2, "tues" to 2,
+            "wednesday" to 3, "wed" to 3,
+            "thursday" to 4, "thu" to 4, "thur" to 4, "thurs" to 4,
+            "friday" to 5, "fri" to 5,
+            "saturday" to 6, "sat" to 6,
+            "sunday" to 7, "sun" to 7
         )
 
-        if (isWeeklyTimetable) {
-            val timetable = mutableListOf<ParsedTimetableClass>()
-            for ((dayIdx, dayName) in dayKeywords.withIndex()) {
-                val dayNumber = dayIdx + 1
-                if (combinedText.contains(dayName)) {
-                    val daySection = combinedText.substringAfter(dayName).substringBefore("\n\n")
-                    val p1Sub = if (daySection.contains("repertory") || daySection.contains("materia")) "Repertory / Materia Medica" else if (daySection.contains("physiology")) "Physiology" else "Anatomy"
-                    val p2Sub = if (daySection.contains("pharmacy")) "Pharmacy" else if (daySection.contains("anatomy")) "Anatomy" else "Physiology"
-                    val p3Sub = if (daySection.contains("anatomy")) "Anatomy (Practical)" else "Physiology (Practical)"
+        val timeRegex = Regex("(?i)(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?\\s*(?:-|–|to)\\s*(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?")
 
-                    timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 1, start_time = "08:30 AM", end_time = "09:30 AM", subject = p1Sub, teacher_name = "Faculty", room = "Lecture Hall A", is_practical = false, is_lunch_break = false))
-                    timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 2, start_time = "09:30 AM", end_time = "10:30 AM", subject = p2Sub, teacher_name = "Faculty", room = "Lecture Hall B", is_practical = false, is_lunch_break = false))
-                    timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 3, start_time = "10:30 AM", end_time = "01:00 PM", subject = "$p3Sub Lab", teacher_name = "Dept Staff", room = "Practical Lab", is_practical = true, is_lunch_break = false))
-                    timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 4, start_time = "01:00 PM", end_time = "01:30 PM", subject = "Lunch Break", teacher_name = null, room = "Cafeteria", is_practical = false, is_lunch_break = true))
-                    timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 5, start_time = "01:30 PM", end_time = "02:30 PM", subject = "Physiology Theory", teacher_name = "Dr. Verma", room = "Hall A", is_practical = false, is_lunch_break = false))
-                    timetable.add(ParsedTimetableClass(day_of_week = dayNumber, period_number = 6, start_time = "02:30 PM", end_time = "03:30 PM", subject = "Anatomy Theory", teacher_name = "Dr. Sharma", room = "Hall B", is_practical = false, is_lunch_break = false))
+        val hasScheduleIntent = !hasNoticeKeywords && (
+            hasImage ||
+            combinedText.contains("timetable") ||
+            combinedText.contains("routine") ||
+            combinedText.contains("schedule") ||
+            timeRegex.containsMatchIn(combinedText) ||
+            dayKeywords.any { combinedText.contains(it) }
+        )
+
+        if (hasScheduleIntent) {
+            val timetable = mutableListOf<ParsedTimetableClass>()
+            var currentDayOfWeek = 1
+            var periodCounter = 1
+
+            val sourceLines = (if (ocrText.isNotBlank()) ocrText else input).lines()
+
+            for (line in sourceLines) {
+                val trimmed = line.trim()
+                if (trimmed.isBlank()) continue
+                val lowerLine = trimmed.lowercase()
+
+                // Check if line sets the day (e.g. "Monday:", "## Tuesday", "Wednesday Schedule")
+                var matchedDay: Int? = null
+                for ((dayName, dayNum) in dayMap) {
+                    if (Regex("\\b$dayName\\b", RegexOption.IGNORE_CASE).containsMatchIn(lowerLine)) {
+                        matchedDay = dayNum
+                        break
+                    }
+                }
+
+                if (matchedDay != null && !timeRegex.containsMatchIn(trimmed)) {
+                    currentDayOfWeek = matchedDay
+                    periodCounter = 1
+                    continue
+                }
+
+                // Check if line contains a time interval and class subject
+                val match = timeRegex.find(trimmed)
+                if (match != null) {
+                    val dayForClass = matchedDay ?: currentDayOfWeek
+                    val h1 = match.groupValues[1]
+                    val m1 = match.groupValues[2].ifEmpty { "00" }
+                    val p1 = match.groupValues[3].uppercase()
+                    val h2 = match.groupValues[4]
+                    val m2 = match.groupValues[5].ifEmpty { "00" }
+                    val p2 = match.groupValues[6].uppercase()
+
+                    val finalP2 = if (p2.isNotBlank()) p2 else if (h2.toIntOrNull() ?: 0 in 1..7) "PM" else "AM"
+                    val finalP1 = if (p1.isNotBlank()) p1 else if (h1.toIntOrNull() ?: 0 in 8..11) "AM" else finalP2
+
+                    val startTime = String.format(Locale.US, "%02d:%s %s", h1.toIntOrNull() ?: 9, m1, finalP1)
+                    val endTime = String.format(Locale.US, "%02d:%s %s", h2.toIntOrNull() ?: 10, m2, finalP2)
+
+                    // Extract subject text after removing the time string
+                    var rawSubject = trimmed.replace(match.value, "")
+                        .replace(Regex("^[0-9]+[.):-]\\s*"), "")
+                        .replace(Regex("^[-:•|]\\s*"), "")
+                        .replace(Regex("[-:•|]\\s*$"), "")
+                        .trim()
+
+                    if (rawSubject.isBlank()) {
+                        rawSubject = "Medical Class"
+                    }
+
+                    val isPractical = rawSubject.contains("practical", ignoreCase = true) ||
+                            rawSubject.contains("lab", ignoreCase = true) ||
+                            rawSubject.contains("dissection", ignoreCase = true) ||
+                            rawSubject.contains("clinic", ignoreCase = true)
+
+                    val isLunch = rawSubject.contains("lunch", ignoreCase = true) ||
+                            rawSubject.contains("break", ignoreCase = true) ||
+                            rawSubject.contains("recess", ignoreCase = true)
+
+                    timetable.add(
+                        ParsedTimetableClass(
+                            day_of_week = dayForClass,
+                            period_number = periodCounter++,
+                            start_time = startTime,
+                            end_time = endTime,
+                            subject = rawSubject,
+                            is_practical = isPractical,
+                            is_lunch_break = isLunch
+                        )
+                    )
                 }
             }
 
-            // CRITICAL: NEVER GENERATE FAKE DUMMY CLASSES IF NONE FOUND!
             if (timetable.isNotEmpty()) {
                 return UnifiedParserResponse(
                     document_type = "Weekly Timetable",
@@ -419,7 +498,6 @@ class GeminiParserService {
                     extracted_timetable = timetable
                 )
             }
-            // If timetable was empty, do NOT fabricate dummy classes! Fall through to notice parsing.
         }
 
         // 3. WhatsApp Announcement & Notice Parsing (Assessments, Assignments, Overrides, Holidays)

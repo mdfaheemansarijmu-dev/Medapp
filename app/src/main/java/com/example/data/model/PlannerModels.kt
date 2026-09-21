@@ -166,11 +166,11 @@ data class ScheduleOverride(
 
 @JsonClass(generateAdapter = true)
 data class ParsedTimetableClass(
-    val day_of_week: Int, // 1=Mon, ..., 7=Sun
-    val period_number: Int,
-    val start_time: String,
-    val end_time: String,
-    val subject: String,
+    val day_of_week: Int = 1, // 1=Mon, ..., 7=Sun
+    val period_number: Int = 1,
+    val start_time: String = "09:00 AM",
+    val end_time: String = "10:00 AM",
+    val subject: String = "Class",
     val teacher_name: String? = null,
     val room: String? = null,
     val is_practical: Boolean = false,
@@ -212,6 +212,8 @@ data class UserProfile(
     val college: String,
     val course: String,
     val year: String,
+    val admissionYear: Int = 2024,
+    val currentYear: String = year,
     val semester: String = "",
     val batch: String = ""
 )
