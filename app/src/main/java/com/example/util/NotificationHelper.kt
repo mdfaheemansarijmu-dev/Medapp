@@ -25,6 +25,77 @@ object NotificationHelper {
     const val CHANNEL_STUDY = "study_alerts_v2"
     const val CHANNEL_GENERAL = "general_reminders_v2"
 
+    fun initChannels(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val audioAttributes = AudioAttributes.Builder()
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                .build()
+
+            val channels = listOf(
+                NotificationChannel(
+                    CHANNEL_ASSIGNMENT,
+                    "Assignments & Deadlines",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Alerts and batch updates for assignments and homework"
+                    enableLights(true)
+                    lightColor = Color.GREEN
+                    enableVibration(true)
+                    vibrationPattern = longArrayOf(0, 300, 200, 300)
+                    setShowBadge(true)
+                    lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                    setSound(soundUri, audioAttributes)
+                },
+                NotificationChannel(
+                    CHANNEL_ASSESSMENT,
+                    "Assessments & Exams",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Critical schedules for tests, exams, vivas, and practicals"
+                    enableLights(true)
+                    lightColor = Color.RED
+                    enableVibration(true)
+                    vibrationPattern = longArrayOf(0, 350, 150, 350)
+                    setShowBadge(true)
+                    lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                    setSound(soundUri, audioAttributes)
+                },
+                NotificationChannel(
+                    CHANNEL_CLASS,
+                    "Upcoming Classes & Reminders",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Alerts for upcoming academic lectures and room changes"
+                    enableLights(true)
+                    lightColor = Color.BLUE
+                    enableVibration(true)
+                    vibrationPattern = longArrayOf(0, 250, 150, 250)
+                    setShowBadge(true)
+                    lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                    setSound(soundUri, audioAttributes)
+                },
+                NotificationChannel(
+                    CHANNEL_GENERAL,
+                    "General Reminders & Batch Updates",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "General batch updates and academic notices"
+                    enableLights(true)
+                    enableVibration(true)
+                    setShowBadge(true)
+                    setSound(soundUri, audioAttributes)
+                }
+            )
+
+            channels.forEach { channel ->
+                notificationManager.createNotificationChannel(channel)
+            }
+        }
+    }
+
     fun showNotification(
         context: Context,
         title: String,
@@ -35,6 +106,7 @@ object NotificationHelper {
         subject: String = "",
         targetTime: Long = 0L
     ) {
+        initChannels(context)
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         // Determine correct channel ID & properties based on notification type
@@ -54,55 +126,7 @@ object NotificationHelper {
             else -> NotificationCompat.CATEGORY_STATUS
         }
 
-        // Create Channels (Oreo and above)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // Delete legacy alarm-style channels if present
-            try {
-                notificationManager.deleteNotificationChannel("class_reminders")
-                notificationManager.deleteNotificationChannel("assignment_deadlines")
-                notificationManager.deleteNotificationChannel("assessment_reminders")
-                notificationManager.deleteNotificationChannel("study_alerts")
-                notificationManager.deleteNotificationChannel("general_reminders")
-            } catch (e: Exception) {
-                // Ignore
-            }
-
-            val name = when (channelId) {
-                CHANNEL_CLASS -> "Upcoming Classes & Reminders"
-                CHANNEL_ASSIGNMENT -> "Assignment & Homework Deadlines"
-                CHANNEL_ASSESSMENT -> "Exams, Vivas, & Practicals"
-                CHANNEL_STUDY -> "Study Revision & Goals"
-                else -> "General Reminders & Notifications"
-            }
-            val descriptionText = when (channelId) {
-                CHANNEL_CLASS -> "Alerts for upcoming academic lectures and room changes"
-                CHANNEL_ASSIGNMENT -> "Urgent reminders for assignment submission dates"
-                CHANNEL_ASSESSMENT -> "Critical schedules for midterms, vivas, and final exams"
-                CHANNEL_STUDY -> "Reminders to study selected subjects and topics"
-                else -> "General notifications and system reminders"
-            }
-            val importance = NotificationManager.IMPORTANCE_HIGH
-
-            val channel = NotificationChannel(channelId, name, importance).apply {
-                description = descriptionText
-                enableLights(true)
-                lightColor = Color.BLUE
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 250, 150, 250)
-                setShowBadge(true)
-                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
-
-                val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-                val audioAttributes = AudioAttributes.Builder()
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
-                    .build()
-                setSound(soundUri, audioAttributes)
-            }
-            notificationManager.createNotificationChannel(channel)
-        }
-
-        // 1. Post initial notification: shows briefly on display (heads-up peek)
+        // Post prominent notification (Heads-up banner + status bar icon + vibration)
         val initialBuilder = buildNotificationBuilder(
             context = context,
             channelId = channelId,
@@ -118,37 +142,35 @@ object NotificationHelper {
         )
         notificationManager.notify(notificationId, initialBuilder.build())
 
-        // 2. Auto-recede logic: After showing the incoming class briefly on display,
-        // immediately dismiss the heads-up banner from the display while persisting
-        // seamlessly in the system notification panel / shade.
-        CoroutineScope(Dispatchers.Main).launch {
-            delay(2500L)
-            try {
-                // Ensure notification is still active and hasn't been dismissed or tapped
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    val activeNotifications = notificationManager.activeNotifications
-                    val isStillActive = activeNotifications.any { it.id == notificationId }
-                    if (!isStillActive) return@launch
-                }
+        // Auto-recede logic ONLY applies to short-lived "class" peek reminders.
+        // Assignments and assessments MUST remain visible in the notification tray so students don't miss them.
+        if (type.equals("class", ignoreCase = true)) {
+            CoroutineScope(Dispatchers.Main).launch {
+                delay(3000L)
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        val activeNotifications = notificationManager.activeNotifications
+                        val isStillActive = activeNotifications.any { it.id == notificationId }
+                        if (!isStillActive) return@launch
+                    }
 
-                // Update notification with low display priority & silence so it recedes from screen display
-                // but persists cleanly in the notification panel / drawer.
-                val persistentBuilder = buildNotificationBuilder(
-                    context = context,
-                    channelId = channelId,
-                    title = title,
-                    message = message,
-                    notificationId = notificationId,
-                    itemId = itemId,
-                    type = type,
-                    subject = subject,
-                    targetTime = targetTime,
-                    category = category,
-                    isHeadsUp = false
-                )
-                notificationManager.notify(notificationId, persistentBuilder.build())
-            } catch (e: Exception) {
-                // Safe handling
+                    val persistentBuilder = buildNotificationBuilder(
+                        context = context,
+                        channelId = channelId,
+                        title = title,
+                        message = message,
+                        notificationId = notificationId,
+                        itemId = itemId,
+                        type = type,
+                        subject = subject,
+                        targetTime = targetTime,
+                        category = category,
+                        isHeadsUp = false
+                    )
+                    notificationManager.notify(notificationId, persistentBuilder.build())
+                } catch (e: Exception) {
+                    // Safe handling
+                }
             }
         }
     }

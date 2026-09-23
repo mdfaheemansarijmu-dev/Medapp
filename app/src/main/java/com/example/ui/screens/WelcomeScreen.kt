@@ -155,6 +155,7 @@ fun WelcomeScreen(
     val authError by viewModel.authError.collectAsStateWithLifecycle()
     val phoneOtpSent by viewModel.phoneOtpSent.collectAsStateWithLifecycle()
     val loginMode by viewModel.loginMode.collectAsStateWithLifecycle()
+    val studentEmail by viewModel.studentEmail.collectAsStateWithLifecycle()
 
     // Onboarding draft persistence: allows user to safely resume if closed halfway through
     val onboardingDraftPrefs = remember { context.getSharedPreferences("medpulse_onboarding_draft", Context.MODE_PRIVATE) }
@@ -296,6 +297,8 @@ fun WelcomeScreen(
     ) { bitmap ->
         if (bitmap != null) {
             coroutineScope.launch {
+                extractedClasses = emptyList()
+                isTimetableAnalyzed = false
                 parseErrorType = TimetableParseErrorType.NONE
                 isAnalyzingTimetable = true
                 processingStage = TimetableProcessingStage.READING_FILE
@@ -311,6 +314,8 @@ fun WelcomeScreen(
                     isTimetableAnalyzed = true
                     parseErrorType = TimetableParseErrorType.NONE
                 } else {
+                    extractedClasses = emptyList()
+                    isTimetableAnalyzed = false
                     parseErrorType = TimetableParseErrorType.UNCLEAR_IMAGE
                 }
                 processingStage = TimetableProcessingStage.IDLE
@@ -325,6 +330,8 @@ fun WelcomeScreen(
     ) { uri ->
         if (uri != null) {
             coroutineScope.launch {
+                extractedClasses = emptyList()
+                isTimetableAnalyzed = false
                 parseErrorType = TimetableParseErrorType.NONE
                 isAnalyzingTimetable = true
                 processingStage = TimetableProcessingStage.READING_FILE
@@ -346,6 +353,8 @@ fun WelcomeScreen(
                     isTimetableAnalyzed = true
                     parseErrorType = TimetableParseErrorType.NONE
                 } else {
+                    extractedClasses = emptyList()
+                    isTimetableAnalyzed = false
                     parseErrorType = TimetableParseErrorType.UNSUPPORTED_PDF
                 }
                 processingStage = TimetableProcessingStage.IDLE
@@ -360,6 +369,8 @@ fun WelcomeScreen(
     ) { uri ->
         if (uri != null) {
             coroutineScope.launch {
+                extractedClasses = emptyList()
+                isTimetableAnalyzed = false
                 parseErrorType = TimetableParseErrorType.NONE
                 isAnalyzingTimetable = true
                 processingStage = TimetableProcessingStage.READING_FILE
@@ -381,6 +392,8 @@ fun WelcomeScreen(
                     isTimetableAnalyzed = true
                     parseErrorType = TimetableParseErrorType.NONE
                 } else {
+                    extractedClasses = emptyList()
+                    isTimetableAnalyzed = false
                     parseErrorType = TimetableParseErrorType.UNCLEAR_IMAGE
                 }
                 processingStage = TimetableProcessingStage.IDLE
@@ -564,6 +577,10 @@ fun WelcomeScreen(
                 }
 
                 OnboardingStep.AUTH_CHOICE -> {
+                    val fbUser = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+                    val isUserLoggedIn = (loginMode != LoginMode.UNDECIDED && loginMode != LoginMode.GUEST) || (fbUser != null && !fbUser.isAnonymous)
+                    val currentUserEmail = fbUser?.email ?: fbUser?.phoneNumber ?: studentEmail.ifBlank { null }
+
                     OnboardingAuthChoiceScreen(
                         studentName = studentName,
                         selectedCourse = selectedCourse,
@@ -572,12 +589,14 @@ fun WelcomeScreen(
                         selectedBatch = selectedBatch,
                         isAuthenticating = isAuthenticating,
                         authError = authError,
+                        isUserLoggedIn = isUserLoggedIn,
+                        userEmail = currentUserEmail,
                         onBack = { currentStep = OnboardingStep.ACADEMIC_DETAILS },
                         onStartNowWithoutLogin = {
                             val course = selectedCourse ?: MedicalCourse.MBBS
                             persistProfileAndTimetable(course)
                             viewModel.completeOnboarding(course)
-                            Toast.makeText(context, "Welcome! Your medical routine is securely synced to cloud.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Welcome! Your medical routine is securely synced with your batch.", Toast.LENGTH_SHORT).show()
                         },
                         onGoogleClick = {
                             viewModel.setAuthenticating(true)

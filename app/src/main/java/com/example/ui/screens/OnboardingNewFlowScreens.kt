@@ -621,6 +621,8 @@ fun OnboardingAuthChoiceScreen(
     selectedBatch: String,
     isAuthenticating: Boolean,
     authError: String?,
+    isUserLoggedIn: Boolean = false,
+    userEmail: String? = null,
     onBack: () -> Unit,
     onStartNowWithoutLogin: () -> Unit,
     onGoogleClick: () -> Unit,
@@ -697,7 +699,7 @@ fun OnboardingAuthChoiceScreen(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = "Sign in to backup and sync your schedule across devices, or jump right into MedPulse immediately.",
+                text = if (isUserLoggedIn) "Your account is linked! Confirm your academic profile to enter MedPulse." else "Sign in to automatically sync assignments and test alerts with everyone in your batch.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -771,140 +773,194 @@ fun OnboardingAuthChoiceScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Bottom CTAs: "Start Now (Without Log In)" as requested + Sign in options
+        // Mandatory Login & CTAs
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 1. PRIMARY CTA: Confirm & Finish Setup (Account Linked)
-            Button(
-                onClick = onStartNowWithoutLogin,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-                    .testTag("start_now_without_login_button"),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary
-                )
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
+            if (isUserLoggedIn) {
+                // Logged-in State: Show verified badge and primary Continue button
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.CloudDone,
-                        contentDescription = null,
-                        modifier = Modifier.size(22.dp)
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Account Connected",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = userEmail ?: "Authenticated for Batch Sync",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Button(
+                    onClick = onStartNowWithoutLogin,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                        .testTag("start_now_without_login_button"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudDone,
+                            contentDescription = null,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Confirm & Finish Setup",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                TextButton(
+                    onClick = onGoogleClick,
+                    enabled = !isAuthenticating
+                ) {
                     Text(
-                        text = "Confirm & Finish Setup",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
+                        text = "Switch Account",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
-            }
-
-            // Clean Divider
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                Text(
-                    text = "switch account or sync method",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 10.dp)
-                )
-                HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-            }
-
-            // 2. Continue with Google
-            OutlinedButton(
-                onClick = onGoogleClick,
-                enabled = !isAuthenticating,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-                    .testTag("continue_google_button"),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
+            } else {
+                // Mandatory Login Banner
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.AccountCircle,
-                        contentDescription = "Google",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Groups,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Login is required so all assignments, exams, and timetable updates sync automatically with your batchmates.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                // 1. Google Sign-in (Primary Action)
+                Button(
+                    onClick = onGoogleClick,
+                    enabled = !isAuthenticating,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                        .testTag("continue_google_button"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AccountCircle,
+                            contentDescription = "Google",
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Sign in with Google",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
+                }
+
+                // 2. Mobile OTP Sign-in
+                OutlinedButton(
+                    onClick = onMobileClick,
+                    enabled = !isAuthenticating,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("continue_mobile_button"),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PhoneIphone,
+                            contentDescription = "Phone",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Sign in with Mobile OTP",
+                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                // 3. Email & Password Sign-in
+                TextButton(
+                    onClick = onEmailClick,
+                    modifier = Modifier.testTag("login_link_button")
+                ) {
                     Text(
-                        text = "Switch Google Account",
-                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onSurface
+                        text = "Sign in or Register with Email",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
-            }
-
-            // 3. Continue with Mobile
-            OutlinedButton(
-                onClick = onMobileClick,
-                enabled = !isAuthenticating,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-                    .testTag("continue_mobile_button"),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PhoneIphone,
-                        contentDescription = "Phone",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "Sign in with Mobile OTP",
-                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-
-            // 4. Sign in with Email
-            TextButton(
-                onClick = onEmailClick,
-                modifier = Modifier.testTag("login_link_button")
-            ) {
-                Text(
-                    text = "Sign in with different Email & Password",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                    color = MaterialTheme.colorScheme.primary
-                )
             }
 
             Text(
-                text = "🔒 Cloud Auto-Backup Active: All schedules and attendance records are continuously backed up to your account.",
+                text = "🔒 Secure Cloud Sync: Assignments and tests are synced with your batch in real-time.",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
         }

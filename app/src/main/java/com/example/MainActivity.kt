@@ -50,6 +50,16 @@ class MainActivity : ComponentActivity() {
         // Set college timezone (Indian Standard Time, Asia/Kolkata) as standard for Indian medical institutions
         java.util.TimeZone.setDefault(com.example.util.AttendanceTimeValidator.COLLEGE_TIMEZONE)
 
+        // Initialize high-priority notification channels for assignments and assessments
+        com.example.util.NotificationHelper.initChannels(applicationContext)
+
+        // Request POST_NOTIFICATIONS permission on Android 13+ (API 33+) to allow system status bar alerts
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+            }
+        }
+
         // 1. Initialize Database & Repository locally (robust context-aware creation)
         database = Room.databaseBuilder(
             applicationContext,

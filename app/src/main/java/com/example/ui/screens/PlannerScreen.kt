@@ -47,6 +47,8 @@ fun PlannerScreen(
     val studyTasks by viewModel.studyTasks.collectAsStateWithLifecycle()
 
     val course by viewModel.selectedCourse.collectAsStateWithLifecycle()
+    val studentBatch by viewModel.studentBatch.collectAsStateWithLifecycle()
+    val studentCollege by viewModel.studentCollege.collectAsStateWithLifecycle()
 
     // Filter by search query
     val filteredAssignments = assignments.filter {
@@ -165,15 +167,17 @@ fun PlannerScreen(
             when (selectedTabIdx) {
                 0 -> AddAssignmentDialog(
                     onDismiss = { showAddItemDialog = false },
-                    onSave = { subject, title, due, priority, type, notes ->
-                        viewModel.addAssignment(subject, title, due, priority, type, notes)
+                    studentBatch = studentBatch.ifBlank { "Batch" },
+                    onSave = { subject, title, due, priority, type, notes, shareWithBatch ->
+                        viewModel.addAssignment(subject, title, due, priority, type, notes, shareWithBatch)
                         showAddItemDialog = false
                     }
                 )
                 1 -> AddAssessmentDialog(
                     onDismiss = { showAddItemDialog = false },
-                    onSave = { subject, title, date, type, syllabus ->
-                        viewModel.addAssessment(subject, title, date, type, syllabus)
+                    studentBatch = studentBatch.ifBlank { "Batch" },
+                    onSave = { subject, title, date, type, syllabus, shareWithBatch ->
+                        viewModel.addAssessment(subject, title, date, type, syllabus, shareWithBatch)
                         showAddItemDialog = false
                     }
                 )
@@ -288,6 +292,31 @@ fun AssignmentCardRow(
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.primary
                 )
+                if (asg.notes?.contains("Shared by") == true) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.padding(top = 3.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Groups,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Batch Shared",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
                 if (!asg.notes.isNullOrEmpty()) {
                     Text(
                         text = asg.notes,
@@ -433,6 +462,31 @@ fun AssessmentCardRow(
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.primary
                 )
+                if (exam.firestoreId.isNotBlank()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.padding(top = 3.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Groups,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Batch Shared",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
                 if (!exam.syllabus.isNullOrEmpty()) {
                     Text(
                         text = "Syllabus: " + exam.syllabus,
@@ -598,7 +652,8 @@ fun EmptyListNotice(title: String, desc: String) {
 @Composable
 fun AddAssignmentDialog(
     onDismiss: () -> Unit,
-    onSave: (String, String, Long, String, String, String?) -> Unit
+    studentBatch: String = "Batch",
+    onSave: (String, String, Long, String, String, String?, Boolean) -> Unit
 ) {
     var subject by remember { mutableStateOf("") }
     var title by remember { mutableStateOf("") }
@@ -606,6 +661,7 @@ fun AddAssignmentDialog(
     var type by remember { mutableStateOf("Assignment") }
     var notes by remember { mutableStateOf("") }
     var dueDateMillis by remember { mutableStateOf(System.currentTimeMillis() + 24 * 60 * 60 * 1000L) }
+    var shareWithBatch by remember { mutableStateOf(true) }
 
     val priorities = listOf("High", "Medium", "Low")
     val types = listOf("Assignment", "Practical", "Seminar", "Viva", "Homework", "Case Record")
@@ -623,7 +679,7 @@ fun AddAssignmentDialog(
             Button(
                 onClick = {
                     if (title.isNotBlank() && subject.isNotBlank()) {
-                        onSave(subject, title, dueDateMillis, priority, type, notes.ifEmpty { null })
+                        onSave(subject, title, dueDateMillis, priority, type, notes.ifEmpty { null }, shareWithBatch)
                     }
                 },
                 enabled = title.isNotBlank() && subject.isNotBlank(),
@@ -641,6 +697,40 @@ fun AddAssignmentDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Batch sync info
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Groups,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Shared with Batch $studentBatch",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "All students in your batch will receive a notification and see this in their planner.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
@@ -782,13 +872,15 @@ fun AddAssignmentDialog(
 @Composable
 fun AddAssessmentDialog(
     onDismiss: () -> Unit,
-    onSave: (String, String, Long, String, String?) -> Unit
+    studentBatch: String = "Batch",
+    onSave: (String, String, Long, String, String?, Boolean) -> Unit
 ) {
     var subject by remember { mutableStateOf("") }
     var title by remember { mutableStateOf("") }
     var type by remember { mutableStateOf("Internal") }
     var syllabus by remember { mutableStateOf("") }
     var examDateMillis by remember { mutableStateOf(System.currentTimeMillis() + 48 * 60 * 60 * 1000L) }
+    var shareWithBatch by remember { mutableStateOf(true) }
 
     val types = listOf("Class Test", "Internal", "Practical Exam", "Viva", "University Exam")
     var typeExpanded by remember { mutableStateOf(false) }
@@ -803,7 +895,7 @@ fun AddAssessmentDialog(
             Button(
                 onClick = {
                     if (title.isNotBlank() && subject.isNotBlank()) {
-                        onSave(subject, title, examDateMillis, type, syllabus.ifEmpty { null })
+                        onSave(subject, title, examDateMillis, type, syllabus.ifEmpty { null }, shareWithBatch)
                     }
                 },
                 enabled = title.isNotBlank() && subject.isNotBlank(),
@@ -821,6 +913,40 @@ fun AddAssessmentDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Batch sync info
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Groups,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Shared with Batch $studentBatch",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "All students in your batch will receive a notification and test schedule alert.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },

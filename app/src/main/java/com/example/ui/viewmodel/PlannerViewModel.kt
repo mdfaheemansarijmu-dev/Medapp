@@ -701,19 +701,27 @@ class PlannerViewModel(
         }
     }
 
-    fun addAssignment(subject: String, title: String, dueDate: Long, priority: String, type: String, notes: String? = null) {
+    fun addAssignment(
+        subject: String,
+        title: String,
+        dueDate: Long,
+        priority: String,
+        type: String,
+        notes: String? = null,
+        shareWithBatch: Boolean = true
+    ) {
         val course = selectedCourse.value ?: return
         viewModelScope.launch {
             val assignment = Assignment(
-                    courseCode = course.code,
-                    subject = subject,
-                    title = title,
-                    dueDate = dueDate,
-                    priority = priority,
-                    status = "Pending",
-                    type = type,
-                    notes = notes
-                )
+                courseCode = course.code,
+                subject = subject,
+                title = title,
+                dueDate = dueDate,
+                priority = priority,
+                status = "Pending",
+                type = type,
+                notes = notes
+            )
             val insertedId = repository.addAssignment(assignment)
             generateSmartNotifications()
             
@@ -728,8 +736,28 @@ class PlannerViewModel(
                     subject = subject,
                     minutesBefore = 24 * 60 // 24 hours before
                 )
+                com.example.util.NotificationHelper.showNotification(
+                    context = getApplication(),
+                    title = "Assignment Added: $subject",
+                    message = "$title • Synced with your batch",
+                    notificationId = (insertedId.toInt() + 1000) % 100000,
+                    type = "assignment",
+                    subject = subject,
+                    targetTime = dueDate
+                )
             }
             syncDataToFirebase()
+
+            if (shareWithBatch) {
+                batchSyncManager.postSharedAssignment(
+                    assignment = assignment.copy(id = insertedId.toInt()),
+                    college = _studentCollege.value,
+                    course = course.code,
+                    admissionYear = _studentAdmissionYear.value,
+                    batch = _studentBatch.value,
+                    authorName = _studentName.value.ifBlank { "Classmate" }
+                )
+            }
         }
     }
 
@@ -746,24 +774,41 @@ class PlannerViewModel(
 
     fun removeAssignment(id: Int) {
         viewModelScope.launch {
+            val assignment = repository.getAllAssignmentsOnce().find { it.id == id }
             repository.deleteAssignment(id)
             AcademicNotificationManager.cancelByItemId(getApplication(), "asg_$id")
+            if (assignment != null) {
+                batchSyncManager.deleteSharedAssignment(
+                    firestoreId = assignment.firestoreId,
+                    college = _studentCollege.value,
+                    course = selectedCourse.value?.code ?: "MBBS",
+                    admissionYear = _studentAdmissionYear.value,
+                    batch = _studentBatch.value
+                )
+            }
             syncDataToFirebase()
         }
     }
 
-    fun addAssessment(subject: String, title: String, date: Long, type: String, syllabus: String? = null) {
+    fun addAssessment(
+        subject: String,
+        title: String,
+        date: Long,
+        type: String,
+        syllabus: String? = null,
+        shareWithBatch: Boolean = true
+    ) {
         val course = selectedCourse.value ?: return
         viewModelScope.launch {
             val assessment = Assessment(
-                    courseCode = course.code,
-                    subject = subject,
-                    title = title,
-                    date = date,
-                    type = type,
-                    status = "Upcoming",
-                    syllabus = syllabus
-                )
+                courseCode = course.code,
+                subject = subject,
+                title = title,
+                date = date,
+                type = type,
+                status = "Upcoming",
+                syllabus = syllabus
+            )
             val insertedId = repository.addAssessment(assessment)
             generateSmartNotifications()
             
@@ -778,8 +823,28 @@ class PlannerViewModel(
                     subject = subject,
                     minutesBefore = 30
                 )
+                com.example.util.NotificationHelper.showNotification(
+                    context = getApplication(),
+                    title = "Assessment Scheduled: $subject",
+                    message = "$title • Synced with your batch",
+                    notificationId = (insertedId.toInt() + 2000) % 100000,
+                    type = "assessment",
+                    subject = subject,
+                    targetTime = date
+                )
             }
             syncDataToFirebase()
+
+            if (shareWithBatch) {
+                batchSyncManager.postSharedAssessment(
+                    assessment = assessment.copy(id = insertedId.toInt()),
+                    college = _studentCollege.value,
+                    course = course.code,
+                    admissionYear = _studentAdmissionYear.value,
+                    batch = _studentBatch.value,
+                    authorName = _studentName.value.ifBlank { "Classmate" }
+                )
+            }
         }
     }
 
@@ -795,8 +860,18 @@ class PlannerViewModel(
 
     fun removeAssessment(id: Int) {
         viewModelScope.launch {
+            val assessment = repository.getAllAssessmentsOnce().find { it.id == id }
             repository.deleteAssessment(id)
             AcademicNotificationManager.cancelByItemId(getApplication(), "asm_$id")
+            if (assessment != null) {
+                batchSyncManager.deleteSharedAssessment(
+                    firestoreId = assessment.firestoreId,
+                    college = _studentCollege.value,
+                    course = selectedCourse.value?.code ?: "MBBS",
+                    admissionYear = _studentAdmissionYear.value,
+                    batch = _studentBatch.value
+                )
+            }
             syncDataToFirebase()
         }
     }
@@ -1171,16 +1246,23 @@ class PlannerViewModel(
                         )
 
                         // Also save to assessments table so it appears in Planner -> Exams/Vivas and Calendar
-                        val asmId = repository.addAssessment(
-                            Assessment(
-                                courseCode = course.code,
-                                subject = item.subject,
-                                title = item.title,
-                                date = itemTimestamp,
-                                type = "University Exam",
-                                status = "Upcoming",
-                                syllabus = item.details
-                            )
+                        val examItem = Assessment(
+                            courseCode = course.code,
+                            subject = item.subject,
+                            title = item.title,
+                            date = itemTimestamp,
+                            type = "University Exam",
+                            status = "Upcoming",
+                            syllabus = item.details
+                        )
+                        val asmId = repository.addAssessment(examItem)
+                        batchSyncManager.postSharedAssessment(
+                            assessment = examItem,
+                            college = _studentCollege.value,
+                            course = course.code,
+                            admissionYear = _studentAdmissionYear.value,
+                            batch = _studentBatch.value,
+                            authorName = _studentName.value.ifBlank { "Classmate" }
                         )
 
                         // Add companion planner task
@@ -1235,15 +1317,22 @@ class PlannerViewModel(
                     detailsNormalized.contains("viva") ||
                     detailsNormalized.contains("test") ||
                     detailsNormalized.contains("internal") -> {
-                        val asmId = repository.addAssessment(
-                            Assessment(
-                                courseCode = course.code,
-                                subject = item.subject,
-                                title = item.title,
-                                date = itemTimestamp,
-                                type = if (categoryNormalized.contains("viva") || titleNormalized.contains("viva")) "Viva" else if (categoryNormalized.contains("exam") || titleNormalized.contains("exam")) "University Exam" else "Class Test",
-                                syllabus = item.details
-                            )
+                        val batchAsm = Assessment(
+                            courseCode = course.code,
+                            subject = item.subject,
+                            title = item.title,
+                            date = itemTimestamp,
+                            type = if (categoryNormalized.contains("viva") || titleNormalized.contains("viva")) "Viva" else if (categoryNormalized.contains("exam") || titleNormalized.contains("exam")) "University Exam" else "Class Test",
+                            syllabus = item.details
+                        )
+                        val asmId = repository.addAssessment(batchAsm)
+                        batchSyncManager.postSharedAssessment(
+                            assessment = batchAsm,
+                            college = _studentCollege.value,
+                            course = course.code,
+                            admissionYear = _studentAdmissionYear.value,
+                            batch = _studentBatch.value,
+                            authorName = _studentName.value.ifBlank { "Classmate" }
                         )
                         // Add companion planner task
                         repository.addPlannerTask(
@@ -1290,17 +1379,24 @@ class PlannerViewModel(
                     titleNormalized.contains("homework") ||
                     titleNormalized.contains("record") ||
                     titleNormalized.contains("practical") -> {
-                        val asgId = repository.addAssignment(
-                            Assignment(
-                                courseCode = course.code,
-                                subject = item.subject,
-                                title = item.title,
-                                dueDate = itemTimestamp,
-                                priority = item.priority,
-                                status = "Pending",
-                                type = if (categoryNormalized.contains("homework") || titleNormalized.contains("homework")) "Homework" else "Assignment",
-                                notes = item.details
-                            )
+                        val batchAsg = Assignment(
+                            courseCode = course.code,
+                            subject = item.subject,
+                            title = item.title,
+                            dueDate = itemTimestamp,
+                            priority = item.priority,
+                            status = "Pending",
+                            type = if (categoryNormalized.contains("homework") || titleNormalized.contains("homework")) "Homework" else "Assignment",
+                            notes = item.details
+                        )
+                        val asgId = repository.addAssignment(batchAsg)
+                        batchSyncManager.postSharedAssignment(
+                            assignment = batchAsg,
+                            college = _studentCollege.value,
+                            course = course.code,
+                            admissionYear = _studentAdmissionYear.value,
+                            batch = _studentBatch.value,
+                            authorName = _studentName.value.ifBlank { "Classmate" }
                         )
                         // Add companion planner task
                         repository.addPlannerTask(

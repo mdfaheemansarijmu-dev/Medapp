@@ -107,6 +107,11 @@ object RetrofitClient {
     val moshiParser: Moshi = moshi
 }
 
+data class LocalOcrResult(
+    val cleanText: String,
+    val spatialText: String
+)
+
 class GeminiParserService {
     private fun getActiveApiKey(): String {
         val buildKey = BuildConfig.GEMINI_API_KEY
@@ -117,22 +122,26 @@ class GeminiParserService {
         }
     }
 
-    private suspend fun recognizeTextFromBitmap(bitmap: android.graphics.Bitmap): String = suspendCancellableCoroutine { continuation ->
+    private suspend fun recognizeTextFromBitmap(bitmap: android.graphics.Bitmap): LocalOcrResult = suspendCancellableCoroutine { continuation ->
         try {
             val image = com.google.mlkit.vision.common.InputImage.fromBitmap(bitmap, 0)
             val recognizer = com.google.mlkit.vision.text.TextRecognition.getClient(com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS)
             recognizer.process(image)
                 .addOnSuccessListener { visionText ->
-                    val resultText = StringBuilder()
+                    val cleanSb = StringBuilder()
+                    val spatialSb = StringBuilder()
                     for (block in visionText.textBlocks) {
                         for (line in block.lines) {
                             val frame = line.boundingBox
-                            val text = line.text
-                            resultText.append("Text: \"$text\", Box: [L=${frame?.left}, T=${frame?.top}, R=${frame?.right}, B=${frame?.bottom}]\n")
+                            val text = line.text.trim()
+                            if (text.isNotBlank()) {
+                                cleanSb.append(text).append("\n")
+                                spatialSb.append("Text: \"$text\", Box: [L=${frame?.left}, T=${frame?.top}, R=${frame?.right}, B=${frame?.bottom}]\n")
+                            }
                         }
                     }
                     recognizer.close()
-                    continuation.resume(resultText.toString())
+                    continuation.resume(LocalOcrResult(cleanSb.toString(), spatialSb.toString()))
                 }
                 .addOnFailureListener { exception ->
                     recognizer.close()
@@ -154,15 +163,15 @@ class GeminiParserService {
         val inputPrompt = textInput ?: "Extract content from the provided attachment."
         
         var processedImageBytes = imageBytes
-        var ocrText = ""
+        var ocrResult = LocalOcrResult("", "")
         if (hasImage && imageBytes != null) {
             try {
                 Log.d("GeminiParser", "Preprocessing image (rotating and enhancing contrast)...")
                 val enhancedBitmap = BitmapUtils.rotateAndEnhanceImage(imageBytes)
                 
                 Log.d("GeminiParser", "Running local high-precision ML Kit OCR...")
-                ocrText = recognizeTextFromBitmap(enhancedBitmap)
-                Log.d("GeminiParser", "OCR Extracted Text:\n$ocrText")
+                ocrResult = recognizeTextFromBitmap(enhancedBitmap)
+                Log.d("GeminiParser", "OCR Clean Text:\n${ocrResult.cleanText}")
                 
                 processedImageBytes = BitmapUtils.bitmapToByteArray(enhancedBitmap)
             } catch (e: Exception) {
@@ -173,7 +182,7 @@ class GeminiParserService {
         val activeKey = getActiveApiKey()
         if (activeKey.isEmpty() || activeKey == "MY_GEMINI_API_KEY") {
             Log.e("GeminiParser", "Gemini API Key is not configured! Using local intelligent parser.")
-            val localRes = getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrText, currentScheduleContext)
+            val localRes = getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrResult.cleanText, currentScheduleContext)
             return@withContext sanitizeResponse(localRes, inputPrompt)
         }
 
@@ -235,7 +244,7 @@ class GeminiParserService {
                - Infer medical subject accurately (e.g. "Hypothalamic hormones / Pituitary" -> "Physiology", "Tryptophan metabolism" -> "Biochemistry").
                - Extract day, date, and timings into due_date_description (e.g., "Tuesday 2.30 to 3.30" -> "Tuesday (02:30 PM - 03:30 PM)").
 
-            ${if (ocrText.isNotBlank()) "LOCAL OCR SPATIAL RECONSTRUCTION:\nUse this local high-precision spatial text with coordinates to align and map rows and columns perfectly. Ensure NO row or column is missed:\n$ocrText\n" else ""}
+            ${if (ocrResult.spatialText.isNotBlank()) "LOCAL OCR SPATIAL RECONSTRUCTION:\nUse this local high-precision spatial text with coordinates to align and map rows and columns perfectly. Ensure NO row or column is missed:\n${ocrResult.spatialText}\n" else ""}
 
             Input to analyze:
             "$inputPrompt"
@@ -317,10 +326,10 @@ class GeminiParserService {
         val rawResponse = if (jsonText != null) {
             Log.d("GeminiParser", "Raw response: $jsonText")
             val adapter = RetrofitClient.moshiParser.adapter(UnifiedParserResponse::class.java)
-            adapter.fromJson(jsonText) ?: getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrText, currentScheduleContext)
+            adapter.fromJson(jsonText) ?: getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrResult.cleanText, currentScheduleContext)
         } else {
             Log.e("GeminiParser", "Direct API pathway failed or returned empty content")
-            getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrText, currentScheduleContext)
+            getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrResult.cleanText, currentScheduleContext)
         }
         return@withContext sanitizeResponse(rawResponse, inputPrompt)
     }

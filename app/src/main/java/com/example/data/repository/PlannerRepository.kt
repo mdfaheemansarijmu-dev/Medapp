@@ -90,6 +90,56 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
         return id
     }
 
+    suspend fun addAssignmentLocally(assignment: Assignment): Long {
+        return plannerDao.insertAssignment(assignment)
+    }
+
+    suspend fun addAssessmentLocally(assessment: Assessment): Long {
+        return plannerDao.insertAssessment(assessment)
+    }
+
+    suspend fun getAssignmentByFirestoreId(firestoreId: String): Assignment? {
+        return plannerDao.getAssignmentByFirestoreId(firestoreId)
+    }
+
+    suspend fun getAssessmentByFirestoreId(firestoreId: String): Assessment? {
+        return plannerDao.getAssessmentByFirestoreId(firestoreId)
+    }
+
+    suspend fun getAssignmentById(id: Int): Assignment? {
+        return plannerDao.getAssignmentById(id)
+    }
+
+    suspend fun getAssessmentById(id: Int): Assessment? {
+        return plannerDao.getAssessmentById(id)
+    }
+
+    suspend fun getAllAssignmentsOnce(): List<Assignment> {
+        return plannerDao.getAllAssignmentsOnce()
+    }
+
+    suspend fun getAllAssessmentsOnce(): List<Assessment> {
+        return plannerDao.getAllAssessmentsOnce()
+    }
+
+    suspend fun findMatchingAssignment(courseCode: String, subject: String, title: String, dueDate: Long): Assignment? {
+        return plannerDao.getAllAssignmentsOnce().find {
+            it.courseCode.equals(courseCode, ignoreCase = true) &&
+            it.subject.equals(subject, ignoreCase = true) &&
+            it.title.equals(title, ignoreCase = true) &&
+            kotlin.math.abs(it.dueDate - dueDate) < 120000L
+        }
+    }
+
+    suspend fun findMatchingAssessment(courseCode: String, subject: String, title: String, date: Long): Assessment? {
+        return plannerDao.getAllAssessmentsOnce().find {
+            it.courseCode.equals(courseCode, ignoreCase = true) &&
+            it.subject.equals(subject, ignoreCase = true) &&
+            it.title.equals(title, ignoreCase = true) &&
+            kotlin.math.abs(it.date - date) < 120000L
+        }
+    }
+
     suspend fun deleteAssessment(id: Int) {
         val firestoreId = plannerDao.getAssessmentById(id)?.firestoreId
         plannerDao.deleteAssessmentById(id)
