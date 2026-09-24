@@ -479,17 +479,16 @@ fun DashboardScreen(
                                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onBackground
                             )
-                            if (studentBatch.isNotBlank()) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(top = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "$studentBatch • ${if (isBatchListening) "Sync Active" else "Sync Idle"}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (isBatchListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                            val displayBatch = studentBatch.ifBlank { "Batch A" }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(top = 2.dp)
+                            ) {
+                                Text(
+                                    text = "$displayBatch • ${if (isBatchListening) "Sync Active" else "Connecting..."}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isBatchListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -655,19 +654,21 @@ fun DashboardScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Campaign, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.width(8.dp))
+                        val targetBatchName = studentBatch.ifBlank { "Batch A" }
                         Text(
-                            text = "Broadcast to $studentBatch",
+                            text = "Broadcast to $targetBatchName",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                     }
                 },
                 text = {
+                    val targetBatchName = studentBatch.ifBlank { "Batch A" }
                     Column(
                         modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            text = "Instantly notifies all batchmates in $studentBatch (Admission Year $studentAdmissionYear).",
+                            text = "Instantly notifies all batchmates in $targetBatchName (Admission Year $studentAdmissionYear).",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -752,7 +753,7 @@ fun DashboardScreen(
                                     urgent = newNoticeUrgent
                                 ) { success, err ->
                                     if (success) {
-                                        Toast.makeText(context, "Notice broadcasted to $studentBatch!", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Notice broadcasted to ${studentBatch.ifBlank { "Batch A" }}!", Toast.LENGTH_SHORT).show()
                                         showPostBatchNoticeDialog = false
                                     } else {
                                         Toast.makeText(context, "Failed: ${err ?: "Network error"}", Toast.LENGTH_LONG).show()

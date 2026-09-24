@@ -14,7 +14,9 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -73,10 +75,10 @@ class BatchNotificationSyncManager(
         private const val TAG = "BatchNotificationSync"
 
         fun computeBatchKey(college: String, course: String, admissionYear: Int, batch: String): String {
-            val cleanCollege = college.trim().lowercase().replace(Regex("[^a-z0-9]"), "_").take(32)
-            val cleanCourse = course.trim().lowercase().replace(Regex("[^a-z0-9]"), "_").take(16)
-            val cleanBatch = batch.trim().lowercase().replace(Regex("[^a-z0-9]"), "_").take(16)
-            val effectiveCollege = if (cleanCollege.isBlank()) "general_college" else cleanCollege
+            val cleanCollege = college.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(64)
+            val cleanCourse = course.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(16)
+            val cleanBatch = batch.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(16)
+            val effectiveCollege = if (cleanCollege.isBlank()) "medical_college" else cleanCollege
             val effectiveCourse = if (cleanCourse.isBlank()) "mbbs" else cleanCourse
             val effectiveBatch = if (cleanBatch.isBlank()) "batch_a" else cleanBatch
             val effectiveYear = if (admissionYear > 1900) admissionYear else 2024
@@ -87,11 +89,13 @@ class BatchNotificationSyncManager(
     private val db = FirebaseFirestore.getInstance()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val locallyPostedFirestoreIds = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    private val locallyPostedNoticeIds = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
 
     private var noticeListener: ListenerRegistration? = null
     private var assignmentListener: ListenerRegistration? = null
     private var assessmentListener: ListenerRegistration? = null
     private var currentBatchKey: String? = null
+    private var reconnectJob: Job? = null
 
     private val _sharedNotices = MutableStateFlow<List<SharedBatchNotice>>(emptyList())
     val sharedNotices: StateFlow<List<SharedBatchNotice>> = _sharedNotices.asStateFlow()
@@ -102,16 +106,26 @@ class BatchNotificationSyncManager(
     private val _syncStatus = MutableStateFlow("Idle")
     val syncStatus: StateFlow<String> = _syncStatus.asStateFlow()
 
+    private val localDeviceUid: String by lazy {
+        val prefs = application.getSharedPreferences("med_planner_batch_prefs", Application.MODE_PRIVATE)
+        var id = prefs.getString("device_uid", null)
+        if (id.isNullOrBlank()) {
+            id = "device_" + java.util.UUID.randomUUID().toString().take(12)
+            prefs.edit().putString("device_uid", id).apply()
+        }
+        id
+    }
+
     private suspend fun ensureAuthenticated(): String {
         val auth = FirebaseAuth.getInstance()
         val existing = auth.currentUser
         if (existing != null) return existing.uid
         return try {
             val result = auth.signInAnonymously().await()
-            result.user?.uid ?: "authenticated_user"
+            result.user?.uid ?: localDeviceUid
         } catch (e: Exception) {
-            Log.w(TAG, "Anonymous auth fallback: ${e.message}")
-            "authenticated_user"
+            Log.w(TAG, "Anonymous auth fallback to device UID: ${e.message}")
+            localDeviceUid
         }
     }
 
@@ -128,7 +142,7 @@ class BatchNotificationSyncManager(
 
         stopListening()
         currentBatchKey = key
-        _syncStatus.value = "Connecting to batch feed ($key)..."
+        _syncStatus.value = "Connecting to batch channel ($key)..."
 
         scope.launch {
             try {
@@ -148,19 +162,21 @@ class BatchNotificationSyncManager(
                 .addSnapshotListener { snapshots, error ->
                     if (error != null) {
                         Log.e(TAG, "Batch notices listener error: ${error.message}")
-                        _syncStatus.value = "Sync offline: ${error.localizedMessage}"
+                        _isListening.value = false
+                        _syncStatus.value = "Feed offline: ${error.localizedMessage ?: "Connection error"}"
+                        scheduleReconnect(college, course, admissionYear, batch)
                         return@addSnapshotListener
                     }
 
                     if (snapshots != null) {
-                        val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: ""
+                        val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: localDeviceUid
                         val notices = snapshots.documents.mapNotNull { doc -> parseNotice(doc) }
                         _sharedNotices.value = notices
                         _isListening.value = true
                         _syncStatus.value = "Connected to $key"
 
                         scope.launch {
-                            processIncomingNotices(notices, currentUserId)
+                            processIncomingNotices(notices, currentUserId, snapshots.metadata.hasPendingWrites())
                         }
                     }
                 }
@@ -177,7 +193,7 @@ class BatchNotificationSyncManager(
                     }
 
                     if (snapshots != null) {
-                        val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: ""
+                        val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: localDeviceUid
                         scope.launch {
                             for (doc in snapshots.documents) {
                                 val asg = parseBatchAssignment(doc) ?: continue
@@ -200,7 +216,7 @@ class BatchNotificationSyncManager(
                                     Log.d(TAG, "Inserted batch assignment: ${asg.title}")
 
                                     val isLocallyPosted = locallyPostedFirestoreIds.contains(asg.firestoreId) ||
-                                            (currentUserId.isNotEmpty() && asg.authorUid == currentUserId)
+                                            (asg.authorUid.isNotBlank() && asg.authorUid == currentUserId)
 
                                     if (!isLocallyPosted) {
                                         repository.addNotification(
@@ -245,7 +261,7 @@ class BatchNotificationSyncManager(
                     }
 
                     if (snapshots != null) {
-                        val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: ""
+                        val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: localDeviceUid
                         scope.launch {
                             for (doc in snapshots.documents) {
                                 val asm = parseBatchAssessment(doc) ?: continue
@@ -267,7 +283,7 @@ class BatchNotificationSyncManager(
                                     Log.d(TAG, "Inserted batch assessment: ${asm.title}")
 
                                     val isLocallyPosted = locallyPostedFirestoreIds.contains(asm.firestoreId) ||
-                                            (currentUserId.isNotEmpty() && asm.authorUid == currentUserId)
+                                            (asm.authorUid.isNotBlank() && asm.authorUid == currentUserId)
 
                                     if (!isLocallyPosted) {
                                         repository.addNotification(
@@ -302,11 +318,26 @@ class BatchNotificationSyncManager(
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to register batch snapshot listeners", e)
+            _isListening.value = false
             _syncStatus.value = "Error: ${e.localizedMessage}"
+            scheduleReconnect(college, course, admissionYear, batch)
+        }
+    }
+
+    private fun scheduleReconnect(college: String, course: String, admissionYear: Int, batch: String) {
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            delay(5000)
+            if (!_isListening.value) {
+                Log.i(TAG, "Retrying batch sync connection...")
+                startListeningToBatch(college, course, admissionYear, batch)
+            }
         }
     }
 
     fun stopListening() {
+        reconnectJob?.cancel()
+        reconnectJob = null
         noticeListener?.remove()
         noticeListener = null
         assignmentListener?.remove()
@@ -382,12 +413,19 @@ class BatchNotificationSyncManager(
         }
     }
 
-    private suspend fun processIncomingNotices(notices: List<SharedBatchNotice>, currentUserId: String) {
+    private suspend fun processIncomingNotices(
+        notices: List<SharedBatchNotice>,
+        currentUserId: String,
+        hasPendingWrites: Boolean
+    ) {
         val existingNotifications = repository.getNotifications().first()
         for (notice in notices) {
             val alreadyAlerted = existingNotifications.any {
-                it.title == notice.title && it.message.startsWith(notice.message.take(20))
+                it.title == notice.title && it.message.contains(notice.message.take(20))
             }
+
+            val isAuthor = locallyPostedNoticeIds.contains(notice.id) ||
+                    (notice.authorUid.isNotBlank() && notice.authorUid == currentUserId)
 
             if (!alreadyAlerted) {
                 val alertType = when (notice.category) {
@@ -405,7 +443,8 @@ class BatchNotificationSyncManager(
                 )
                 repository.addNotification(newNotification)
 
-                if (notice.authorUid != currentUserId && currentUserId.isNotEmpty()) {
+                // Trigger heads-up notification for classmates
+                if (!isAuthor && !hasPendingWrites) {
                     val rawId = notice.title.hashCode() xor notice.message.hashCode()
                     val notificationId = if (rawId == Int.MIN_VALUE) 0 else kotlin.math.abs(rawId) % 100000
                     try {
@@ -458,6 +497,23 @@ class BatchNotificationSyncManager(
             )
             docRef.set(data).await()
             Log.i(TAG, "Shared assignment '${assignment.title}' to batch $key")
+
+            // Confirmation alert for the author
+            try {
+                val notifId = kotlin.math.abs(assignment.title.hashCode()) % 100000 + 30000
+                NotificationHelper.showNotification(
+                    context = application,
+                    title = "Assignment Shared with Batch",
+                    message = "${assignment.title} (${assignment.subject}) shared with $batch.",
+                    notificationId = notifId,
+                    type = "assignment",
+                    subject = assignment.subject,
+                    targetTime = assignment.dueDate
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Confirmation notification failed: ${e.message}")
+            }
+
             Result.success(docRef.id)
         } catch (e: Exception) {
             Log.e(TAG, "Error posting shared assignment", e)
@@ -498,6 +554,23 @@ class BatchNotificationSyncManager(
             )
             docRef.set(data).await()
             Log.i(TAG, "Shared assessment '${assessment.title}' to batch $key")
+
+            // Confirmation alert for the author
+            try {
+                val notifId = kotlin.math.abs(assessment.title.hashCode()) % 100000 + 40000
+                NotificationHelper.showNotification(
+                    context = application,
+                    title = "Assessment Scheduled with Batch",
+                    message = "${assessment.title} (${assessment.subject}) broadcasted to $batch.",
+                    notificationId = notifId,
+                    type = "assessment",
+                    subject = assessment.subject,
+                    targetTime = assessment.date
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Confirmation notification failed: ${e.message}")
+            }
+
             Result.success(docRef.id)
         } catch (e: Exception) {
             Log.e(TAG, "Error posting shared assessment", e)
@@ -564,7 +637,11 @@ class BatchNotificationSyncManager(
                 .collection("notices")
                 .document()
 
+            locallyPostedNoticeIds.add(docRef.id)
+
+            val effectiveBatchName = batch.ifBlank { "Batch A" }
             val noticeData = hashMapOf(
+                "id" to docRef.id,
                 "batchKey" to key,
                 "title" to title.trim(),
                 "message" to message.trim(),
@@ -585,12 +662,26 @@ class BatchNotificationSyncManager(
             repository.addNotification(
                 InAppNotification(
                     title = title.trim(),
-                    message = "${message.trim()}\n(Posted by you to $batch)",
+                    message = "${message.trim()}\n(Broadcasted to $effectiveBatchName by you)",
                     timestamp = System.currentTimeMillis(),
                     isRead = false,
                     type = alertType
                 )
             )
+
+            // Local system notification confirmation for sender
+            try {
+                val notifId = kotlin.math.abs((title + message).hashCode()) % 100000 + 50000
+                NotificationHelper.showNotification(
+                    context = application,
+                    title = "[Broadcast Sent] ${title.trim()}",
+                    message = "${message.trim()} (Sent to $effectiveBatchName)",
+                    notificationId = notifId,
+                    type = alertType
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Confirmation notification failed: ${e.message}")
+            }
 
             Result.success(docRef.id)
         } catch (e: Exception) {

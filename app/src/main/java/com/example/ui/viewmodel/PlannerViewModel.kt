@@ -496,6 +496,24 @@ class PlannerViewModel(
             _currentScreen.value = Screen.Welcome
         }
 
+        // Auto-synchronize batch peer channel whenever batch profile parameters change
+        viewModelScope.launch {
+            combine(
+                _studentCollege,
+                _selectedCourse,
+                _studentAdmissionYear,
+                _studentBatch
+            ) { col, crs, admYr, btch ->
+                listOf(col, crs?.code ?: "MBBS", admYr.toString(), btch)
+            }.collectLatest { list ->
+                val col = list[0]
+                val crs = list[1]
+                val admYr = list[2].toIntOrNull() ?: 2024
+                val btch = list[3]
+                batchSyncManager.startListeningToBatch(col, crs, admYr, btch)
+            }
+        }
+
         // Start Clock updates
         viewModelScope.launch {
             val format = SimpleDateFormat("hh:mm a", Locale.getDefault()).apply {
@@ -538,11 +556,11 @@ class PlannerViewModel(
             // Populates default template classes if the DB is empty
             repository.populateDefaultTimetableIfEmpty(course.code)
             
-            // Generate nice starter in-app alerts
+            // Generate course selected alert
             addNotificationWithDuplicateCheck(
                 InAppNotification(
                     title = "Course Selected: ${course.displayName}",
-                    message = "Your standard weekly medical timetable has been pre-loaded! Go to the 'Timetable' tab to customize it.",
+                    message = "Course set to ${course.displayName}. You can scan or add your classes in the 'Timetable' tab anytime.",
                     type = "class"
                 )
             )
@@ -551,6 +569,7 @@ class PlannerViewModel(
             _currentScreen.value = Screen.Dashboard
             generateSmartNotifications()
             scheduleTimetableClassNotifications()
+            startBatchNotificationSync()
         }
     }
 
@@ -963,8 +982,13 @@ class PlannerViewModel(
                     currentScheduleSummary,
                     _selectedGeminiModel.value
                 )
-                _activeUnifiedResponse.value = response
-                _activeParsedDrafts.value = response.extracted_items
+                if (response.extracted_timetable.isEmpty() && response.extracted_items.isEmpty()) {
+                    _activeUnifiedResponse.value = null
+                    _activeParsedDrafts.value = emptyList()
+                } else {
+                    _activeUnifiedResponse.value = response
+                    _activeParsedDrafts.value = response.extracted_items
+                }
 
                 val docName = when {
                     imageBytes != null -> "Uploaded Image Document"
@@ -992,14 +1016,14 @@ class PlannerViewModel(
                             "✓ $teachersCount Teachers\n" +
                             "✓ $practicalsCount Practical Sessions\n\n" +
                             "Please review the schedule preview below and tap **Replace Current Timetable** to apply it."
-                } else if (response.is_temporary_override) {
+                } else if (response.is_temporary_override && response.extracted_items.isNotEmpty()) {
                     val total = response.extracted_items.size
                     val categories = response.extracted_items.map { it.category }.distinct().joinToString(", ")
                     "I detected a **Schedule Adjustment / Override** ($categories):\n\n" +
                             "This adjustment is proposed for **${response.override_date ?: "Tomorrow"}**. It will adjust specific classes rather than replacing your whole timetable.\n\n" +
                             "✓ $total Schedule adjustment${if (total > 1) "s" else ""} found.\n\n" +
                             "Review details below and tap **Import Selected** to apply."
-                } else {
+                } else if (response.extracted_items.isNotEmpty()) {
                     val assignments = response.extracted_items.count { it.category.contains("Assignment", ignoreCase = true) || it.category.contains("Homework", ignoreCase = true) }
                     val assessments = response.extracted_items.count { it.category.contains("Assessment", ignoreCase = true) || it.category.contains("Exam", ignoreCase = true) || it.category.contains("Viva", ignoreCase = true) || it.category.contains("Test", ignoreCase = true) }
                     val holidays = response.extracted_items.count { it.category.contains("Holiday", ignoreCase = true) }
@@ -1012,6 +1036,12 @@ class PlannerViewModel(
                         if (holidays > 0) append("✓ $holidays Holiday${if (holidays > 1) "s" else ""}\n")
                         if (other > 0) append("✓ $other General Notice${if (other > 1) "s" else ""}\n")
                         append("\nReview the proposed items below and tap **Import Selected** to schedule them.")
+                    }
+                } else {
+                    if (imageBytes != null) {
+                        "I couldn't detect any academic timetable or schedule in this image. Please upload a clear photo or screenshot of your college timetable, routine, or class announcement."
+                    } else {
+                        "I couldn't find any timetable classes or academic notices in your input. Please provide a clear class schedule or announcement."
                     }
                 }
 
@@ -3065,9 +3095,7 @@ class PlannerViewModel(
         val crs = _selectedCourse.value?.code ?: "MBBS"
         val admYr = _studentAdmissionYear.value
         val btch = _studentBatch.value
-        if (col.isNotBlank() || btch.isNotBlank()) {
-            batchSyncManager.startListeningToBatch(col, crs, admYr, btch)
-        }
+        batchSyncManager.startListeningToBatch(col, crs, admYr, btch)
     }
 
     fun stopBatchNotificationSync() {
@@ -3081,10 +3109,10 @@ class PlannerViewModel(
         urgent: Boolean = false,
         onComplete: (Boolean, String?) -> Unit = { _, _ -> }
     ) {
-        val col = _studentCollege.value.ifBlank { "Medical College" }
+        val col = _studentCollege.value
         val crs = _selectedCourse.value?.code ?: "MBBS"
         val admYr = _studentAdmissionYear.value
-        val btch = _studentBatch.value.ifBlank { "Batch A" }
+        val btch = _studentBatch.value
         val author = _studentName.value.ifBlank { "Peer Student" }
 
         viewModelScope.launch {

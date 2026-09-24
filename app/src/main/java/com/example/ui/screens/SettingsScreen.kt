@@ -1407,7 +1407,7 @@ fun SettingsScreen(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Live noticeboard for $studentBatch (Class of $studentAdmissionYear)",
+                                text = "Live noticeboard for ${studentBatch.ifBlank { "Batch A" }} (Class of $studentAdmissionYear)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -2063,8 +2063,9 @@ fun SettingsScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Campaign, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.width(8.dp))
+                        val targetBatchName = studentBatch.ifBlank { "Batch A" }
                         Text(
-                            text = "Broadcast to $studentBatch",
+                            text = "Broadcast to $targetBatchName",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                     }
@@ -2160,7 +2161,7 @@ fun SettingsScreen(
                                     urgent = newNoticeUrgent
                                 ) { success, err ->
                                     if (success) {
-                                        Toast.makeText(context, "Notice broadcasted to $studentBatch!", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Notice broadcasted to ${studentBatch.ifBlank { "Batch A" }}!", Toast.LENGTH_SHORT).show()
                                         showPostBatchNoticeDialog = false
                                     } else {
                                         Toast.makeText(context, "Failed: ${err ?: "Network error"}", Toast.LENGTH_LONG).show()

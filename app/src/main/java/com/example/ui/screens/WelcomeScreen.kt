@@ -217,12 +217,9 @@ fun WelcomeScreen(
             currentYear = currentYr
         )
         viewModel.setStudentCollege(chosenCollege)
-        val timetableToSave = if (extractedClasses.isNotEmpty()) {
-            extractedClasses
-        } else {
-            viewModel.getDefaultParsedTimetable(course)
+        if (extractedClasses.isNotEmpty()) {
+            viewModel.replaceCurrentTimetable(extractedClasses)
         }
-        viewModel.replaceCurrentTimetable(timetableToSave)
     }
 
     LaunchedEffect(loginMode) {
@@ -640,6 +637,11 @@ fun WelcomeScreen(
                             parseErrorType = TimetableParseErrorType.NONE
                             processingStage = TimetableProcessingStage.IDLE
                         },
+                        onClearExtracted = {
+                            extractedClasses = emptyList()
+                            isTimetableAnalyzed = false
+                            parseErrorType = TimetableParseErrorType.NONE
+                        },
                         onEditClass = { index -> editingClassIndex = index },
                         onDeleteClass = { index ->
                             extractedClasses = extractedClasses.toMutableList().also { it.removeAt(index) }
@@ -650,8 +652,6 @@ fun WelcomeScreen(
                             currentStep = OnboardingStep.NOTIFICATIONS
                         },
                         onSkip = {
-                            val course = selectedCourse ?: MedicalCourse.MBBS
-                            viewModel.replaceCurrentTimetable(viewModel.getDefaultParsedTimetable(course))
                             currentStep = OnboardingStep.NOTIFICATIONS
                         },
                         onBack = { currentStep = OnboardingStep.ACADEMIC_DETAILS }
@@ -1671,6 +1671,7 @@ fun OnboardingAddTimetableScreen(
     onTakePhoto: () -> Unit,
     onChooseScreenshot: () -> Unit,
     onAddManuallyOrPreset: () -> Unit,
+    onClearExtracted: () -> Unit = {},
     onEditClass: (Int) -> Unit,
     onDeleteClass: (Int) -> Unit,
     onAddAll: () -> Unit,
@@ -1848,8 +1849,8 @@ fun OnboardingAddTimetableScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    TextButton(onClick = onAddManuallyOrPreset) {
-                        Text("Reset")
+                    TextButton(onClick = onClearExtracted) {
+                        Text("Clear")
                     }
                 }
 

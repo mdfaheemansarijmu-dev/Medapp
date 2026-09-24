@@ -38,7 +38,7 @@ enum class GeminiModelOption(
     );
 
     companion object {
-        val DEFAULT = FLASH_LITE
+        val DEFAULT = FLASH_35
 
         fun fromModelId(id: String): GeminiModelOption {
             return entries.find { it.modelId == id } ?: DEFAULT

@@ -244,41 +244,36 @@ class GeminiParserService {
                - Infer medical subject accurately (e.g. "Hypothalamic hormones / Pituitary" -> "Physiology", "Tryptophan metabolism" -> "Biochemistry").
                - Extract day, date, and timings into due_date_description (e.g., "Tuesday 2.30 to 3.30" -> "Tuesday (02:30 PM - 03:30 PM)").
 
+            8. UNRELATED, NON-ACADEMIC, OR BLURRY IMAGES (CRITICAL):
+               If the image or text is NOT an academic timetable, schedule, routine, syllabus, exam notice, assignment, or college announcement (e.g. photos of people, selfies, nature, animals, vehicles, food, random objects, receipts, memes, or completely unreadable text):
+               - Set document_type = "Unrelated"
+               - Set conversational_response = "I couldn't detect any academic timetable or schedule in this image. Please upload a clear photo or screenshot of your college timetable, routine, or class announcement."
+               - You MUST set "extracted_timetable" = [] (empty array)
+               - You MUST set "extracted_items" = [] (empty array)
+               - NEVER invent, generate, or hallucinate dummy subjects or classes!
+
             ${if (ocrResult.spatialText.isNotBlank()) "LOCAL OCR SPATIAL RECONSTRUCTION:\nUse this local high-precision spatial text with coordinates to align and map rows and columns perfectly. Ensure NO row or column is missed:\n${ocrResult.spatialText}\n" else ""}
 
             Input to analyze:
             "$inputPrompt"
 
-            You MUST respond ONLY with a valid JSON object matching the exact structure below, with no markdown codeblocks, and no conversational preamble or postscript:
+            You MUST respond ONLY with a valid JSON object matching this schema, with no markdown codeblocks, and no conversational preamble or postscript:
             {
               "document_type": "Weekly Timetable",
               "is_temporary_override": false,
               "override_date": null,
               "conversational_response": null,
-              "extracted_timetable": [
-                {
-                  "day_of_week": 1,
-                  "period_number": 1,
-                  "start_time": "09:00 AM",
-                  "end_time": "10:00 AM",
-                  "subject": "Anatomy",
-                  "teacher_name": "Dr. Sharma",
-                  "room": "Hall A",
-                  "is_practical": false,
-                  "is_lunch_break": false
-                }
-              ],
-              "extracted_items": [
-                {
-                  "category": "Assessment",
-                  "subject": "Physiology",
-                  "title": "Hypothalamic & Post. Pituitary Assessment",
-                  "due_date_description": "Tuesday (02:30 PM - 03:30 PM)",
-                  "priority": "High",
-                  "details": "Hypothalamic hormones and post.pituitary assessment"
-                }
-              ]
+              "extracted_timetable": [],
+              "extracted_items": []
             }
+
+            SCHEMA FIELD DEFINITIONS:
+            - If "document_type" is "Weekly Timetable", populate "extracted_timetable" where each item has:
+              { "day_of_week": <1 to 7>, "period_number": <1, 2, ...>, "start_time": "<hh:mm AM/PM>", "end_time": "<hh:mm AM/PM>", "subject": "<Subject Name>", "teacher_name": "<Teacher or null>", "room": "<Room or null>", "is_practical": <true/false>, "is_lunch_break": <true/false> }
+            - If "document_type" is "Assessment Notice" or "Assignment Notice" or "Schedule Override" or "Holiday Notice", populate "extracted_items" where each item has:
+              { "category": "<Assessment|Assignment|Holiday|Class Cancellation|Room Change|Teacher Change|Schedule Change>", "subject": "<Subject Name>", "title": "<Clear Descriptive Title>", "due_date_description": "<Date / Time / Deadline>", "priority": "<High|Medium|Low>", "details": "<Brief Description>" }
+            - If the input does NOT contain timetable classes, "extracted_timetable" MUST be [] (empty array).
+            - If the input does NOT contain notices or assignments, "extracted_items" MUST be [] (empty array).
         """.trimIndent()
 
         val parts = mutableListOf<GeminiPart>()
@@ -413,14 +408,22 @@ class GeminiParserService {
 
         val timeRegex = Regex("(?i)(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?\\s*(?:-|–|to)\\s*(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?")
 
-        val hasScheduleIntent = !hasNoticeKeywords && (
-            hasImage ||
-            combinedText.contains("timetable") ||
-            combinedText.contains("routine") ||
-            combinedText.contains("schedule") ||
-            timeRegex.containsMatchIn(combinedText) ||
-            dayKeywords.any { combinedText.contains(it) }
-        )
+        val hasExplicitScheduleKeywords = combinedText.contains("timetable") ||
+                combinedText.contains("routine") ||
+                combinedText.contains("schedule") ||
+                timeRegex.containsMatchIn(combinedText) ||
+                dayKeywords.any { combinedText.contains(it) }
+
+        val hasScheduleIntent = !hasNoticeKeywords && hasExplicitScheduleKeywords
+
+        if (hasImage && !hasExplicitScheduleKeywords && !hasNoticeKeywords) {
+            return UnifiedParserResponse(
+                document_type = "Unrelated",
+                conversational_response = "I couldn't detect any timetable classes or academic notices in this image. Please upload a clear photo or screenshot of your college routine or timetable.",
+                extracted_timetable = emptyList(),
+                extracted_items = emptyList()
+            )
+        }
 
         if (hasScheduleIntent) {
             val timetable = mutableListOf<ParsedTimetableClass>()
@@ -705,15 +708,16 @@ class GeminiParserService {
         }
 
         if (items.isEmpty()) {
-            items.add(
-                ParsedItem(
-                    category = "General Notice",
-                    subject = "General",
-                    title = "Academic Notice",
-                    due_date_description = "Upcoming",
-                    priority = "Medium",
-                    details = input.trim()
-                )
+            val emptyMsg = if (hasImage) {
+                "I couldn't detect any academic timetable or schedule in this image. Please upload a clear photo or screenshot of your college timetable, routine, or class announcement."
+            } else {
+                "I couldn't detect any academic schedule or notices in the provided message. Please provide clear class timings or announcements."
+            }
+            return UnifiedParserResponse(
+                document_type = "Unrelated",
+                conversational_response = emptyMsg,
+                extracted_timetable = emptyList(),
+                extracted_items = emptyList()
             )
         }
 

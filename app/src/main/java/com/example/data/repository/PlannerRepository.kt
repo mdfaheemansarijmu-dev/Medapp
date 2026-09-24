@@ -312,25 +312,10 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
     suspend fun deleteRevision(id: Int) = plannerDao.deleteRevisionById(id)
 
 
-    // Pre-populate realistic weekly schedules for different courses
+    // Clean timetable initialization - does not force dummy classes into user database
     suspend fun populateDefaultTimetableIfEmpty(courseCode: String) = timetableMutex.withLock {
-        var currentTimetable = plannerDao.getTimetableForCourse(courseCode).first()
-        if (courseCode == "BHMS" && !currentTimetable.any { it.subject == "Repertory / Materia Medica / Yoga" }) {
-            plannerDao.clearTimetableForCourse(courseCode)
-            currentTimetable = emptyList()
-        }
-        
-        // Self-healing check for duplicate classes in database
-        val uniqueCount = currentTimetable.distinctBy { "${it.dayOfWeek}_${it.periodNumber}_${it.subject}_${it.startTime}_${it.endTime}" }.size
-        if (currentTimetable.size > uniqueCount) {
-            plannerDao.clearTimetableForCourse(courseCode)
-            currentTimetable = emptyList()
-        }
-
-        if (currentTimetable.isNotEmpty()) return // Already populated!
-
-        val defaultClasses = createDefaultClassesForCourse(courseCode)
-        plannerDao.insertClasses(defaultClasses)
+        // Never overwrite or auto-inject fake dummy classes into the student's database.
+        // The timetable strictly retains what the user actually scans, uploads, or creates.
     }
 
     private fun createDefaultClassesForCourse(courseCode: String): List<TimetableClass> {

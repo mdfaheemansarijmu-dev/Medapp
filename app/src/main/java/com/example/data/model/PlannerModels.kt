@@ -184,7 +184,7 @@ data class ParsedTimetableClass(
 
 @JsonClass(generateAdapter = true)
 data class UnifiedParserResponse(
-    val document_type: String, // "Weekly Timetable", "Exam Timetable", "Assignment Notice", etc.
+    val document_type: String? = null, // "Weekly Timetable", "Exam Timetable", "Assignment Notice", etc.
     val is_temporary_override: Boolean = false,
     val override_date: String? = null, // "YYYY-MM-DD"
     val extracted_timetable: List<ParsedTimetableClass> = emptyList(),
