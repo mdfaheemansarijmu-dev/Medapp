@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface PlannerDao {
     // Timetable
-    @Query("SELECT * FROM timetable_classes WHERE courseCode = :courseCode ORDER BY dayOfWeek ASC, periodNumber ASC")
+    @Query("SELECT * FROM timetable_classes WHERE courseCode = :courseCode COLLATE NOCASE ORDER BY dayOfWeek ASC, periodNumber ASC")
     fun getTimetableForCourse(courseCode: String): Flow<List<TimetableClass>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -19,11 +19,11 @@ interface PlannerDao {
     @Query("DELETE FROM timetable_classes WHERE id = :id")
     suspend fun deleteClassById(id: Int)
 
-    @Query("DELETE FROM timetable_classes WHERE courseCode = :courseCode")
+    @Query("DELETE FROM timetable_classes WHERE courseCode = :courseCode COLLATE NOCASE")
     suspend fun clearTimetableForCourse(courseCode: String)
 
     // Assignments
-    @Query("SELECT * FROM assignments WHERE courseCode = :courseCode ORDER BY dueDate ASC")
+    @Query("SELECT * FROM assignments WHERE courseCode = :courseCode COLLATE NOCASE ORDER BY dueDate ASC")
     fun getAssignmentsForCourse(courseCode: String): Flow<List<Assignment>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -36,7 +36,7 @@ interface PlannerDao {
     suspend fun updateAssignmentStatus(id: Int, status: String)
 
     // Assessments
-    @Query("SELECT * FROM assessments WHERE courseCode = :courseCode ORDER BY date ASC")
+    @Query("SELECT * FROM assessments WHERE courseCode = :courseCode COLLATE NOCASE ORDER BY date ASC")
     fun getAssessmentsForCourse(courseCode: String): Flow<List<Assessment>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -49,7 +49,7 @@ interface PlannerDao {
     suspend fun updateAssessmentStatus(id: Int, status: String)
 
     // Study Tasks
-    @Query("SELECT * FROM study_tasks WHERE courseCode = :courseCode ORDER BY dueDate ASC")
+    @Query("SELECT * FROM study_tasks WHERE courseCode = :courseCode COLLATE NOCASE ORDER BY dueDate ASC")
     fun getStudyTasksForCourse(courseCode: String): Flow<List<StudyTask>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -85,7 +85,7 @@ interface PlannerDao {
     suspend fun clearNotifications()
 
     // Exams
-    @Query("SELECT * FROM exams WHERE courseCode = :courseCode ORDER BY date ASC")
+    @Query("SELECT * FROM exams WHERE courseCode = :courseCode COLLATE NOCASE ORDER BY date ASC")
     fun getExamsForCourse(courseCode: String): Flow<List<Exam>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -94,7 +94,7 @@ interface PlannerDao {
     @Query("DELETE FROM exams WHERE id = :id")
     suspend fun deleteExamById(id: Int)
 
-    @Query("DELETE FROM exams WHERE courseCode = :courseCode")
+    @Query("DELETE FROM exams WHERE courseCode = :courseCode COLLATE NOCASE")
     suspend fun clearExamsForCourse(courseCode: String)
 
     // Teachers
@@ -260,6 +260,28 @@ interface PlannerDao {
 
     @Query("SELECT * FROM attendance_records WHERE id = :id LIMIT 1")
     suspend fun getAttendanceRecordById(id: Int): AttendanceRecord?
+
+    // Completed Syllabus Topics
+    @Query("SELECT * FROM completed_syllabus_topics WHERE courseCode = :courseCode COLLATE NOCASE ORDER BY completionDate DESC")
+    fun getCompletedTopicsForCourse(courseCode: String): Flow<List<CompletedSyllabusTopic>>
+
+    @Query("SELECT * FROM completed_syllabus_topics WHERE courseCode = :courseCode COLLATE NOCASE AND academicYear = :academicYear COLLATE NOCASE ORDER BY completionDate DESC")
+    fun getCompletedTopicsForYear(courseCode: String, academicYear: String): Flow<List<CompletedSyllabusTopic>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertCompletedTopic(topic: CompletedSyllabusTopic): Long
+
+    @Update
+    suspend fun updateCompletedTopic(topic: CompletedSyllabusTopic)
+
+    @Query("DELETE FROM completed_syllabus_topics WHERE id = :id")
+    suspend fun deleteCompletedTopicById(id: Int)
+
+    @Query("SELECT * FROM completed_syllabus_topics WHERE id = :id LIMIT 1")
+    suspend fun getCompletedTopicById(id: Int): CompletedSyllabusTopic?
+
+    @Query("DELETE FROM completed_syllabus_topics WHERE firestoreId = :firestoreId")
+    suspend fun deleteCompletedTopicByFirestoreId(firestoreId: String)
 }
 
 @Database(
@@ -277,9 +299,10 @@ interface PlannerDao {
         ScheduleOverride::class,
         UserProfile::class,
         AttendanceRecord::class,
-        DailySubjectRevision::class
+        DailySubjectRevision::class,
+        CompletedSyllabusTopic::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class PlannerDatabase : RoomDatabase() {

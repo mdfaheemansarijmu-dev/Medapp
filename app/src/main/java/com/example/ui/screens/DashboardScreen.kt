@@ -120,6 +120,8 @@ fun DashboardScreen(
     val assignments by viewModel.assignments.collectAsStateWithLifecycle()
     val assessments by viewModel.assessments.collectAsStateWithLifecycle()
     val studyTasks by viewModel.studyTasks.collectAsStateWithLifecycle()
+    val completedSyllabusTopics by viewModel.completedSyllabusTopics.collectAsStateWithLifecycle()
+    val studentYear by viewModel.studentYear.collectAsStateWithLifecycle()
     val notifications by viewModel.notifications.collectAsStateWithLifecycle()
     val todayHoliday by viewModel.todayHoliday.collectAsStateWithLifecycle()
     val tomorrowHoliday by viewModel.tomorrowHoliday.collectAsStateWithLifecycle()
@@ -419,6 +421,66 @@ fun DashboardScreen(
                     }
                 }
 
+                // Syllabus Record & Finished Chapters
+                item {
+                    SectionHeader(title = "Syllabus Progress", icon = Icons.Default.FactCheck)
+                }
+
+                item {
+                    Card(
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.navigateTo(com.example.ui.viewmodel.Screen.Planner) }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.BookmarkAdded,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSecondary,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Finished Syllabus Topics",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Text(
+                                    text = if (completedSyllabusTopics.isNotEmpty()) {
+                                        "${completedSyllabusTopics.size} chapter${if (completedSyllabusTopics.size > 1) "s" else ""} logged • Tap to view all"
+                                    } else {
+                                        "Track covered portions (e.g. Doctrine of Signature)"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.ChevronRight,
+                                contentDescription = "Open Finished Tab",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
                 // Study Goals Progress Section
                 item {
                     SectionHeader(title = "Daily Revision Goals", icon = Icons.Default.TrackChanges)
@@ -466,32 +528,99 @@ fun DashboardScreen(
                 Column(
                     modifier = Modifier
                         .statusBarsPadding()
-                        .padding(20.dp)
+                        .padding(horizontal = 20.dp, vertical = 16.dp)
                 ) {
+                    // Top Row: Title, Icon and Close Button
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f, fill = false)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.NotificationsActive,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
                             Text(
                                 text = "MedPulse Alerts Inbox",
-                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onBackground
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 19.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onBackground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            val displayBatch = studentBatch.ifBlank { "Batch A" }
+                        }
+
+                        IconButton(
+                            onClick = { showNotificationsTray = false },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close notifications",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    // Second Row: Batch Status Chip on Left, Actions on Right
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val displayBatch = studentBatch.ifBlank { "Batch A" }
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = if (isBatchListening) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                            else MaterialTheme.colorScheme.surfaceVariant,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (isBatchListening) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                                else MaterialTheme.colorScheme.outlineVariant
+                            )
+                        ) {
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(top = 2.dp)
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isBatchListening) Color(0xFF10B981) else MaterialTheme.colorScheme.outline)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = "$displayBatch • ${if (isBatchListening) "Sync Active" else "Connecting..."}",
-                                    style = MaterialTheme.typography.labelSmall,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                                     color = if (isBatchListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             FilledTonalButton(
                                 onClick = {
                                     newNoticeTitle = ""
@@ -500,37 +629,67 @@ fun DashboardScreen(
                                     newNoticeUrgent = false
                                     showPostBatchNoticeDialog = true
                                 },
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.padding(end = 4.dp).testTag("inbox_post_notice_btn")
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("inbox_post_notice_btn")
                             ) {
                                 Icon(Icons.Default.Campaign, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Broadcast", style = MaterialTheme.typography.labelSmall)
+                                Text("Broadcast", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
                             }
-                            TextButton(onClick = { viewModel.clearInbox() }) {
-                                Text("Clear All")
-                            }
-                            IconButton(onClick = { showNotificationsTray = false }) {
-                                Icon(Icons.Default.Close, contentDescription = "Close notifications")
+
+                            if (notifications.isNotEmpty()) {
+                                OutlinedButton(
+                                    onClick = { viewModel.clearInbox() },
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Clear All", style = MaterialTheme.typography.labelSmall)
+                                }
                             }
                         }
                     }
 
-                    Divider(modifier = Modifier.padding(vertical = 8.dp))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
                     if (notifications.isEmpty()) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 32.dp),
+                                .padding(vertical = 28.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                "No notifications yet. Excellent work! 🎉",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(46.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.NotificationsNone,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    "No notifications yet. Excellent work! 🎉",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    "Batch broadcasts and academic reminders will appear here.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     } else {
                         Column(

@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.R
 import com.example.data.model.MedicalCourse
 import com.example.data.model.ParsedTimetableClass
 import com.example.ui.viewmodel.LoginMode
@@ -238,8 +239,16 @@ fun WelcomeScreen(
     }
 
     // Google Sign-In setup
-    val gso = remember {
+    val webClientId = remember(context) {
+        try {
+            context.getString(R.string.default_web_client_id)
+        } catch (_: Exception) {
+            "434810744919-ad03usg9plmruiqqb5vf7ucab23vmu5i.apps.googleusercontent.com"
+        }
+    }
+    val gso = remember(webClientId) {
         GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(webClientId)
             .requestEmail()
             .requestProfile()
             .build()

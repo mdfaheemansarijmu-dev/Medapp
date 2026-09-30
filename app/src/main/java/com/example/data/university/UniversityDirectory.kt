@@ -764,6 +764,7 @@ object UniversityDirectory {
 
     fun findCollege(idOrName: String): CollegeInfo? {
         val normalized = idOrName.trim().lowercase()
+        if (normalized.isBlank()) return null
         return colleges.firstOrNull { 
             it.id.equals(normalized, ignoreCase = true) ||
             it.name.equals(normalized, ignoreCase = true) ||

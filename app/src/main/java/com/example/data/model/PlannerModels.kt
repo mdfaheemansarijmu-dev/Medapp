@@ -249,4 +249,19 @@ data class DailySubjectRevision(
     val revisionQuestions: String = "" // delimiter separated
 )
 
+@Entity(tableName = "completed_syllabus_topics")
+@JsonClass(generateAdapter = true)
+data class CompletedSyllabusTopic(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val courseCode: String = "",
+    val academicYear: String = "",
+    val subject: String = "",
+    val topicTitle: String = "",
+    val completionDate: Long = System.currentTimeMillis(),
+    val teacherName: String? = null,
+    val notes: String? = null,
+    val isSharedWithBatch: Boolean = true,
+    val firestoreId: String = java.util.UUID.randomUUID().toString()
+)
+
 

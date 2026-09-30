@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -28,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
+import com.example.R
 import com.example.data.model.MedicalCourse
 import com.example.data.university.CollegeCategory
 import com.example.data.university.CollegeInfo
@@ -38,10 +44,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import android.app.Activity
-import android.widget.Toast
 import android.app.PendingIntent
-import android.content.Context
-import android.content.Intent
 import android.os.Build
 import android.provider.Settings
 import java.text.SimpleDateFormat
@@ -161,8 +164,16 @@ fun SettingsScreen(
 
     val isAuthenticating by viewModel.isAuthenticating.collectAsStateWithLifecycle()
 
-    val gso = remember {
+    val webClientId = remember(context) {
+        try {
+            context.getString(R.string.default_web_client_id)
+        } catch (_: Exception) {
+            "434810744919-ad03usg9plmruiqqb5vf7ucab23vmu5i.apps.googleusercontent.com"
+        }
+    }
+    val gso = remember(webClientId) {
         GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(webClientId)
             .requestEmail()
             .requestProfile()
             .build()
@@ -1371,7 +1382,12 @@ fun SettingsScreen(
             val isBatchListening by viewModel.isBatchSyncListening.collectAsStateWithLifecycle()
             val batchSyncStatus by viewModel.batchSyncStatus.collectAsStateWithLifecycle()
             val activeBatchKey by viewModel.activeBatchKey.collectAsStateWithLifecycle()
+            val customBatchCode by viewModel.customBatchCode.collectAsStateWithLifecycle()
             val sharedNotices by viewModel.sharedBatchNotices.collectAsStateWithLifecycle()
+            var showEditCustomBatchDialog by remember { mutableStateOf(false) }
+            var editBatchCodeInput by remember { mutableStateOf(customBatchCode) }
+            var connectionTestResult by remember { mutableStateOf<String?>(null) }
+            var isTestingConnection by remember { mutableStateOf(false) }
 
             Card(
                 shape = RoundedCornerShape(20.dp),
@@ -1415,12 +1431,12 @@ fun SettingsScreen(
 
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = if (isBatchListening) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant
+                            color = if (isBatchListening) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
                         ) {
                             Text(
-                                text = if (isBatchListening) "● LIVE" else "○ IDLE",
+                                text = if (isBatchListening) "● LIVE" else "○ OFFLINE",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = if (isBatchListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (isBatchListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }
@@ -1428,25 +1444,181 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Text(
-                        text = "Status: $batchSyncStatus\nChannel: $activeBatchKey",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Channel Code: $activeBatchKey",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Row {
+                                    IconButton(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("Batch Code", activeBatchKey))
+                                            Toast.makeText(context, "Channel Key copied to clipboard!", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(16.dp))
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "text/plain"
+                                                putExtra(Intent.EXTRA_SUBJECT, "Join my MedPulse Batch")
+                                                putExtra(Intent.EXTRA_TEXT, "Join my MedPulse Batch Channel for live academic sync! Channel Code: $activeBatchKey")
+                                            }
+                                            context.startActivity(Intent.createChooser(shareIntent, "Share Batch Channel"))
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.Share, contentDescription = "Share", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
+                            Text(
+                                text = "Status: $batchSyncStatus",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (batchSyncStatus.contains("error", ignoreCase = true) || batchSyncStatus.contains("denied", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (customBatchCode.isNotBlank()) {
+                                Text(
+                                    text = "Custom override: $customBatchCode",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+
+                    if (batchSyncStatus.contains("Permission Denied", ignoreCase = true) || connectionTestResult?.contains("Permission Denied", ignoreCase = true) == true) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = "Firebase Rule Warning",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Text(
+                                    text = "Firestore security rules in Firebase Console are blocking access to 'shared_batches'. Ensure rules allow read/write or enable Anonymous Authentication in Firebase Console.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        val rulesSnippet = "match /shared_batches/{batchKey}/{document=**} {\n  allow read, write: if true;\n}"
+                                        clipboard.setPrimaryClip(ClipData.newPlainText("Firestore Rule", rulesSnippet))
+                                        Toast.makeText(context, "Rule snippet copied to clipboard!", Toast.LENGTH_SHORT).show()
+                                    },
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Copy Firestore Rule Snippet", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedButton(
-                            onClick = { viewModel.startBatchNotificationSync() },
+                            onClick = {
+                                editBatchCodeInput = customBatchCode
+                                showEditCustomBatchDialog = true
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Channel Code", style = MaterialTheme.typography.labelSmall)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                isTestingConnection = true
+                                connectionTestResult = "Testing write permissions..."
+                                viewModel.testBatchSyncConnection { success, message ->
+                                    isTestingConnection = false
+                                    connectionTestResult = message
+                                }
+                            },
+                            enabled = !isTestingConnection,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            if (isTestingConnection) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(4.dp))
+                            } else {
+                                Icon(Icons.Default.NetworkCheck, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                            Text("Test Channel", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+
+                    connectionTestResult?.let { res ->
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = res,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (res.startsWith("Success")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    var isSyncingFeed by remember { mutableStateOf(false) }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                isSyncingFeed = true
+                                connectionTestResult = "Fetching shared batch items..."
+                                viewModel.fetchAndSyncBatchNow { success, message ->
+                                    isSyncingFeed = false
+                                    connectionTestResult = message
+                                }
+                            },
+                            enabled = !isSyncingFeed && !isTestingConnection,
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.weight(1f).testTag("reconnect_batch_sync_btn")
                         ) {
-                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Refresh Feed", style = MaterialTheme.typography.labelMedium)
+                            if (isSyncingFeed) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                            } else {
+                                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                            }
+                            Text("Sync Feed Now", style = MaterialTheme.typography.labelMedium)
                         }
 
                         Button(
@@ -1466,6 +1638,56 @@ fun SettingsScreen(
                         }
                     }
                 }
+            }
+
+            if (showEditCustomBatchDialog) {
+                AlertDialog(
+                    onDismissRequest = { showEditCustomBatchDialog = false },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                viewModel.setCustomBatchCode(editBatchCodeInput)
+                                showEditCustomBatchDialog = false
+                                Toast.makeText(context, "Batch channel updated!", Toast.LENGTH_SHORT).show()
+                            },
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Save Code")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showEditCustomBatchDialog = false }) {
+                            Text("Cancel")
+                        }
+                    },
+                    title = { Text("Set Custom Batch Code") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                "Enter a code (e.g. 'aiims_2024_a') so all your classmates match without minor profile spelling differences.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            OutlinedTextField(
+                                value = editBatchCodeInput,
+                                onValueChange = { editBatchCodeInput = it },
+                                label = { Text("Custom Channel Code") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            if (customBatchCode.isNotBlank()) {
+                                TextButton(
+                                    onClick = {
+                                        viewModel.setCustomBatchCode("")
+                                        showEditCustomBatchDialog = false
+                                        Toast.makeText(context, "Reset to profile default!", Toast.LENGTH_SHORT).show()
+                                    }
+                                ) {
+                                    Text("Reset to Profile Default", color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                    }
+                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))

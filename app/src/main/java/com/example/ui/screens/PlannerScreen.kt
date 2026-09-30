@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -21,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -39,6 +45,7 @@ fun PlannerScreen(
 ) {
     var selectedTabIdx by remember { mutableStateOf(0) } // 0 = Assignments, 1 = Assessments, 2 = Study Tasks
     var showAddItemDialog by remember { mutableStateOf(false) }
+    var showBatchInfoDialog by remember { mutableStateOf(false) }
 
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
 
@@ -47,8 +54,17 @@ fun PlannerScreen(
     val studyTasks by viewModel.studyTasks.collectAsStateWithLifecycle()
 
     val course by viewModel.selectedCourse.collectAsStateWithLifecycle()
+    val studentYear by viewModel.studentYear.collectAsStateWithLifecycle()
+    val selectedSyllabusYear by viewModel.selectedSyllabusYear.collectAsStateWithLifecycle()
     val studentBatch by viewModel.studentBatch.collectAsStateWithLifecycle()
     val studentCollege by viewModel.studentCollege.collectAsStateWithLifecycle()
+    val isBatchListening by viewModel.isBatchSyncListening.collectAsStateWithLifecycle()
+    val batchSyncStatus by viewModel.batchSyncStatus.collectAsStateWithLifecycle()
+    val activeBatchKey by viewModel.activeBatchKey.collectAsStateWithLifecycle()
+    val customBatchCode by viewModel.customBatchCode.collectAsStateWithLifecycle()
+    val batchFeedbackMessage by viewModel.batchShareFeedbackMessage.collectAsStateWithLifecycle()
+
+    var preselectedSubjectForTopic by remember { mutableStateOf<String?>(null) }
 
     // Filter by search query
     val filteredAssignments = assignments.filter {
@@ -103,6 +119,86 @@ fun PlannerScreen(
                 }
             }
 
+            // Batch Channel Sync Status Chip
+            val effectiveBatchName = studentBatch.ifBlank { "Batch" }
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = if (isBatchListening) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 10.dp)
+                    .clickable { showBatchInfoDialog = true }
+                    .testTag("planner_batch_channel_chip")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Groups,
+                        contentDescription = null,
+                        tint = if (isBatchListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Batch Channel: ${activeBatchKey.ifBlank { "Connecting..." }}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (isBatchListening) "● LIVE" else "○ OFFLINE",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                                color = if (isBatchListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                            )
+                        }
+                        Text(
+                            text = if (isBatchListening) "Auto-sharing active with $effectiveBatchName peers. Tap to share code." else "$batchSyncStatus (Tap to diagnose)",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = "Channel details",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+
+            // In-App Feedback Banner for auto-sharing results
+            batchFeedbackMessage?.let { msg ->
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp)
+                        .padding(bottom = 10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.secondary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(msg, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSecondaryContainer)
+                        IconButton(onClick = { viewModel.clearBatchShareFeedback() }, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(14.dp))
+                        }
+                    }
+                }
+            }
+
             // Search Bar
             OutlinedTextField(
                 value = searchQuery,
@@ -126,29 +222,47 @@ fun PlannerScreen(
             )
 
             // Tabs row
-            TabRow(
+            ScrollableTabRow(
                 selectedTabIndex = selectedTabIdx,
-                modifier = Modifier.padding(horizontal = 16.dp),
+                modifier = Modifier.padding(horizontal = 8.dp),
                 containerColor = Color.Transparent,
+                edgePadding = 12.dp,
                 divider = {}
             ) {
                 Tab(
                     selected = selectedTabIdx == 0,
                     onClick = { selectedTabIdx = 0 },
-                    text = { Text("Assignments") },
+                    text = { Text("Assignments (${assignments.count { it.status == "Pending" }})") },
                     modifier = Modifier.testTag("tab_assignments")
                 )
                 Tab(
                     selected = selectedTabIdx == 1,
                     onClick = { selectedTabIdx = 1 },
-                    text = { Text("Assessments") },
+                    text = { Text("Assessments (${assessments.count { it.status == "Upcoming" }})") },
                     modifier = Modifier.testTag("tab_exams")
                 )
                 Tab(
                     selected = selectedTabIdx == 2,
                     onClick = { selectedTabIdx = 2 },
-                    text = { Text("Study Goals") },
+                    text = { Text("Study Goals (${studyTasks.count { it.progress < 100 }})") },
                     modifier = Modifier.testTag("tab_goals")
+                )
+                Tab(
+                    selected = selectedTabIdx == 3,
+                    onClick = { selectedTabIdx = 3 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp),
+                                tint = if (selectedTabIdx == 3) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text("Finished", fontWeight = if (selectedTabIdx == 3) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    },
+                    modifier = Modifier.testTag("tab_finished")
                 )
             }
 
@@ -159,6 +273,14 @@ fun PlannerScreen(
                 0 -> AssignmentsSubList(filteredAssignments, onDelete = { viewModel.removeAssignment(it) }, onToggle = { viewModel.toggleAssignment(it) })
                 1 -> AssessmentsSubList(filteredAssessments, onDelete = { viewModel.removeAssessment(it) }, onToggle = { viewModel.toggleAssessment(it) })
                 2 -> StudyTasksSubList(filteredStudyTasks, onDelete = { viewModel.removeStudyTask(it) }, onProgress = { id, prog -> viewModel.updateStudyProgress(id, prog) })
+                3 -> SyllabusFinishedSubList(
+                    viewModel = viewModel,
+                    searchQuery = searchQuery,
+                    onOpenAddDialog = { preselectedSubject ->
+                        preselectedSubjectForTopic = preselectedSubject
+                        showAddItemDialog = true
+                    }
+                )
             }
         }
 
@@ -168,6 +290,7 @@ fun PlannerScreen(
                 0 -> AddAssignmentDialog(
                     onDismiss = { showAddItemDialog = false },
                     studentBatch = studentBatch.ifBlank { "Batch" },
+                    activeBatchKey = activeBatchKey,
                     onSave = { subject, title, due, priority, type, notes, shareWithBatch ->
                         viewModel.addAssignment(subject, title, due, priority, type, notes, shareWithBatch)
                         showAddItemDialog = false
@@ -176,6 +299,7 @@ fun PlannerScreen(
                 1 -> AddAssessmentDialog(
                     onDismiss = { showAddItemDialog = false },
                     studentBatch = studentBatch.ifBlank { "Batch" },
+                    activeBatchKey = activeBatchKey,
                     onSave = { subject, title, date, type, syllabus, shareWithBatch ->
                         viewModel.addAssessment(subject, title, date, type, syllabus, shareWithBatch)
                         showAddItemDialog = false
@@ -188,7 +312,46 @@ fun PlannerScreen(
                         showAddItemDialog = false
                     }
                 )
+                3 -> {
+                    val courseCode = course?.code ?: "MBBS"
+                    val effectiveYear = if (selectedSyllabusYear.isNotBlank()) {
+                        selectedSyllabusYear
+                    } else {
+                        com.example.data.syllabus.CourseSyllabusDirectory.normalizeYear(studentYear.ifBlank { "1st Year" })
+                    }
+                    val availableSubjects = remember(courseCode, effectiveYear) {
+                        com.example.data.syllabus.CourseSyllabusDirectory.getSubjectsForYear(courseCode, effectiveYear)
+                    }
+                    AddCompletedTopicDialog(
+                        initialSubject = preselectedSubjectForTopic,
+                        availableSubjects = availableSubjects,
+                        currentAcademicYear = effectiveYear,
+                        studentBatch = studentBatch.ifBlank { "Batch" },
+                        onDismiss = {
+                            showAddItemDialog = false
+                            preselectedSubjectForTopic = null
+                        },
+                        onSave = { subject, topicTitle, academicYear, teacherName, notes, shareWithBatch ->
+                            viewModel.addCompletedTopic(subject, topicTitle, academicYear, teacherName, notes, shareWithBatch)
+                            showAddItemDialog = false
+                            preselectedSubjectForTopic = null
+                        }
+                    )
+                }
             }
+        }
+
+        if (showBatchInfoDialog) {
+            BatchSyncInfoDialog(
+                onDismiss = { showBatchInfoDialog = false },
+                activeBatchKey = activeBatchKey,
+                syncStatus = batchSyncStatus,
+                isListening = isBatchListening,
+                customBatchCode = customBatchCode,
+                onSetCustomBatchCode = { viewModel.setCustomBatchCode(it) },
+                onTestConnection = { onResult -> viewModel.testBatchSyncConnection(onResult) },
+                onSyncNow = { onResult -> viewModel.fetchAndSyncBatchNow(onResult) }
+            )
         }
     }
 }
@@ -653,6 +816,7 @@ fun EmptyListNotice(title: String, desc: String) {
 fun AddAssignmentDialog(
     onDismiss: () -> Unit,
     studentBatch: String = "Batch",
+    activeBatchKey: String = "",
     onSave: (String, String, Long, String, String, String?, Boolean) -> Unit
 ) {
     var subject by remember { mutableStateOf("") }
@@ -698,9 +862,10 @@ fun AddAssignmentDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Batch sync info
+                val effectiveBatchName = studentBatch.ifBlank { "Batch A" }
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                    color = if (shareWithBatch) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -712,22 +877,30 @@ fun AddAssignmentDialog(
                         Icon(
                             imageVector = Icons.Default.Groups,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
+                            tint = if (shareWithBatch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(24.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Shared with Batch $studentBatch",
+                                text = if (shareWithBatch) "Auto-Share with $effectiveBatchName" else "Personal (Private to Me)",
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "All students in your batch will receive a notification and see this in their planner.",
+                                text = if (shareWithBatch)
+                                    "All peers in channel '${activeBatchKey.ifBlank { effectiveBatchName }}' will automatically receive this in their planner."
+                                else
+                                    "Private task. Only saved to this device.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        Switch(
+                            checked = shareWithBatch,
+                            onCheckedChange = { shareWithBatch = it },
+                            modifier = Modifier.testTag("switch_share_assignment_batch")
+                        )
                     }
                 }
 
@@ -873,6 +1046,7 @@ fun AddAssignmentDialog(
 fun AddAssessmentDialog(
     onDismiss: () -> Unit,
     studentBatch: String = "Batch",
+    activeBatchKey: String = "",
     onSave: (String, String, Long, String, String?, Boolean) -> Unit
 ) {
     var subject by remember { mutableStateOf("") }
@@ -914,9 +1088,10 @@ fun AddAssessmentDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Batch sync info
+                val effectiveBatchName = studentBatch.ifBlank { "Batch A" }
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                    color = if (shareWithBatch) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -928,22 +1103,30 @@ fun AddAssessmentDialog(
                         Icon(
                             imageVector = Icons.Default.Groups,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
+                            tint = if (shareWithBatch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(24.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Shared with Batch $studentBatch",
+                                text = if (shareWithBatch) "Auto-Share with $effectiveBatchName" else "Personal (Private to Me)",
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "All students in your batch will receive a notification and test schedule alert.",
+                                text = if (shareWithBatch)
+                                    "All peers in channel '${activeBatchKey.ifBlank { effectiveBatchName }}' will automatically receive this in their schedule & alerts."
+                                else
+                                    "Private test schedule. Only saved to this device.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        Switch(
+                            checked = shareWithBatch,
+                            onCheckedChange = { shareWithBatch = it },
+                            modifier = Modifier.testTag("switch_share_assessment_batch")
+                        )
                     }
                 }
 
@@ -1141,6 +1324,269 @@ fun AddStudyTaskDialog(
                                     priorityExpanded = false
                                 }
                             )
+                        }
+                    }
+                }
+            }
+        }
+    )
+}
+
+@Composable
+fun BatchSyncInfoDialog(
+    onDismiss: () -> Unit,
+    activeBatchKey: String,
+    syncStatus: String,
+    isListening: Boolean,
+    customBatchCode: String,
+    onSetCustomBatchCode: (String) -> Unit,
+    onTestConnection: ((Boolean, String) -> Unit) -> Unit,
+    onSyncNow: ((Boolean, String) -> Unit) -> Unit = {}
+) {
+    val context = LocalContext.current
+    var inputCode by remember { mutableStateOf(customBatchCode) }
+    var testResult by remember { mutableStateOf<String?>(null) }
+    var isTesting by remember { mutableStateOf(false) }
+    var isSyncing by remember { mutableStateOf(false) }
+
+    val hasPermIssue = syncStatus.contains("Permission Denied", ignoreCase = true) ||
+            testResult?.contains("Permission Denied", ignoreCase = true) == true
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            Button(onClick = onDismiss, shape = RoundedCornerShape(12.dp)) {
+                Text("Close")
+            }
+        },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Groups, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Batch Sync Channel", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isListening) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = if (isListening) "● Feed Status: Live Synchronized" else "○ Feed Status: $syncStatus",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = if (isListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Channel Key: ${activeBatchKey.ifBlank { "Not connected" }}",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                Text(
+                    text = "To receive and share assignments automatically, all classmates must be on the EXACT same Channel Key.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Batch Code", activeBatchKey))
+                            Toast.makeText(context, "Batch Key copied to clipboard!", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Copy Code", style = MaterialTheme.typography.labelSmall)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_SUBJECT, "Join my MedPulse Batch")
+                                putExtra(Intent.EXTRA_TEXT, "Join my MedPulse Batch Channel for live academic sync! Channel Code: $activeBatchKey")
+                            }
+                            context.startActivity(Intent.createChooser(shareIntent, "Share Batch Channel"))
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Share", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                Text(
+                    text = "Custom Batch Code (Optional)",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                )
+                Text(
+                    text = "Set a custom code (e.g. 'gmc_2024_a') so all your classmates match without profile typos.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                OutlinedTextField(
+                    value = inputCode,
+                    onValueChange = { inputCode = it },
+                    label = { Text("Custom Channel Code") },
+                    placeholder = { Text("e.g. aiims_2024_batch_a") },
+                    shape = RoundedCornerShape(10.dp),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            onSetCustomBatchCode(inputCode)
+                            Toast.makeText(context, "Custom batch code updated!", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Apply Code", style = MaterialTheme.typography.labelSmall)
+                    }
+
+                    if (customBatchCode.isNotBlank()) {
+                        OutlinedButton(
+                            onClick = {
+                                inputCode = ""
+                                onSetCustomBatchCode("")
+                                Toast.makeText(context, "Reset to profile default!", Toast.LENGTH_SHORT).show()
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Reset", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            isSyncing = true
+                            testResult = "Fetching shared batch items..."
+                            onSyncNow { success, message ->
+                                isSyncing = false
+                                testResult = message
+                            }
+                        },
+                        enabled = !isSyncing && !isTesting,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        if (isSyncing) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                            Spacer(modifier = Modifier.width(6.dp))
+                        } else {
+                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
+                        Text("Sync Feed Now", style = MaterialTheme.typography.labelSmall)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            isTesting = true
+                            testResult = "Testing connection to Firebase..."
+                            onTestConnection { success, message ->
+                                isTesting = false
+                                testResult = message
+                            }
+                        },
+                        enabled = !isTesting && !isSyncing,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        if (isTesting) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(4.dp))
+                        } else {
+                            Icon(Icons.Default.NetworkCheck, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
+                        Text("Test Channel", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+
+                testResult?.let { res ->
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = res,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (res.contains("error", ignoreCase = true) || res.contains("denied", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                }
+
+                if (hasPermIssue) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text(
+                                text = "Firebase Rule Setup Required",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Your Firebase project is currently blocking Firestore writes to 'shared_batches'. To enable automatic sync for all classmates:\n1. Open Firebase Console > Firestore Database > Rules\n2. Add rule: allow read, write for 'shared_batches/{batchKey}/{document=**}'\n3. Or enable Anonymous Authentication in Firebase Console.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    val rulesSnippet = "match /shared_batches/{batchKey}/{document=**} {\n  allow read, write: if true;\n}"
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("Firestore Rule", rulesSnippet))
+                                    Toast.makeText(context, "Rule snippet copied to clipboard!", Toast.LENGTH_SHORT).show()
+                                },
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Copy Firestore Rule Snippet", style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                     }
                 }

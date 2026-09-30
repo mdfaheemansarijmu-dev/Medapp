@@ -19,6 +19,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.local.PlannerDatabase
 import com.example.data.model.*
 import com.example.data.university.*
+import com.example.data.syllabus.CourseSyllabusDirectory
+import com.example.data.syllabus.SyllabusSubject
 import com.example.data.repository.PlannerRepository
 import com.example.data.sync.BatchNotificationSyncManager
 import com.example.data.sync.SharedBatchNotice
@@ -105,6 +107,20 @@ class PlannerViewModel(
             else flowOf(emptyList())
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val completedSyllabusTopics: StateFlow<List<CompletedSyllabusTopic>> = selectedCourse
+        .flatMapLatest { course ->
+            if (course != null) repository.getCompletedTopicsForCourse(course.code)
+            else flowOf(emptyList())
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _selectedSyllabusYear = MutableStateFlow<String>("")
+    val selectedSyllabusYear: StateFlow<String> = _selectedSyllabusYear.asStateFlow()
+
+    fun setSelectedSyllabusYear(year: String) {
+        _selectedSyllabusYear.value = year
+    }
 
     val chatMessages: StateFlow<List<ChatMessage>> = repository.getChatMessages()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -241,6 +257,24 @@ class PlannerViewModel(
     private val _studentBatch = MutableStateFlow("")
     val studentBatch: StateFlow<String> = _studentBatch.asStateFlow()
 
+    private val _customBatchCode = MutableStateFlow("")
+    val customBatchCode: StateFlow<String> = _customBatchCode.asStateFlow()
+
+    private val _batchShareFeedbackMessage = MutableStateFlow<String?>(null)
+    val batchShareFeedbackMessage: StateFlow<String?> = _batchShareFeedbackMessage.asStateFlow()
+
+    fun clearBatchShareFeedback() {
+        _batchShareFeedbackMessage.value = null
+    }
+
+    fun setCustomBatchCode(code: String) {
+        val clean = code.trim().lowercase().replace(Regex("[^a-z0-9_-]+"), "_").trim('_')
+        _customBatchCode.value = clean
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+        sharedPrefs.edit().putString("custom_batch_code", clean).apply()
+        startBatchNotificationSync()
+    }
+
     // Shared Batch Notification System (Option 1: Real-Time Firestore Batch Feed)
     private val batchSyncManager = BatchNotificationSyncManager(application, repository)
     val sharedBatchNotices: StateFlow<List<SharedBatchNotice>> = batchSyncManager.sharedNotices
@@ -250,9 +284,10 @@ class PlannerViewModel(
         _studentCollege,
         _selectedCourse,
         _studentAdmissionYear,
-        _studentBatch
-    ) { col, crs, admYr, btch ->
-        BatchNotificationSyncManager.computeBatchKey(col, crs?.code ?: "MBBS", admYr, btch)
+        _studentBatch,
+        _customBatchCode
+    ) { col, crs, admYr, btch, customCode ->
+        BatchNotificationSyncManager.computeBatchKey(col, crs?.code ?: "MBBS", admYr, btch, customCode)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
     private val _isPostingBatchNotice = MutableStateFlow(false)
@@ -407,6 +442,10 @@ class PlannerViewModel(
         if (savedBatch.isNotBlank()) {
             _studentBatch.value = savedBatch
         }
+        val savedCustomBatch = sharedPrefs.getString("custom_batch_code", "") ?: ""
+        if (savedCustomBatch.isNotBlank()) {
+            _customBatchCode.value = savedCustomBatch
+        }
         _isProfileCompleted.value = sharedPrefs.getBoolean("is_profile_completed", false)
 
         // Verify real Google or Firebase session
@@ -502,15 +541,17 @@ class PlannerViewModel(
                 _studentCollege,
                 _selectedCourse,
                 _studentAdmissionYear,
-                _studentBatch
-            ) { col, crs, admYr, btch ->
-                listOf(col, crs?.code ?: "MBBS", admYr.toString(), btch)
+                _studentBatch,
+                _customBatchCode
+            ) { col, crs, admYr, btch, customCode ->
+                listOf(col, crs?.code ?: "MBBS", admYr.toString(), btch, customCode)
             }.collectLatest { list ->
                 val col = list[0]
                 val crs = list[1]
                 val admYr = list[2].toIntOrNull() ?: 2024
                 val btch = list[3]
-                batchSyncManager.startListeningToBatch(col, crs, admYr, btch)
+                val customCode = list[4]
+                batchSyncManager.startListeningToBatch(col, crs, admYr, btch, customCode)
             }
         }
 
@@ -768,13 +809,22 @@ class PlannerViewModel(
             syncDataToFirebase()
 
             if (shareWithBatch) {
-                batchSyncManager.postSharedAssignment(
+                val shareResult = batchSyncManager.postSharedAssignment(
                     assignment = assignment.copy(id = insertedId.toInt()),
                     college = _studentCollege.value,
                     course = course.code,
                     admissionYear = _studentAdmissionYear.value,
                     batch = _studentBatch.value,
-                    authorName = _studentName.value.ifBlank { "Classmate" }
+                    authorName = _studentName.value.ifBlank { "Classmate" },
+                    customBatchCode = _customBatchCode.value
+                )
+                shareResult.fold(
+                    onSuccess = {
+                        _batchShareFeedbackMessage.value = "Shared '${assignment.title}' with your batch channel!"
+                    },
+                    onFailure = { err ->
+                        _batchShareFeedbackMessage.value = "Saved locally. Batch sync notice: ${err.message}"
+                    }
                 )
             }
         }
@@ -802,7 +852,8 @@ class PlannerViewModel(
                     college = _studentCollege.value,
                     course = selectedCourse.value?.code ?: "MBBS",
                     admissionYear = _studentAdmissionYear.value,
-                    batch = _studentBatch.value
+                    batch = _studentBatch.value,
+                    customBatchCode = _customBatchCode.value
                 )
             }
             syncDataToFirebase()
@@ -855,13 +906,22 @@ class PlannerViewModel(
             syncDataToFirebase()
 
             if (shareWithBatch) {
-                batchSyncManager.postSharedAssessment(
+                val shareResult = batchSyncManager.postSharedAssessment(
                     assessment = assessment.copy(id = insertedId.toInt()),
                     college = _studentCollege.value,
                     course = course.code,
                     admissionYear = _studentAdmissionYear.value,
                     batch = _studentBatch.value,
-                    authorName = _studentName.value.ifBlank { "Classmate" }
+                    authorName = _studentName.value.ifBlank { "Classmate" },
+                    customBatchCode = _customBatchCode.value
+                )
+                shareResult.fold(
+                    onSuccess = {
+                        _batchShareFeedbackMessage.value = "Broadcasted '${assessment.title}' to your batch schedule!"
+                    },
+                    onFailure = { err ->
+                        _batchShareFeedbackMessage.value = "Saved locally. Batch sync notice: ${err.message}"
+                    }
                 )
             }
         }
@@ -888,7 +948,8 @@ class PlannerViewModel(
                     college = _studentCollege.value,
                     course = selectedCourse.value?.code ?: "MBBS",
                     admissionYear = _studentAdmissionYear.value,
-                    batch = _studentBatch.value
+                    batch = _studentBatch.value,
+                    customBatchCode = _customBatchCode.value
                 )
             }
             syncDataToFirebase()
@@ -941,6 +1002,79 @@ class PlannerViewModel(
             AcademicNotificationManager.cancelByItemId(getApplication(), "study_$id")
             syncDataToFirebase()
         }
+    }
+
+    // Syllabus Record & Finished Topics
+    fun addCompletedTopic(
+        subject: String,
+        topicTitle: String,
+        academicYear: String,
+        teacherName: String? = null,
+        notes: String? = null,
+        shareWithBatch: Boolean = true
+    ) {
+        val course = selectedCourse.value ?: MedicalCourse.MBBS
+        val effectiveYear = academicYear.ifBlank { _studentYear.value.ifBlank { "1st Year" } }
+        viewModelScope.launch {
+            val topic = CompletedSyllabusTopic(
+                courseCode = course.code,
+                academicYear = effectiveYear,
+                subject = subject.trim(),
+                topicTitle = topicTitle.trim(),
+                completionDate = System.currentTimeMillis(),
+                teacherName = teacherName?.trim()?.ifBlank { null },
+                notes = notes?.trim()?.ifBlank { null },
+                isSharedWithBatch = shareWithBatch
+            )
+            repository.addCompletedTopic(topic)
+
+            addNotificationWithDuplicateCheck(
+                InAppNotification(
+                    title = "Syllabus Record Updated",
+                    message = "Covered '$topicTitle' in $subject.",
+                    type = "syllabus"
+                )
+            )
+
+            if (shareWithBatch) {
+                val postResult = batchSyncManager.postBatchNotice(
+                    college = _studentCollege.value,
+                    course = course.code,
+                    admissionYear = _studentAdmissionYear.value,
+                    batch = _studentBatch.value,
+                    title = "Syllabus Finished: $subject",
+                    message = "Covered in class: '$topicTitle' ($effectiveYear).",
+                    authorName = _studentName.value.ifBlank { "Classmate" },
+                    category = "syllabus",
+                    urgent = false,
+                    customBatchCode = _customBatchCode.value
+                )
+                postResult.fold(
+                    onSuccess = {
+                        _batchShareFeedbackMessage.value = "Shared covered topic '$topicTitle' with your batch channel!"
+                    },
+                    onFailure = { err ->
+                        _batchShareFeedbackMessage.value = "Saved locally. Batch sync: ${err.message}"
+                    }
+                )
+            }
+            syncDataToFirebase()
+        }
+    }
+
+    fun removeCompletedTopic(id: Int) {
+        viewModelScope.launch {
+            repository.deleteCompletedTopic(id)
+            syncDataToFirebase()
+        }
+    }
+
+    fun getSyllabusSubjectsForCourseAndYear(courseCode: String, year: String): List<SyllabusSubject> {
+        return CourseSyllabusDirectory.getSubjectsForYear(courseCode, year)
+    }
+
+    fun getSyllabusYearsForCourse(courseCode: String): List<String> {
+        return CourseSyllabusDirectory.getAvailableYears(courseCode)
     }
 
     // AI WhatsApp Parser Chat logic
@@ -1260,6 +1394,20 @@ class PlannerViewModel(
                                 type = "class"
                             )
                         )
+
+                        // Auto-broadcast urgent schedule change to batch
+                        batchSyncManager.postBatchNotice(
+                            college = _studentCollege.value,
+                            course = course.code,
+                            admissionYear = _studentAdmissionYear.value,
+                            batch = _studentBatch.value,
+                            title = "Schedule Change: ${item.subject}",
+                            message = "${item.title} on $dateStr",
+                            authorName = _studentName.value.ifBlank { "Class Representative" },
+                            category = "batch_notice",
+                            urgent = true,
+                            customBatchCode = _customBatchCode.value
+                        )
                     }
                     categoryNormalized == "exam" || 
                     categoryNormalized.contains("university exam") -> {
@@ -1287,12 +1435,13 @@ class PlannerViewModel(
                         )
                         val asmId = repository.addAssessment(examItem)
                         batchSyncManager.postSharedAssessment(
-                            assessment = examItem,
+                            assessment = examItem.copy(id = asmId.toInt()),
                             college = _studentCollege.value,
                             course = course.code,
                             admissionYear = _studentAdmissionYear.value,
                             batch = _studentBatch.value,
-                            authorName = _studentName.value.ifBlank { "Classmate" }
+                            authorName = _studentName.value.ifBlank { "Classmate" },
+                            customBatchCode = _customBatchCode.value
                         )
 
                         // Add companion planner task
@@ -1357,12 +1506,13 @@ class PlannerViewModel(
                         )
                         val asmId = repository.addAssessment(batchAsm)
                         batchSyncManager.postSharedAssessment(
-                            assessment = batchAsm,
+                            assessment = batchAsm.copy(id = asmId.toInt()),
                             college = _studentCollege.value,
                             course = course.code,
                             admissionYear = _studentAdmissionYear.value,
                             batch = _studentBatch.value,
-                            authorName = _studentName.value.ifBlank { "Classmate" }
+                            authorName = _studentName.value.ifBlank { "Classmate" },
+                            customBatchCode = _customBatchCode.value
                         )
                         // Add companion planner task
                         repository.addPlannerTask(
@@ -1421,12 +1571,13 @@ class PlannerViewModel(
                         )
                         val asgId = repository.addAssignment(batchAsg)
                         batchSyncManager.postSharedAssignment(
-                            assignment = batchAsg,
+                            assignment = batchAsg.copy(id = asgId.toInt()),
                             college = _studentCollege.value,
                             course = course.code,
                             admissionYear = _studentAdmissionYear.value,
                             batch = _studentBatch.value,
-                            authorName = _studentName.value.ifBlank { "Classmate" }
+                            authorName = _studentName.value.ifBlank { "Classmate" },
+                            customBatchCode = _customBatchCode.value
                         )
                         // Add companion planner task
                         repository.addPlannerTask(
@@ -1502,17 +1653,25 @@ class PlannerViewModel(
                     }
                     else -> {
                         // General Reminders/Notices mapped as a pending general Assignment or Notification alert
-                        val asgId = repository.addAssignment(
-                            Assignment(
-                                courseCode = course.code,
-                                subject = item.subject,
-                                title = item.title,
-                                dueDate = itemTimestamp,
-                                priority = item.priority,
-                                status = "Pending",
-                                type = "Assignment",
-                                notes = item.details
-                            )
+                        val asg = Assignment(
+                            courseCode = course.code,
+                            subject = item.subject,
+                            title = item.title,
+                            dueDate = itemTimestamp,
+                            priority = item.priority,
+                            status = "Pending",
+                            type = "Assignment",
+                            notes = item.details
+                        )
+                        val asgId = repository.addAssignment(asg)
+                        batchSyncManager.postSharedAssignment(
+                            assignment = asg.copy(id = asgId.toInt()),
+                            college = _studentCollege.value,
+                            course = course.code,
+                            admissionYear = _studentAdmissionYear.value,
+                            batch = _studentBatch.value,
+                            authorName = _studentName.value.ifBlank { "Classmate" },
+                            customBatchCode = _customBatchCode.value
                         )
 
                         // In-App Notification
@@ -1855,6 +2014,7 @@ class PlannerViewModel(
                     .addOnCompleteListener { task ->
                         if (task.isSuccessful) {
                             Log.d("PlannerViewModel", "Firebase Auth session connected via Google credential.")
+                            startBatchNotificationSync()
                         } else {
                             Log.w("PlannerViewModel", "Firebase Google credential sign in note: ${task.exception?.message}")
                         }
@@ -1912,6 +2072,8 @@ class PlannerViewModel(
                             .putString("student_dp_url", photoUrl)
                             .putString("student_dp_preset", preset)
                             .apply()
+                            
+                        startBatchNotificationSync()
                             
                         viewModelScope.launch {
                             addNotificationWithDuplicateCheck(
@@ -1971,6 +2133,8 @@ class PlannerViewModel(
                                 .putString("student_dp_preset", dpPreset)
                                 .apply()
                                 
+                            startBatchNotificationSync()
+                                
                             viewModelScope.launch {
                                 addNotificationWithDuplicateCheck(
                                     InAppNotification(
@@ -2019,6 +2183,8 @@ class PlannerViewModel(
                         .putString("student_dp_url", "")
                         .putString("student_dp_preset", dpPreset)
                         .apply()
+                        
+                    startBatchNotificationSync()
                     
                     viewModelScope.launch {
                         addNotificationWithDuplicateCheck(
@@ -3095,11 +3261,47 @@ class PlannerViewModel(
         val crs = _selectedCourse.value?.code ?: "MBBS"
         val admYr = _studentAdmissionYear.value
         val btch = _studentBatch.value
-        batchSyncManager.startListeningToBatch(col, crs, admYr, btch)
+        val customCode = _customBatchCode.value
+        batchSyncManager.startListeningToBatch(col, crs, admYr, btch, customCode)
     }
 
     fun stopBatchNotificationSync() {
         batchSyncManager.stopListening()
+    }
+
+    fun testBatchSyncConnection(onComplete: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val col = _studentCollege.value
+            val crs = _selectedCourse.value?.code ?: "MBBS"
+            val admYr = _studentAdmissionYear.value
+            val btch = _studentBatch.value
+            val customCode = _customBatchCode.value
+            val result = batchSyncManager.testBatchSyncConnection(col, crs, admYr, btch, customCode)
+            result.fold(
+                onSuccess = { msg -> onComplete(true, msg) },
+                onFailure = { err -> onComplete(false, err.message ?: "Connection test failed") }
+            )
+        }
+    }
+
+    fun fetchAndSyncBatchNow(onComplete: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val col = _studentCollege.value
+            val crs = _selectedCourse.value?.code ?: "MBBS"
+            val admYr = _studentAdmissionYear.value
+            val btch = _studentBatch.value
+            val customCode = _customBatchCode.value
+            val result = batchSyncManager.fetchAndSyncBatchNow(col, crs, admYr, btch, customCode)
+            result.fold(
+                onSuccess = { count ->
+                    val message = if (count > 0) "Synchronized! Imported $count new batch item(s)." else "Feed up to date. No new batch items found."
+                    onComplete(true, message)
+                },
+                onFailure = { err ->
+                    onComplete(false, err.message ?: "Batch sync failed")
+                }
+            )
+        }
     }
 
     fun postNoticeToBatch(
@@ -3114,6 +3316,7 @@ class PlannerViewModel(
         val admYr = _studentAdmissionYear.value
         val btch = _studentBatch.value
         val author = _studentName.value.ifBlank { "Peer Student" }
+        val customCode = _customBatchCode.value
 
         viewModelScope.launch {
             _isPostingBatchNotice.value = true
@@ -3127,7 +3330,8 @@ class PlannerViewModel(
                 message = message,
                 authorName = author,
                 category = category,
-                urgent = urgent
+                urgent = urgent,
+                customBatchCode = customCode
             )
             _isPostingBatchNotice.value = false
             result.fold(

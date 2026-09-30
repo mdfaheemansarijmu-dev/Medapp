@@ -6,8 +6,10 @@ import com.example.data.model.Assignment
 import com.example.data.model.Assessment
 import com.example.data.model.InAppNotification
 import com.example.data.repository.PlannerRepository
+import com.example.util.AcademicNotificationManager
 import com.example.util.NotificationHelper
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
@@ -74,8 +76,17 @@ class BatchNotificationSyncManager(
     companion object {
         private const val TAG = "BatchNotificationSync"
 
-        fun computeBatchKey(college: String, course: String, admissionYear: Int, batch: String): String {
-            val cleanCollege = college.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(64)
+        fun computeBatchKey(college: String, course: String, admissionYear: Int, batch: String, customBatchCode: String? = null): String {
+            if (!customBatchCode.isNullOrBlank()) {
+                val cleanCustom = customBatchCode.trim().lowercase().replace(Regex("[^a-z0-9_-]+"), "_").trim('_').take(64)
+                if (cleanCustom.isNotBlank()) return cleanCustom
+            }
+            val directoryMatch = if (college.isNotBlank()) com.example.data.university.UniversityDirectory.findCollege(college) else null
+            val cleanCollege = if (directoryMatch != null && directoryMatch.id.isNotBlank() && directoryMatch.id != "other_custom_institute") {
+                directoryMatch.id.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(48)
+            } else {
+                college.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(48)
+            }
             val cleanCourse = course.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(16)
             val cleanBatch = batch.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(16)
             val effectiveCollege = if (cleanCollege.isBlank()) "medical_college" else cleanCollege
@@ -91,6 +102,15 @@ class BatchNotificationSyncManager(
     private val locallyPostedFirestoreIds = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
     private val locallyPostedNoticeIds = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
 
+    data class BatchConnectionParams(
+        val college: String,
+        val course: String,
+        val admissionYear: Int,
+        val batch: String,
+        val customBatchCode: String?
+    )
+    private var currentBatchParams: BatchConnectionParams? = null
+
     private var noticeListener: ListenerRegistration? = null
     private var assignmentListener: ListenerRegistration? = null
     private var assessmentListener: ListenerRegistration? = null
@@ -105,6 +125,24 @@ class BatchNotificationSyncManager(
 
     private val _syncStatus = MutableStateFlow("Idle")
     val syncStatus: StateFlow<String> = _syncStatus.asStateFlow()
+
+    init {
+        try {
+            FirebaseAuth.getInstance().addAuthStateListener { auth ->
+                val user = auth.currentUser
+                Log.d(TAG, "FirebaseAuth state changed: user=${user?.uid}")
+                if (user != null && currentBatchParams != null && !_isListening.value) {
+                    val p = currentBatchParams!!
+                    scope.launch {
+                        delay(600)
+                        startListeningToBatch(p.college, p.course, p.admissionYear, p.batch, p.customBatchCode)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not register AuthStateListener: ${e.message}")
+        }
+    }
 
     private val localDeviceUid: String by lazy {
         val prefs = application.getSharedPreferences("med_planner_batch_prefs", Application.MODE_PRIVATE)
@@ -133,9 +171,11 @@ class BatchNotificationSyncManager(
         college: String,
         course: String,
         admissionYear: Int,
-        batch: String
+        batch: String,
+        customBatchCode: String? = null
     ) {
-        val key = computeBatchKey(college, course, admissionYear, batch)
+        val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
+        currentBatchParams = BatchConnectionParams(college, course, admissionYear, batch, customBatchCode)
         if (currentBatchKey == key && _isListening.value) {
             return
         }
@@ -150,27 +190,47 @@ class BatchNotificationSyncManager(
             } catch (e: Exception) {
                 Log.w(TAG, "Pre-auth check: ${e.message}")
             }
+            attachListeners(key, college, course, admissionYear, batch, customBatchCode)
         }
+    }
+
+    private fun attachListeners(
+        key: String,
+        college: String,
+        course: String,
+        admissionYear: Int,
+        batch: String,
+        customBatchCode: String? = null
+    ) {
+        if (currentBatchKey != key) return
 
         try {
-            // 1. Listen to batch notices
+            // 1. Listen to batch notices (no composite order to avoid missing index errors)
             noticeListener = db.collection("shared_batches")
                 .document(key)
                 .collection("notices")
-                .orderBy("timestamp", Query.Direction.DESCENDING)
-                .limit(40)
+                .limit(50)
                 .addSnapshotListener { snapshots, error ->
                     if (error != null) {
                         Log.e(TAG, "Batch notices listener error: ${error.message}")
-                        _isListening.value = false
-                        _syncStatus.value = "Feed offline: ${error.localizedMessage ?: "Connection error"}"
-                        scheduleReconnect(college, course, admissionYear, batch)
+                        val isPerm = error.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
+                        val errorDesc = if (isPerm) {
+                            "Permission Denied: Configure Firestore rules in Firebase Console"
+                        } else {
+                            error.localizedMessage ?: "Connection error"
+                        }
+                        if (isPerm) {
+                            _isListening.value = false
+                            _syncStatus.value = "Feed offline: $errorDesc"
+                        }
+                        scheduleReconnect(college, course, admissionYear, batch, customBatchCode)
                         return@addSnapshotListener
                     }
 
                     if (snapshots != null) {
                         val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: localDeviceUid
                         val notices = snapshots.documents.mapNotNull { doc -> parseNotice(doc) }
+                            .sortedByDescending { it.timestamp }
                         _sharedNotices.value = notices
                         _isListening.value = true
                         _syncStatus.value = "Connected to $key"
@@ -185,62 +245,105 @@ class BatchNotificationSyncManager(
             assignmentListener = db.collection("shared_batches")
                 .document(key)
                 .collection("assignments")
-                .limit(80)
+                .limit(100)
                 .addSnapshotListener { snapshots, error ->
                     if (error != null) {
                         Log.e(TAG, "Batch assignments listener error: ${error.message}")
+                        val isPerm = error.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
+                        val errorDesc = if (isPerm) {
+                            "Permission Denied: Configure Firestore rules in Firebase Console"
+                        } else {
+                            error.localizedMessage ?: "Connection error"
+                        }
+                        if (isPerm) {
+                            _isListening.value = false
+                            _syncStatus.value = "Sync error: $errorDesc"
+                        }
+                        scheduleReconnect(college, course, admissionYear, batch, customBatchCode)
                         return@addSnapshotListener
                     }
 
                     if (snapshots != null) {
+                        _isListening.value = true
+                        _syncStatus.value = "Connected to $key"
                         val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: localDeviceUid
                         scope.launch {
-                            for (doc in snapshots.documents) {
-                                val asg = parseBatchAssignment(doc) ?: continue
-                                val localExisting = repository.getAssignmentByFirestoreId(asg.firestoreId)
-                                    ?: repository.findMatchingAssignment(asg.courseCode, asg.subject, asg.title, asg.dueDate)
+                            for (change in snapshots.documentChanges) {
+                                when (change.type) {
+                                    DocumentChange.Type.ADDED,
+                                    DocumentChange.Type.MODIFIED -> {
+                                        val asg = parseBatchAssignment(change.document) ?: continue
+                                        val localExisting = repository.getAssignmentByFirestoreId(asg.firestoreId)
+                                            ?: repository.findMatchingAssignment(asg.courseCode, asg.subject, asg.title, asg.dueDate)
 
-                                if (localExisting == null) {
-                                    val newAsg = Assignment(
-                                        courseCode = asg.courseCode,
-                                        subject = asg.subject,
-                                        title = asg.title,
-                                        dueDate = asg.dueDate,
-                                        priority = asg.priority,
-                                        status = asg.status,
-                                        type = asg.type,
-                                        notes = if (asg.notes.isNullOrBlank()) "Shared by ${asg.authorName}" else "${asg.notes} (Shared by ${asg.authorName})",
-                                        firestoreId = asg.firestoreId
-                                    )
-                                    repository.addAssignmentLocally(newAsg)
-                                    Log.d(TAG, "Inserted batch assignment: ${asg.title}")
-
-                                    val isLocallyPosted = locallyPostedFirestoreIds.contains(asg.firestoreId) ||
-                                            (asg.authorUid.isNotBlank() && asg.authorUid == currentUserId)
-
-                                    if (!isLocallyPosted) {
-                                        repository.addNotification(
-                                            InAppNotification(
-                                                title = "New Assignment: ${asg.subject}",
-                                                message = "'${asg.title}' added by ${asg.authorName} for your batch.",
-                                                timestamp = asg.timestamp,
-                                                isRead = false,
-                                                type = "assignment"
-                                            )
-                                        )
-                                        val notifId = asg.firestoreId.hashCode().let { if (it == Int.MIN_VALUE) 101 else kotlin.math.abs(it) % 100000 }
-                                        try {
-                                            NotificationHelper.showNotification(
-                                                context = application,
-                                                title = "New Assignment: ${asg.subject}",
-                                                message = "${asg.title} (Added by: ${asg.authorName})",
-                                                notificationId = notifId,
-                                                type = "assignment",
+                                        if (localExisting == null) {
+                                            val newAsg = Assignment(
+                                                courseCode = asg.courseCode.trim().uppercase(),
                                                 subject = asg.subject,
-                                                targetTime = asg.dueDate
+                                                title = asg.title,
+                                                dueDate = asg.dueDate,
+                                                priority = asg.priority,
+                                                status = asg.status,
+                                                type = asg.type,
+                                                notes = if (asg.notes.isNullOrBlank()) "Shared by ${asg.authorName}" else "${asg.notes} (Shared by ${asg.authorName})",
+                                                firestoreId = asg.firestoreId
                                             )
-                                        } catch (e: Exception) {
-                                            Log.e(TAG, "Notification show error", e)
+                                            val insertedId = repository.addAssignmentLocally(newAsg)
+                                            Log.d(TAG, "Inserted batch assignment: ${asg.title} (ID: $insertedId)")
+
+                                            val isLocallyPosted = locallyPostedFirestoreIds.contains(asg.firestoreId) ||
+                                                    (asg.authorUid.isNotBlank() && asg.authorUid == currentUserId)
+
+                                            if (!isLocallyPosted) {
+                                                repository.addNotification(
+                                                    InAppNotification(
+                                                        title = "New Assignment: ${asg.subject}",
+                                                        message = "'${asg.title}' added by ${asg.authorName} for your batch.",
+                                                        timestamp = asg.timestamp,
+                                                        isRead = false,
+                                                        type = "assignment"
+                                                    )
+                                                )
+                                                val notifId = asg.firestoreId.hashCode().let { if (it == Int.MIN_VALUE) 101 else kotlin.math.abs(it) % 100000 }
+                                                try {
+                                                    NotificationHelper.showNotification(
+                                                        context = application,
+                                                        title = "New Assignment: ${asg.subject}",
+                                                        message = "${asg.title} (Added by: ${asg.authorName})",
+                                                        notificationId = notifId,
+                                                        type = "assignment",
+                                                        subject = asg.subject,
+                                                        targetTime = asg.dueDate
+                                                    )
+                                                } catch (e: Exception) {
+                                                    Log.e(TAG, "Notification show error", e)
+                                                }
+
+                                                // Schedule reminder alarm for classmates
+                                                try {
+                                                    AcademicNotificationManager.scheduleNotification(
+                                                        context = application,
+                                                        type = "assignment",
+                                                        itemId = "asg_$insertedId",
+                                                        title = "Upcoming Assignment Alert",
+                                                        message = "Assignment '${asg.title}' for ${asg.subject} is due soon!",
+                                                        targetTime = asg.dueDate,
+                                                        subject = asg.subject,
+                                                        minutesBefore = 24 * 60
+                                                    )
+                                                } catch (e: Exception) {
+                                                    Log.w(TAG, "Failed scheduling reminder alarm for shared assignment", e)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    DocumentChange.Type.REMOVED -> {
+                                        val firestoreId = change.document.getString("firestoreId") ?: change.document.id
+                                        val localExisting = repository.getAssignmentByFirestoreId(firestoreId)
+                                        if (localExisting != null) {
+                                            repository.deleteAssignment(localExisting.id)
+                                            AcademicNotificationManager.cancelByItemId(application, "asg_${localExisting.id}")
+                                            Log.d(TAG, "Removed deleted batch assignment: ${localExisting.title}")
                                         }
                                     }
                                 }
@@ -253,61 +356,104 @@ class BatchNotificationSyncManager(
             assessmentListener = db.collection("shared_batches")
                 .document(key)
                 .collection("assessments")
-                .limit(80)
+                .limit(100)
                 .addSnapshotListener { snapshots, error ->
                     if (error != null) {
                         Log.e(TAG, "Batch assessments listener error: ${error.message}")
+                        val isPerm = error.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
+                        val errorDesc = if (isPerm) {
+                            "Permission Denied: Configure Firestore rules in Firebase Console"
+                        } else {
+                            error.localizedMessage ?: "Connection error"
+                        }
+                        if (isPerm) {
+                            _isListening.value = false
+                            _syncStatus.value = "Sync error: $errorDesc"
+                        }
+                        scheduleReconnect(college, course, admissionYear, batch, customBatchCode)
                         return@addSnapshotListener
                     }
 
                     if (snapshots != null) {
+                        _isListening.value = true
+                        _syncStatus.value = "Connected to $key"
                         val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: localDeviceUid
                         scope.launch {
-                            for (doc in snapshots.documents) {
-                                val asm = parseBatchAssessment(doc) ?: continue
-                                val localExisting = repository.getAssessmentByFirestoreId(asm.firestoreId)
-                                    ?: repository.findMatchingAssessment(asm.courseCode, asm.subject, asm.title, asm.date)
+                            for (change in snapshots.documentChanges) {
+                                when (change.type) {
+                                    DocumentChange.Type.ADDED,
+                                    DocumentChange.Type.MODIFIED -> {
+                                        val asm = parseBatchAssessment(change.document) ?: continue
+                                        val localExisting = repository.getAssessmentByFirestoreId(asm.firestoreId)
+                                            ?: repository.findMatchingAssessment(asm.courseCode, asm.subject, asm.title, asm.date)
 
-                                if (localExisting == null) {
-                                    val newAsm = Assessment(
-                                        courseCode = asm.courseCode,
-                                        subject = asm.subject,
-                                        title = asm.title,
-                                        date = asm.date,
-                                        type = asm.type,
-                                        status = asm.status,
-                                        syllabus = asm.syllabus,
-                                        firestoreId = asm.firestoreId
-                                    )
-                                    repository.addAssessmentLocally(newAsm)
-                                    Log.d(TAG, "Inserted batch assessment: ${asm.title}")
-
-                                    val isLocallyPosted = locallyPostedFirestoreIds.contains(asm.firestoreId) ||
-                                            (asm.authorUid.isNotBlank() && asm.authorUid == currentUserId)
-
-                                    if (!isLocallyPosted) {
-                                        repository.addNotification(
-                                            InAppNotification(
-                                                title = "New Assessment: ${asm.subject}",
-                                                message = "'${asm.title}' scheduled by ${asm.authorName} for your batch.",
-                                                timestamp = asm.timestamp,
-                                                isRead = false,
-                                                type = "exam"
-                                            )
-                                        )
-                                        val notifId = asm.firestoreId.hashCode().let { if (it == Int.MIN_VALUE) 202 else kotlin.math.abs(it) % 100000 }
-                                        try {
-                                            NotificationHelper.showNotification(
-                                                context = application,
-                                                title = "New Assessment: ${asm.subject}",
-                                                message = "${asm.title} (Scheduled by: ${asm.authorName})",
-                                                notificationId = notifId,
-                                                type = "assessment",
+                                        if (localExisting == null) {
+                                            val newAsm = Assessment(
+                                                courseCode = asm.courseCode.trim().uppercase(),
                                                 subject = asm.subject,
-                                                targetTime = asm.date
+                                                title = asm.title,
+                                                date = asm.date,
+                                                type = asm.type,
+                                                status = asm.status,
+                                                syllabus = asm.syllabus,
+                                                firestoreId = asm.firestoreId
                                             )
-                                        } catch (e: Exception) {
-                                            Log.e(TAG, "Notification show error", e)
+                                            val insertedId = repository.addAssessmentLocally(newAsm)
+                                            Log.d(TAG, "Inserted batch assessment: ${asm.title} (ID: $insertedId)")
+
+                                            val isLocallyPosted = locallyPostedFirestoreIds.contains(asm.firestoreId) ||
+                                                    (asm.authorUid.isNotBlank() && asm.authorUid == currentUserId)
+
+                                            if (!isLocallyPosted) {
+                                                repository.addNotification(
+                                                    InAppNotification(
+                                                        title = "New Assessment: ${asm.subject}",
+                                                        message = "'${asm.title}' scheduled by ${asm.authorName} for your batch.",
+                                                        timestamp = asm.timestamp,
+                                                        isRead = false,
+                                                        type = "exam"
+                                                    )
+                                                )
+                                                val notifId = asm.firestoreId.hashCode().let { if (it == Int.MIN_VALUE) 202 else kotlin.math.abs(it) % 100000 }
+                                                try {
+                                                    NotificationHelper.showNotification(
+                                                        context = application,
+                                                        title = "New Assessment: ${asm.subject}",
+                                                        message = "${asm.title} (Scheduled by: ${asm.authorName})",
+                                                        notificationId = notifId,
+                                                        type = "assessment",
+                                                        subject = asm.subject,
+                                                        targetTime = asm.date
+                                                    )
+                                                } catch (e: Exception) {
+                                                    Log.e(TAG, "Notification show error", e)
+                                                }
+
+                                                // Schedule reminder alarm for classmates
+                                                try {
+                                                    AcademicNotificationManager.scheduleNotification(
+                                                        context = application,
+                                                        type = "assessment",
+                                                        itemId = "asm_$insertedId",
+                                                        title = "Upcoming Assessment Reminder",
+                                                        message = "Assessment '${asm.title}' for ${asm.subject} is scheduled soon!",
+                                                        targetTime = asm.date,
+                                                        subject = asm.subject,
+                                                        minutesBefore = 30
+                                                    )
+                                                } catch (e: Exception) {
+                                                    Log.w(TAG, "Failed scheduling reminder alarm for shared assessment", e)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    DocumentChange.Type.REMOVED -> {
+                                        val firestoreId = change.document.getString("firestoreId") ?: change.document.id
+                                        val localExisting = repository.getAssessmentByFirestoreId(firestoreId)
+                                        if (localExisting != null) {
+                                            repository.deleteAssessment(localExisting.id)
+                                            AcademicNotificationManager.cancelByItemId(application, "asm_${localExisting.id}")
+                                            Log.d(TAG, "Removed deleted batch assessment: ${localExisting.title}")
                                         }
                                     }
                                 }
@@ -319,18 +465,19 @@ class BatchNotificationSyncManager(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to register batch snapshot listeners", e)
             _isListening.value = false
-            _syncStatus.value = "Error: ${e.localizedMessage}"
-            scheduleReconnect(college, course, admissionYear, batch)
+            val isPerm = e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
+            _syncStatus.value = if (isPerm) "Permission Denied: Configure Firestore rules in Firebase Console" else "Error: ${e.localizedMessage}"
+            scheduleReconnect(college, course, admissionYear, batch, customBatchCode)
         }
     }
 
-    private fun scheduleReconnect(college: String, course: String, admissionYear: Int, batch: String) {
+    private fun scheduleReconnect(college: String, course: String, admissionYear: Int, batch: String, customBatchCode: String? = null) {
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
             delay(5000)
             if (!_isListening.value) {
                 Log.i(TAG, "Retrying batch sync connection...")
-                startListeningToBatch(college, course, admissionYear, batch)
+                startListeningToBatch(college, course, admissionYear, batch, customBatchCode)
             }
         }
     }
@@ -469,11 +616,11 @@ class BatchNotificationSyncManager(
         course: String,
         admissionYear: Int,
         batch: String,
-        authorName: String
+        authorName: String,
+        customBatchCode: String? = null
     ): Result<String> {
         return try {
-            locallyPostedFirestoreIds.add(assignment.firestoreId)
-            val key = computeBatchKey(college, course, admissionYear, batch)
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
             val uid = ensureAuthenticated()
             val docRef = db.collection("shared_batches")
                 .document(key)
@@ -483,7 +630,7 @@ class BatchNotificationSyncManager(
             val data = hashMapOf(
                 "firestoreId" to assignment.firestoreId,
                 "batchKey" to key,
-                "courseCode" to assignment.courseCode,
+                "courseCode" to assignment.courseCode.trim().uppercase(),
                 "subject" to assignment.subject,
                 "title" to assignment.title,
                 "dueDate" to assignment.dueDate,
@@ -496,6 +643,8 @@ class BatchNotificationSyncManager(
                 "timestamp" to System.currentTimeMillis()
             )
             docRef.set(data).await()
+            locallyPostedFirestoreIds.add(assignment.firestoreId)
+            _syncStatus.value = "Synced with $key"
             Log.i(TAG, "Shared assignment '${assignment.title}' to batch $key")
 
             // Confirmation alert for the author
@@ -516,8 +665,15 @@ class BatchNotificationSyncManager(
 
             Result.success(docRef.id)
         } catch (e: Exception) {
+            val isPerm = e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
+            val errorMsg = if (isPerm) {
+                "Firebase Permission Denied: Allow shared_batches read/write in Firebase Console"
+            } else {
+                e.localizedMessage ?: "Unknown network error"
+            }
+            _syncStatus.value = "Share failed: $errorMsg"
             Log.e(TAG, "Error posting shared assignment", e)
-            Result.failure(e)
+            Result.failure(Exception(errorMsg, e))
         }
     }
 
@@ -527,11 +683,11 @@ class BatchNotificationSyncManager(
         course: String,
         admissionYear: Int,
         batch: String,
-        authorName: String
+        authorName: String,
+        customBatchCode: String? = null
     ): Result<String> {
         return try {
-            locallyPostedFirestoreIds.add(assessment.firestoreId)
-            val key = computeBatchKey(college, course, admissionYear, batch)
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
             val uid = ensureAuthenticated()
             val docRef = db.collection("shared_batches")
                 .document(key)
@@ -541,7 +697,7 @@ class BatchNotificationSyncManager(
             val data = hashMapOf(
                 "firestoreId" to assessment.firestoreId,
                 "batchKey" to key,
-                "courseCode" to assessment.courseCode,
+                "courseCode" to assessment.courseCode.trim().uppercase(),
                 "subject" to assessment.subject,
                 "title" to assessment.title,
                 "date" to assessment.date,
@@ -553,6 +709,8 @@ class BatchNotificationSyncManager(
                 "timestamp" to System.currentTimeMillis()
             )
             docRef.set(data).await()
+            locallyPostedFirestoreIds.add(assessment.firestoreId)
+            _syncStatus.value = "Synced with $key"
             Log.i(TAG, "Shared assessment '${assessment.title}' to batch $key")
 
             // Confirmation alert for the author
@@ -573,8 +731,15 @@ class BatchNotificationSyncManager(
 
             Result.success(docRef.id)
         } catch (e: Exception) {
+            val isPerm = e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
+            val errorMsg = if (isPerm) {
+                "Firebase Permission Denied: Allow shared_batches read/write in Firebase Console"
+            } else {
+                e.localizedMessage ?: "Unknown network error"
+            }
+            _syncStatus.value = "Share failed: $errorMsg"
             Log.e(TAG, "Error posting shared assessment", e)
-            Result.failure(e)
+            Result.failure(Exception(errorMsg, e))
         }
     }
 
@@ -583,10 +748,11 @@ class BatchNotificationSyncManager(
         college: String,
         course: String,
         admissionYear: Int,
-        batch: String
+        batch: String,
+        customBatchCode: String? = null
     ) {
         try {
-            val key = computeBatchKey(college, course, admissionYear, batch)
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
             db.collection("shared_batches")
                 .document(key)
                 .collection("assignments")
@@ -603,10 +769,11 @@ class BatchNotificationSyncManager(
         college: String,
         course: String,
         admissionYear: Int,
-        batch: String
+        batch: String,
+        customBatchCode: String? = null
     ) {
         try {
-            val key = computeBatchKey(college, course, admissionYear, batch)
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
             db.collection("shared_batches")
                 .document(key)
                 .collection("assessments")
@@ -627,17 +794,16 @@ class BatchNotificationSyncManager(
         message: String,
         authorName: String,
         category: String = "batch_notice",
-        urgent: Boolean = false
+        urgent: Boolean = false,
+        customBatchCode: String? = null
     ): Result<String> {
         return try {
-            val key = computeBatchKey(college, course, admissionYear, batch)
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
             val uid = ensureAuthenticated()
             val docRef = db.collection("shared_batches")
                 .document(key)
                 .collection("notices")
                 .document()
-
-            locallyPostedNoticeIds.add(docRef.id)
 
             val effectiveBatchName = batch.ifBlank { "Batch A" }
             val noticeData = hashMapOf(
@@ -653,6 +819,7 @@ class BatchNotificationSyncManager(
             )
 
             docRef.set(noticeData).await()
+            locallyPostedNoticeIds.add(docRef.id)
 
             val alertType = when (category) {
                 "shared_assignment" -> "assignment"
@@ -685,8 +852,142 @@ class BatchNotificationSyncManager(
 
             Result.success(docRef.id)
         } catch (e: Exception) {
+            val isPerm = e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
+            val errorMsg = if (isPerm) {
+                "Firebase Permission Denied: Allow shared_batches read/write in Firebase Console"
+            } else {
+                e.localizedMessage ?: "Unknown network error"
+            }
+            _syncStatus.value = "Broadcast failed: $errorMsg"
             Log.e(TAG, "Error posting batch notice", e)
-            Result.failure(e)
+            Result.failure(Exception(errorMsg, e))
+        }
+    }
+
+    suspend fun testBatchSyncConnection(
+        college: String,
+        course: String,
+        admissionYear: Int,
+        batch: String,
+        customBatchCode: String? = null
+    ): Result<String> {
+        return try {
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
+            ensureAuthenticated()
+            val pingDoc = db.collection("shared_batches")
+                .document(key)
+                .collection("_health")
+                .document("ping")
+            pingDoc.set(mapOf("ping" to System.currentTimeMillis(), "status" to "ok")).await()
+            _isListening.value = true
+            _syncStatus.value = "Connected to $key"
+            Result.success("Success: Channel '$key' is online and write permissions verified!")
+        } catch (e: Exception) {
+            val isPerm = e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
+            val errorMsg = if (isPerm) {
+                "Firebase Permission Denied: Your Firestore rules are blocking writes. In Firebase Console, ensure rules allow read/write for 'shared_batches/{batchKey}/{document=**}', or enable Anonymous Authentication."
+            } else {
+                "Connection failed: ${e.localizedMessage ?: "Network error"}"
+            }
+            _syncStatus.value = errorMsg
+            Result.failure(Exception(errorMsg, e))
+        }
+    }
+
+    suspend fun fetchAndSyncBatchNow(
+        college: String,
+        course: String,
+        admissionYear: Int,
+        batch: String,
+        customBatchCode: String? = null
+    ): Result<Int> {
+        return try {
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
+            ensureAuthenticated()
+            var importedCount = 0
+
+            // 1. Fetch assignments
+            val asgSnapshots = db.collection("shared_batches")
+                .document(key)
+                .collection("assignments")
+                .limit(100)
+                .get()
+                .await()
+
+            for (doc in asgSnapshots.documents) {
+                val asg = parseBatchAssignment(doc) ?: continue
+                val localExisting = repository.getAssignmentByFirestoreId(asg.firestoreId)
+                    ?: repository.findMatchingAssignment(asg.courseCode, asg.subject, asg.title, asg.dueDate)
+                if (localExisting == null) {
+                    val newAsg = Assignment(
+                        courseCode = asg.courseCode.trim().uppercase(),
+                        subject = asg.subject,
+                        title = asg.title,
+                        dueDate = asg.dueDate,
+                        priority = asg.priority,
+                        status = asg.status,
+                        type = asg.type,
+                        notes = if (asg.notes.isNullOrBlank()) "Shared by ${asg.authorName}" else "${asg.notes} (Shared by ${asg.authorName})",
+                        firestoreId = asg.firestoreId
+                    )
+                    repository.addAssignmentLocally(newAsg)
+                    importedCount++
+                }
+            }
+
+            // 2. Fetch assessments
+            val asmSnapshots = db.collection("shared_batches")
+                .document(key)
+                .collection("assessments")
+                .limit(100)
+                .get()
+                .await()
+
+            for (doc in asmSnapshots.documents) {
+                val asm = parseBatchAssessment(doc) ?: continue
+                val localExisting = repository.getAssessmentByFirestoreId(asm.firestoreId)
+                    ?: repository.findMatchingAssessment(asm.courseCode, asm.subject, asm.title, asm.date)
+                if (localExisting == null) {
+                    val newAsm = Assessment(
+                        courseCode = asm.courseCode.trim().uppercase(),
+                        subject = asm.subject,
+                        title = asm.title,
+                        date = asm.date,
+                        type = asm.type,
+                        status = asm.status,
+                        syllabus = asm.syllabus,
+                        firestoreId = asm.firestoreId
+                    )
+                    repository.addAssessmentLocally(newAsm)
+                    importedCount++
+                }
+            }
+
+            // 3. Fetch notices
+            val noticeSnapshots = db.collection("shared_batches")
+                .document(key)
+                .collection("notices")
+                .limit(50)
+                .get()
+                .await()
+
+            val notices = noticeSnapshots.documents.mapNotNull { doc -> parseNotice(doc) }.sortedByDescending { it.timestamp }
+            _sharedNotices.value = notices
+            val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: localDeviceUid
+            processIncomingNotices(notices, currentUserId, false)
+
+            _isListening.value = true
+            _syncStatus.value = "Connected to $key"
+            Result.success(importedCount)
+        } catch (e: Exception) {
+            val isPerm = e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
+            val errorMsg = if (isPerm) {
+                "Firebase Permission Denied: Allow shared_batches read/write in Firebase Console"
+            } else {
+                e.localizedMessage ?: "Network error during sync"
+            }
+            _syncStatus.value = "Sync error: $errorMsg"
+            Result.failure(Exception(errorMsg, e))
         }
     }
 }

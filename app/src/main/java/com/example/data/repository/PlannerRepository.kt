@@ -551,4 +551,28 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
             )
         }
     }
+
+    // Completed Syllabus Topics
+    fun getCompletedTopicsForCourse(courseCode: String): Flow<List<CompletedSyllabusTopic>> =
+        plannerDao.getCompletedTopicsForCourse(courseCode)
+
+    fun getCompletedTopicsForYear(courseCode: String, academicYear: String): Flow<List<CompletedSyllabusTopic>> =
+        plannerDao.getCompletedTopicsForYear(courseCode, academicYear)
+
+    suspend fun addCompletedTopic(topic: CompletedSyllabusTopic): Long {
+        return plannerDao.insertCompletedTopic(topic)
+    }
+
+    suspend fun updateCompletedTopic(topic: CompletedSyllabusTopic) {
+        plannerDao.updateCompletedTopic(topic)
+    }
+
+    suspend fun deleteCompletedTopic(id: Int) {
+        plannerDao.deleteCompletedTopicById(id)
+    }
+
+    suspend fun getCompletedTopicById(id: Int): CompletedSyllabusTopic? {
+        return plannerDao.getCompletedTopicById(id)
+    }
 }
+
