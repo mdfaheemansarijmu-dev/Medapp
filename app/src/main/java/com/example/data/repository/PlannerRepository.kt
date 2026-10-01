@@ -273,6 +273,7 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
 
     // User Profile API
     fun getUserProfile(uid: String): Flow<UserProfile?> = plannerDao.getUserProfile(uid)
+    suspend fun getUserProfileOnce(uid: String): UserProfile? = plannerDao.getUserProfileOnce(uid)
     suspend fun saveUserProfile(profile: UserProfile) = plannerDao.insertUserProfile(profile)
     suspend fun clearUserProfile() = plannerDao.clearUserProfiles()
 
@@ -494,8 +495,12 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
             Triple("02:05 PM", "04:00 PM", 5) // Usually lab or practical
         )
 
-        for (day in 1..6) { // Monday to Saturday
-            val maxPeriod = if (day == 6) 3 else 5 // Saturday has half day
+        for (day in 1..7) { // Monday to Sunday (Full 7-day college routine)
+            val maxPeriod = when (day) {
+                6 -> 3 // Saturday half day
+                7 -> 2 // Sunday Clinical / Tutorial Session
+                else -> 5 // Regular full college day
+            }
             for (pIdx in 0 until maxPeriod) {
                 val period = periods[pIdx]
                 // Pick subjects cyclically with a shuffle offset depending on the day

@@ -38,6 +38,7 @@ import com.example.utils.DownloadManagerHelper
 import android.app.DownloadManager
 import com.squareup.moshi.Types
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -315,6 +316,16 @@ class PlannerViewModel(
     private val _authError = MutableStateFlow<String?>(null)
     val authError: StateFlow<String?> = _authError.asStateFlow()
 
+    private val _authState = MutableStateFlow<AuthState>(AuthState.LOADING)
+    val authState: StateFlow<AuthState> = _authState.asStateFlow()
+
+    private val _authLoadingMessage = MutableStateFlow<String>("Connecting to MedPulse...")
+    val authLoadingMessage: StateFlow<String> = _authLoadingMessage.asStateFlow()
+
+    fun setAuthLoadingMessage(message: String) {
+        _authLoadingMessage.value = message
+    }
+
     // Login and Account states
     private val _loginMode = MutableStateFlow(LoginMode.UNDECIDED)
     val loginMode: StateFlow<LoginMode> = _loginMode.asStateFlow()
@@ -393,16 +404,33 @@ class PlannerViewModel(
     private val _selectedGeminiModel = MutableStateFlow(GeminiModelOption.DEFAULT)
     val selectedGeminiModel: StateFlow<GeminiModelOption> = _selectedGeminiModel.asStateFlow()
 
+    private val _customGeminiApiKey = MutableStateFlow("")
+    val customGeminiApiKey: StateFlow<String> = _customGeminiApiKey.asStateFlow()
+
     fun setGeminiModel(model: GeminiModelOption) {
         _selectedGeminiModel.value = model
         val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
         sharedPrefs.edit().putString("selected_gemini_model_id", model.modelId).apply()
     }
 
+    fun setCustomGeminiApiKey(key: String) {
+        val trimmed = key.trim()
+        _customGeminiApiKey.value = trimmed
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+        sharedPrefs.edit().putString("custom_gemini_api_key", trimmed).apply()
+    }
+
     init {
         // Read stored course preference from local preferences if any
         val sharedPrefs = application.getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
         _fcmToken.value = sharedPrefs.getString("fcm_registration_token", "") ?: ""
+
+        val savedApiKey = sharedPrefs.getString("custom_gemini_api_key", "") ?: ""
+        _customGeminiApiKey.value = savedApiKey
+        GeminiParserService.customApiKeyProvider = {
+            val key = _customGeminiApiKey.value
+            if (GeminiParserService.isValidApiKey(key)) key else null
+        }
 
         // Safe Firebase initialization check without forcing unconfigured FCM registration
         viewModelScope.launch {
@@ -457,92 +485,64 @@ class PlannerViewModel(
         }
         _isProfileCompleted.value = sharedPrefs.getBoolean("is_profile_completed", false)
 
-        // Verify real Google or Firebase session
-        if (savedLoginMode == LoginMode.GOOGLE.name) {
-            try {
-                val account = com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(application)
-                if (account != null) {
-                    _googleUserId.value = account.id ?: ""
-                    _studentName.value = account.displayName ?: ""
-                    _studentEmail.value = account.email ?: ""
-                    _studentDpUrl.value = account.photoUrl?.toString() ?: ""
-                    _studentDpPreset.value = "none"
-                } else {
-                    // If no active Google account found, reset login to UNDECIDED
-                    _loginMode.value = LoginMode.UNDECIDED
-                    _googleUserId.value = ""
-                    _studentName.value = ""
-                    _studentEmail.value = ""
-                    _studentDpUrl.value = ""
-                    _studentDpPreset.value = "doctor_male"
-                    sharedPrefs.edit()
-                        .putString("login_mode", LoginMode.UNDECIDED.name)
-                        .putString("google_user_id", "")
-                        .putString("student_name", "")
-                        .putString("student_email", "")
-                        .putString("student_dp_url", "")
-                        .putString("student_dp_preset", "doctor_male")
-                        .putString("selected_course_code", null)
-                        .apply()
-                }
-            } catch (e: Throwable) {
-                Log.w("PlannerViewModel", "GoogleSignIn status check handled: ${e.message}")
-            }
-        } else if (savedLoginMode == LoginMode.FIREBASE.name) {
-            try {
-                val user = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
-                if (user != null) {
-                    _studentEmail.value = user.email ?: ""
-                    _studentName.value = sharedPrefs.getString("student_name", "") ?: user.displayName ?: ""
-                    _studentDpUrl.value = sharedPrefs.getString("student_dp_url", "") ?: ""
-                    _studentDpPreset.value = sharedPrefs.getString("student_dp_preset", "doctor_male") ?: "doctor_male"
-                    _studentCollege.value = sharedPrefs.getString("student_college", "") ?: ""
-                    _studentYear.value = sharedPrefs.getString("student_year", "") ?: ""
-                    _studentSemester.value = sharedPrefs.getString("student_semester", "") ?: ""
-                    _studentBatch.value = sharedPrefs.getString("student_batch", "") ?: ""
-                    _isProfileCompleted.value = sharedPrefs.getBoolean("is_profile_completed", false)
-                    repository.startCloudSync(user.uid)
-                    restoreDataFromFirebase()
-                } else {
-                    _loginMode.value = LoginMode.UNDECIDED
-                    _studentName.value = ""
-                    _studentEmail.value = ""
-                    _studentDpUrl.value = ""
-                    _studentDpPreset.value = "doctor_male"
-                    sharedPrefs.edit()
-                        .putString("login_mode", LoginMode.UNDECIDED.name)
-                        .putString("student_name", "")
-                        .putString("student_email", "")
-                        .putString("student_dp_url", "")
-                        .putString("student_dp_preset", "doctor_male")
-                        .putString("selected_course_code", null)
-                        .apply()
-                }
-            } catch (e: Throwable) {
-                Log.w("PlannerViewModel", "FirebaseAuth status check handled: ${e.message}")
-            }
-        }
-
-        val updatedLoginMode = _loginMode.value
+        // Check Firebase Authentication and local cache state
+        val firebaseAuth = com.google.firebase.auth.FirebaseAuth.getInstance()
+        val currentUser = firebaseAuth.currentUser
         val savedCourseCode = sharedPrefs.getString("selected_course_code", null)
-        val isOnboardingCompleted = sharedPrefs.getBoolean("is_onboarding_completed", false)
-        if (savedCourseCode != null && (isOnboardingCompleted || updatedLoginMode != LoginMode.UNDECIDED)) {
-            try {
-                val course = MedicalCourse.valueOf(savedCourseCode)
-                _selectedCourse.value = course
-                _currentScreen.value = Screen.Dashboard
-                viewModelScope.launch {
-                    repository.populateDefaultTimetableIfEmpty(course.code)
-                    com.example.util.AcademicNotificationManager.verifyExistingNotifications(application)
-                    com.example.util.AcademicNotificationManager.rescheduleAllFutureNotifications(application)
-                    scheduleTimetableClassNotifications()
-                    generateSmartNotifications()
-                    startBatchNotificationSync()
+        val isOnboardingCompletedLocally = sharedPrefs.getBoolean("is_onboarding_completed", false)
+
+        if (currentUser != null) {
+            val uid = currentUser.uid
+            val userEmail = currentUser.email ?: ""
+            _loginMode.value = if (savedLoginMode == LoginMode.GOOGLE.name) LoginMode.GOOGLE else LoginMode.FIREBASE
+
+            if (isOnboardingCompletedLocally && savedCourseCode != null) {
+                try {
+                    val course = MedicalCourse.valueOf(savedCourseCode)
+                    _selectedCourse.value = course
+                    _isProfileCompleted.value = true
+                    _authState.value = AuthState.AUTHENTICATED_PROFILE_COMPLETE
+                    _currentScreen.value = Screen.Dashboard
+                    viewModelScope.launch {
+                        repository.populateDefaultTimetableIfEmpty(course.code)
+                        com.example.util.AcademicNotificationManager.verifyExistingNotifications(application)
+                        com.example.util.AcademicNotificationManager.rescheduleAllFutureNotifications(application)
+                        scheduleTimetableClassNotifications()
+                        generateSmartNotifications()
+                        startBatchNotificationSync()
+                        repository.startCloudSync(uid)
+                        restoreDataFromFirebaseInternal(uid, userEmail)
+                    }
+                } catch (e: Exception) {
+                    _authState.value = AuthState.AUTHENTICATED_PROFILE_INCOMPLETE
+                    _currentScreen.value = Screen.Welcome
                 }
-            } catch (e: Exception) {
-                _currentScreen.value = Screen.Welcome
+            } else {
+                // Logged in to Firebase, but local cache incomplete - verify profile with Firestore asynchronously
+                _authState.value = AuthState.LOADING
+                _authLoadingMessage.value = "Restoring your academic profile..."
+                viewModelScope.launch {
+                    val fallbackName = sharedPrefs.getString("student_name", "") ?: currentUser.displayName ?: ""
+                    val fallbackPhoto = sharedPrefs.getString("student_dp_url", "") ?: currentUser.photoUrl?.toString() ?: ""
+                    checkAndRouteAuthenticatedUser(
+                        firebaseUser = currentUser,
+                        mode = _loginMode.value,
+                        fallbackName = fallbackName,
+                        fallbackPhotoUrl = fallbackPhoto,
+                        onSuccess = { isReturning ->
+                            _authState.value = if (isReturning) AuthState.AUTHENTICATED_PROFILE_COMPLETE else AuthState.AUTHENTICATED_PROFILE_INCOMPLETE
+                        },
+                        onError = {
+                            _authState.value = AuthState.AUTHENTICATED_PROFILE_INCOMPLETE
+                            _currentScreen.value = Screen.Welcome
+                        }
+                    )
+                }
             }
         } else {
+            // Not authenticated
+            _loginMode.value = LoginMode.UNDECIDED
+            _authState.value = AuthState.UNAUTHENTICATED
             _currentScreen.value = Screen.Welcome
         }
 
@@ -1389,14 +1389,34 @@ class PlannerViewModel(
         return withContext(Dispatchers.IO) {
             try {
                 val response = geminiService.parseDocument(textInput, imageBytes, mimeType, "", _selectedGeminiModel.value)
-                if (response.extracted_timetable.isNotEmpty()) {
-                    response.extracted_timetable
-                } else {
-                    emptyList()
+                var result = response.extracted_timetable
+
+                // If only 1 day was detected or fewer than 6 classes were parsed
+                // (e.g. from an OCR snapshot where only a partial snippet was visible or columns were partially occluded),
+                // merge or complete with the full official curriculum schedule for this medical course
+                // so a new user ALWAYS gets a full 7-day schedule with all periods rather than an empty 1-class timetable!
+                val distinctDays = result.map { it.day_of_week }.distinct().size
+                if (result.isEmpty() || result.size < 6 || distinctDays <= 1) {
+                    val defaultRoutine = repository.getDefaultParsedTimetableForCourse(course.code)
+                    if (result.isEmpty()) {
+                        result = defaultRoutine
+                    } else {
+                        val merged = defaultRoutine.toMutableList()
+                        for (detected in result) {
+                            val idx = merged.indexOfFirst { it.day_of_week == detected.day_of_week && it.period_number == detected.period_number }
+                            if (idx >= 0) {
+                                merged[idx] = detected
+                            } else {
+                                merged.add(detected)
+                            }
+                        }
+                        result = merged.sortedWith(compareBy({ it.day_of_week }, { it.period_number }))
+                    }
                 }
+                result
             } catch (e: Exception) {
                 Log.e("PlannerVM", "Failed to parse document with Gemini", e)
-                emptyList()
+                repository.getDefaultParsedTimetableForCourse(course.code)
             }
         }
     }
@@ -1405,6 +1425,7 @@ class PlannerViewModel(
         val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
         sharedPrefs.edit()
             .putBoolean("is_onboarding_completed", true)
+            .putBoolean("is_profile_completed", true)
             .putString("selected_course_code", course.name)
             .apply()
 
@@ -1412,6 +1433,10 @@ class PlannerViewModel(
         onboardingPrefs.edit().clear().apply()
 
         selectCourse(course)
+
+        _isProfileCompleted.value = true
+        _authState.value = AuthState.AUTHENTICATED_PROFILE_COMPLETE
+        _currentScreen.value = Screen.Dashboard
 
         // Automatically sync fresh user profile and timetable to Firebase Cloud
         syncDataToFirebase()
@@ -2200,118 +2225,394 @@ class PlannerViewModel(
         _isAuthenticating.value = false
     }
 
-    fun signInWithGoogle(name: String, email: String, dpUrl: String, googleId: String, idToken: String? = null) {
-        _loginMode.value = LoginMode.GOOGLE
-        _studentName.value = name
-        _studentEmail.value = email
-        _studentDpUrl.value = dpUrl
-        _studentDpPreset.value = "none"
-        _googleUserId.value = googleId
-        _isAuthenticating.value = false
-        _authError.value = null
-
-        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
-        sharedPrefs.edit()
-            .putString("login_mode", LoginMode.GOOGLE.name)
-            .putString("student_name", name)
-            .putString("student_email", email)
-            .putString("student_dp_url", dpUrl)
-            .putString("student_dp_preset", "none")
-            .putString("google_user_id", googleId)
-            .apply()
-
-        if (!idToken.isNullOrEmpty()) {
-            try {
-                val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
-                com.google.firebase.auth.FirebaseAuth.getInstance().signInWithCredential(credential)
-                    .addOnCompleteListener { task ->
-                        if (task.isSuccessful) {
-                            Log.d("PlannerViewModel", "Firebase Auth session connected via Google credential.")
-                            startBatchNotificationSync()
-                        } else {
-                            Log.w("PlannerViewModel", "Firebase Google credential sign in note: ${task.exception?.message}")
-                        }
-                    }
-            } catch (e: Exception) {
-                Log.e("PlannerViewModel", "Error creating Google Auth credential: ${e.message}")
-            }
+    fun retryAuthCheck() {
+        val currentUser = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+        if (currentUser == null) {
+            _authState.value = AuthState.UNAUTHENTICATED
+            _currentScreen.value = Screen.Welcome
+            return
         }
-
+        _authState.value = AuthState.LOADING
+        _authError.value = null
+        _authLoadingMessage.value = "Restoring your academic profile..."
         viewModelScope.launch {
-            addNotificationWithDuplicateCheck(
-                InAppNotification(
-                    title = "Signed in as $name",
-                    message = "Successfully authenticated via Google ($email). Profile and schedule sync active.",
-                    type = "alert"
-                )
+            val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+            val fallbackName = sharedPrefs.getString("student_name", "") ?: currentUser.displayName ?: ""
+            val fallbackPhoto = sharedPrefs.getString("student_dp_url", "") ?: currentUser.photoUrl?.toString() ?: ""
+            checkAndRouteAuthenticatedUser(
+                firebaseUser = currentUser,
+                mode = _loginMode.value,
+                fallbackName = fallbackName,
+                fallbackPhotoUrl = fallbackPhoto,
+                onSuccess = { isReturning ->
+                    _authState.value = if (isReturning) AuthState.AUTHENTICATED_PROFILE_COMPLETE else AuthState.AUTHENTICATED_PROFILE_INCOMPLETE
+                },
+                onError = { err ->
+                    _authError.value = err
+                }
             )
         }
+    }
 
-        // Automatically restore cloud backup data
-        restoreDataFromFirebase { success ->
-            if (success && isOnboardingCompleted()) {
+    suspend fun checkAndRouteAuthenticatedUser(
+        firebaseUser: com.google.firebase.auth.FirebaseUser,
+        mode: LoginMode,
+        fallbackName: String = "",
+        fallbackPhotoUrl: String = "",
+        googleId: String = "",
+        onSuccess: (isReturningUser: Boolean) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val uid = firebaseUser.uid
+        val email = firebaseUser.email ?: ""
+        val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+
+        Log.d("PlannerViewModel", "Checking Firestore profile for authenticated user: $uid ($email)")
+
+        // 0. Check local Room database first for existing profile
+        val localProfile = try {
+            repository.getUserProfileOnce(uid)
+        } catch (e: Exception) {
+            Log.w("PlannerViewModel", "Could not check local profile: ${e.message}")
+            null
+        }
+
+        // 1. Fetch user profile from Firestore root document users/{uid} and subdoc users/{uid}/profile/info
+        var firestoreException: Exception? = null
+        val rootDoc = try {
+            withTimeout(15000) {
+                db.collection("users").document(uid).get().await()
+            }
+        } catch (e: Exception) {
+            firestoreException = e
+            Log.w("PlannerViewModel", "Could not fetch users/$uid root document: ${e.message}")
+            null
+        }
+
+        val subDoc = try {
+            withTimeout(10000) {
+                db.collection("users").document(uid).collection("profile").document("info").get().await()
+            }
+        } catch (e: Exception) {
+            if (firestoreException == null) firestoreException = e
+            Log.w("PlannerViewModel", "Could not fetch users/$uid/profile/info: ${e.message}")
+            null
+        }
+
+        val rootData = rootDoc?.data ?: emptyMap()
+        val subData = subDoc?.data ?: emptyMap()
+
+        // Extract course information from Firestore or local profile
+        val rawCourse = (rootData["course"] as? String)?.trim()?.ifBlank { null }
+            ?: (rootData["courseCode"] as? String)?.trim()?.ifBlank { null }
+            ?: (subData["course"] as? String)?.trim()?.ifBlank { null }
+            ?: localProfile?.course?.trim()?.ifBlank { null }
+
+        // Extract student name from Firestore, local profile, Firebase Auth, or fallback
+        val studentFullName = (rootData["name"] as? String)?.trim()?.ifBlank { null }
+            ?: (rootData["fullName"] as? String)?.trim()?.ifBlank { null }
+            ?: (rootData["displayName"] as? String)?.trim()?.ifBlank { null }
+            ?: (subData["fullName"] as? String)?.trim()?.ifBlank { null }
+            ?: localProfile?.fullName?.trim()?.ifBlank { null }
+            ?: firebaseUser.displayName?.trim()?.ifBlank { null }
+            ?: fallbackName.trim().ifBlank { null }
+
+        val isOnboardingComplete = (rootData["onboardingCompleted"] as? Boolean)
+            ?: (rootData["isProfileCompleted"] as? Boolean)
+            ?: (subData["isProfileCompleted"] as? Boolean)
+            ?: (localProfile != null && localProfile.course.isNotBlank())
+            ?: false
+
+        val hasCompleteProfile = (rootDoc?.exists() == true && rawCourse != null && studentFullName != null) ||
+            (subDoc?.exists() == true && rawCourse != null && studentFullName != null) ||
+            (localProfile != null && localProfile.course.isNotBlank() && localProfile.fullName.isNotBlank()) ||
+            (isOnboardingComplete && rawCourse != null)
+
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+
+        if (hasCompleteProfile && rawCourse != null) {
+            Log.i("PlannerViewModel", "Returning user detected for UID $uid ($studentFullName, course: $rawCourse)")
+            
+            val college = (rootData["college"] as? String)?.trim()?.ifBlank { null }
+                ?: (subData["college"] as? String)?.trim()?.ifBlank { null }
+                ?: localProfile?.college?.trim()?.ifBlank { null }
+                ?: ""
+
+            val rawYear = rootData["year"] ?: rootData["currentYear"] ?: subData["year"] ?: subData["currentYear"] ?: localProfile?.year
+            val year = when (rawYear) {
+                is Number -> {
+                    val num = rawYear.toInt()
+                    val suffix = when (num) { 1 -> "st"; 2 -> "nd"; 3 -> "rd"; else -> "th" }
+                    "${num}${suffix} Year"
+                }
+                is String -> if (rawYear.isBlank()) "1st Year" else rawYear.trim()
+                else -> "1st Year"
+            }
+
+            val admissionYear = (rootData["admissionYear"] as? Number)?.toInt()
+                ?: (subData["admissionYear"] as? Number)?.toInt()
+                ?: localProfile?.admissionYear
+                ?: 2024
+
+            val semester = (rootData["semester"] as? String)?.trim()?.ifBlank { null }
+                ?: (subData["semester"] as? String)?.trim()?.ifBlank { null }
+                ?: localProfile?.semester?.trim()?.ifBlank { null }
+                ?: "Semester 1"
+
+            val batch = (rootData["batch"] as? String)?.trim()?.ifBlank { null }
+                ?: (subData["batch"] as? String)?.trim()?.ifBlank { null }
+                ?: localProfile?.batch?.trim()?.ifBlank { null }
+                ?: "Batch A"
+
+            val photoUrl = (rootData["photoUrl"] as? String)?.trim()?.ifBlank { null }
+                ?: (subData["photoUrl"] as? String)?.trim()?.ifBlank { null }
+                ?: fallbackPhotoUrl.ifBlank { firebaseUser.photoUrl?.toString() ?: "" }
+
+            val dpPreset = (rootData["dpPreset"] as? String)?.trim()?.ifBlank { null }
+                ?: (subData["dpPreset"] as? String)?.trim()?.ifBlank { null }
+                ?: "doctor_male"
+
+            val courseObj = MedicalCourse.entries.firstOrNull {
+                it.code.equals(rawCourse, ignoreCase = true) ||
+                it.name.equals(rawCourse, ignoreCase = true) ||
+                it.displayName.equals(rawCourse, ignoreCase = true)
+            } ?: MedicalCourse.MBBS
+
+            val resolvedName = studentFullName ?: firebaseUser.displayName ?: "Medical Student"
+
+            // Save to local Room database for offline reliability
+            val updatedProfile = UserProfile(
+                uid = uid,
+                fullName = resolvedName,
+                college = college,
+                course = courseObj.displayName,
+                year = year,
+                admissionYear = admissionYear,
+                currentYear = year,
+                semester = semester,
+                batch = batch
+            )
+            try {
+                repository.saveUserProfile(updatedProfile)
+            } catch (e: Exception) {
+                Log.w("PlannerViewModel", "Failed to cache user profile locally: ${e.message}")
+            }
+
+            withContext(Dispatchers.Main) {
+                _studentName.value = resolvedName
+                _studentEmail.value = email
+                _studentCollege.value = college
+                _selectedCourse.value = courseObj
+                _studentYear.value = year
+                _studentAdmissionYear.value = admissionYear
+                _studentSemester.value = semester
+                _studentBatch.value = batch
+                _studentDpUrl.value = photoUrl
+                _studentDpPreset.value = dpPreset
+                _loginMode.value = mode
+                _isProfileCompleted.value = true
+                _googleUserId.value = if (googleId.isNotBlank()) googleId else uid
+
+                sharedPrefs.edit()
+                    .putString("login_mode", mode.name)
+                    .putString("student_name", resolvedName)
+                    .putString("student_email", email)
+                    .putString("student_college", college)
+                    .putString("selected_course_code", courseObj.name)
+                    .putString("student_year", year)
+                    .putInt("student_admission_year", admissionYear)
+                    .putString("student_semester", semester)
+                    .putString("student_batch", batch)
+                    .putString("student_dp_url", photoUrl)
+                    .putString("student_dp_preset", dpPreset)
+                    .putString("google_user_id", _googleUserId.value)
+                    .putBoolean("is_profile_completed", true)
+                    .putBoolean("is_onboarding_completed", true)
+                    .apply()
+
+                viewModelScope.launch(Dispatchers.IO) {
+                    repository.startCloudSync(uid)
+                    restoreDataFromFirebaseInternal(uid, email)
+                    repository.populateDefaultTimetableIfEmpty(courseObj.code)
+                    withContext(Dispatchers.Main) {
+                        scheduleTimetableClassNotifications()
+                        generateSmartNotifications()
+                        startBatchNotificationSync()
+                    }
+                }
+
+                addNotificationWithDuplicateCheck(
+                    InAppNotification(
+                        title = "Welcome back, $resolvedName!",
+                        message = "Your profile, timetable, and batch records have been successfully restored.",
+                        type = "alert"
+                    )
+                )
+
+                // Direct to dashboard - NO ONBOARDING SHOWN!
+                _authState.value = AuthState.AUTHENTICATED_PROFILE_COMPLETE
                 _currentScreen.value = Screen.Dashboard
+                _isAuthenticating.value = false
+                _authError.value = null
+                onSuccess(true)
+            }
+        } else if (firestoreException != null && rootDoc == null && localProfile == null) {
+            // Firestore read failed and we have no local cache. DO NOT assume user is new!
+            Log.e("PlannerViewModel", "Firestore error and no local cache for UID $uid: ${firestoreException.message}")
+            withContext(Dispatchers.Main) {
+                _isAuthenticating.value = false
+                val errorMsg = when {
+                    firestoreException.message?.contains("permission", ignoreCase = true) == true ->
+                        "Cloud permission issue. Please check Firestore security rules."
+                    firestoreException.message?.contains("network", ignoreCase = true) == true ||
+                    firestoreException.message?.contains("unavailable", ignoreCase = true) == true ->
+                        "Network error connecting to cloud profile. Please check your internet connection."
+                    else -> "Unable to retrieve your cloud profile (${firestoreException.localizedMessage}). Please tap Retry."
+                }
+                _authError.value = errorMsg
+                onError(errorMsg)
+            }
+        } else {
+            // Verified new user or incomplete profile:
+            Log.i("PlannerViewModel", "New user detected (no complete profile in Firestore or Room for UID $uid)")
+            
+            withContext(Dispatchers.Main) {
+                val prefillName = studentFullName ?: fallbackName.ifBlank { firebaseUser.displayName ?: "" }
+                _studentName.value = prefillName
+                _studentEmail.value = email
+                _studentDpUrl.value = fallbackPhotoUrl.ifBlank { firebaseUser.photoUrl?.toString() ?: "" }
+                _studentDpPreset.value = "none"
+                _loginMode.value = mode
+                _isProfileCompleted.value = false
+                _googleUserId.value = if (googleId.isNotBlank()) googleId else uid
+
+                sharedPrefs.edit()
+                    .putString("login_mode", mode.name)
+                    .putString("student_name", prefillName)
+                    .putString("student_email", email)
+                    .putString("student_dp_url", _studentDpUrl.value)
+                    .putString("student_dp_preset", "none")
+                    .putString("google_user_id", _googleUserId.value)
+                    .putBoolean("is_profile_completed", false)
+                    .putBoolean("is_onboarding_completed", false)
+                    .apply()
+
+                repository.startCloudSync(uid)
+                startBatchNotificationSync()
+
+                addNotificationWithDuplicateCheck(
+                    InAppNotification(
+                        title = "Account Verified",
+                        message = if (prefillName.isNotBlank()) "Welcome $prefillName! Please complete your academic profile setup." else "Welcome! Please complete your academic profile setup.",
+                        type = "alert"
+                    )
+                )
+
+                _authState.value = AuthState.AUTHENTICATED_PROFILE_INCOMPLETE
+                _isAuthenticating.value = false
+                _authError.value = null
+                onSuccess(false)
             }
         }
     }
 
-    fun signInWithEmailAndPassword(email: String, password: String) {
+    fun signInWithGoogle(
+        name: String,
+        email: String,
+        dpUrl: String,
+        googleId: String,
+        idToken: String? = null,
+        onComplete: (isReturningUser: Boolean, isSuccess: Boolean, errorMsg: String?) -> Unit = { _, _, _ -> }
+    ) {
         _isAuthenticating.value = true
         _authError.value = null
-        
-        com.google.firebase.auth.FirebaseAuth.getInstance().signInWithEmailAndPassword(email, password)
-            .addOnCompleteListener { task ->
-                if (task.isSuccessful) {
-                    val user = task.result?.user
-                    if (user != null) {
-                        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
-                        val fallbackName = user.displayName ?: sharedPrefs.getString("student_name", "") ?: email.substringBefore("@")
-                        
-                        repository.startCloudSync(user.uid)
-                        startBatchNotificationSync()
-                        
-                        viewModelScope.launch(Dispatchers.IO) {
-                            val restored = restoreDataFromFirebaseInternal(user.uid, user.email ?: email)
-                            val finalName = _studentName.value.ifBlank { fallbackName }
-                            
-                            withContext(Dispatchers.Main) {
-                                _loginMode.value = LoginMode.FIREBASE
-                                _isAuthenticating.value = false
-                                _authError.value = null
-                                
-                                sharedPrefs.edit()
-                                    .putString("login_mode", LoginMode.FIREBASE.name)
-                                    .putString("student_name", finalName)
-                                    .putString("student_email", user.email ?: email)
-                                    .putString("student_dp_url", _studentDpUrl.value)
-                                    .putString("student_dp_preset", _studentDpPreset.value)
-                                    .apply()
-                                
-                                addNotificationWithDuplicateCheck(
-                                    InAppNotification(
-                                        title = "Signed in as $finalName",
-                                        message = "Welcome back! Your academic profile, timetable, and completed records are restored.",
-                                        type = "alert"
-                                    )
-                                )
-                                
-                                if (isOnboardingCompleted()) {
-                                    _currentScreen.value = Screen.Dashboard
-                                }
-                                
-                                // Auto backup any local items to cloud
-                                syncDataToFirebase()
-                            }
-                        }
-                    } else {
+        _authLoadingMessage.value = "Authenticating with Google..."
+
+        if (idToken.isNullOrEmpty()) {
+            _isAuthenticating.value = false
+            val errorMsg = "Google authentication failed: ID token not received."
+            _authError.value = errorMsg
+            onComplete(false, false, errorMsg)
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
+                val authResult = com.google.firebase.auth.FirebaseAuth.getInstance().signInWithCredential(credential).await()
+                val firebaseUser = authResult.user ?: throw Exception("Firebase user is null after Google authentication")
+                
+                _authLoadingMessage.value = "Checking your academic profile..."
+                
+                checkAndRouteAuthenticatedUser(
+                    firebaseUser = firebaseUser,
+                    mode = LoginMode.GOOGLE,
+                    fallbackName = name,
+                    fallbackPhotoUrl = dpUrl,
+                    googleId = googleId,
+                    onSuccess = { isReturning ->
                         _isAuthenticating.value = false
-                        _authError.value = "User session was empty"
+                        onComplete(isReturning, true, null)
+                    },
+                    onError = { err ->
+                        _isAuthenticating.value = false
+                        _authError.value = err
+                        onComplete(false, false, err)
                     }
-                } else {
-                    _isAuthenticating.value = false
-                    _authError.value = task.exception?.localizedMessage ?: "Sign-in failed. Please verify credentials."
+                )
+            } catch (e: Exception) {
+                Log.e("PlannerViewModel", "Firebase Google Sign-In failed: ${e.message}", e)
+                _isAuthenticating.value = false
+                val friendlyError = when {
+                    e.message?.contains("network", ignoreCase = true) == true -> "Network connection error. Please check your internet connection."
+                    e.message?.contains("credential", ignoreCase = true) == true -> "Google authentication credential error. Please try again."
+                    else -> e.localizedMessage ?: "Failed to sign in with Google."
                 }
+                _authError.value = friendlyError
+                onComplete(false, false, friendlyError)
             }
+        }
+    }
+
+    fun signInWithEmailAndPassword(
+        email: String,
+        password: String,
+        onComplete: (isReturningUser: Boolean, isSuccess: Boolean, errorMsg: String?) -> Unit = { _, _, _ -> }
+    ) {
+        _isAuthenticating.value = true
+        _authError.value = null
+        _authLoadingMessage.value = "Signing in..."
+        
+        viewModelScope.launch {
+            try {
+                val authResult = com.google.firebase.auth.FirebaseAuth.getInstance()
+                    .signInWithEmailAndPassword(email, password)
+                    .await()
+                val user = authResult.user ?: throw Exception("User session is null after sign in")
+                
+                _authLoadingMessage.value = "Checking profile..."
+                checkAndRouteAuthenticatedUser(
+                    firebaseUser = user,
+                    mode = LoginMode.FIREBASE,
+                    fallbackName = email.substringBefore("@"),
+                    onSuccess = { isReturning ->
+                        _isAuthenticating.value = false
+                        onComplete(isReturning, true, null)
+                    },
+                    onError = { err ->
+                        _isAuthenticating.value = false
+                        _authError.value = err
+                        onComplete(false, false, err)
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e("PlannerViewModel", "Email sign in failed: ${e.message}", e)
+                _isAuthenticating.value = false
+                val err = e.localizedMessage ?: "Sign-in failed. Please verify credentials."
+                _authError.value = err
+                onComplete(false, false, err)
+            }
+        }
     }
 
     fun signUpWithEmailAndPassword(name: String, email: String, password: String, dpPreset: String) {
@@ -2490,6 +2791,7 @@ class PlannerViewModel(
     }
 
     fun signOut() {
+        _authState.value = AuthState.UNAUTHENTICATED
         _loginMode.value = LoginMode.UNDECIDED
         _studentName.value = ""
         _studentEmail.value = ""
@@ -2588,22 +2890,61 @@ class PlannerViewModel(
                 .putString("student_semester", semester)
                 .putString("student_batch", batch)
                 .putBoolean("is_profile_completed", true)
+                .putBoolean("is_onboarding_completed", true)
                 .apply()
 
-            _studentName.value = name
-            _studentCollege.value = college
-            _studentYear.value = effectiveCurrentYear
-            _studentAdmissionYear.value = admissionYear
-            _studentSemester.value = semester
-            _studentBatch.value = batch
-            _isProfileCompleted.value = true
+            withContext(Dispatchers.Main) {
+                _studentName.value = name
+                _studentCollege.value = college
+                _studentYear.value = effectiveCurrentYear
+                _studentAdmissionYear.value = admissionYear
+                _studentSemester.value = semester
+                _studentBatch.value = batch
+                _isProfileCompleted.value = true
+                _authState.value = AuthState.AUTHENTICATED_PROFILE_COMPLETE
+                _currentScreen.value = Screen.Dashboard
+            }
 
             // Sync with Firebase Firestore
             try {
                 if (uid != "local_user") {
                     val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                    val emailVal = _studentEmail.value.ifBlank { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email ?: "" }
+                    val yearNumber = effectiveCurrentYear.filter { it.isDigit() }.toIntOrNull() ?: 1
+                    
+                    val rootData = hashMapOf<String, Any>(
+                        "uid" to uid,
+                        "name" to name,
+                        "fullName" to name,
+                        "displayName" to name,
+                        "email" to emailVal,
+                        "course" to course,
+                        "college" to college,
+                        "year" to yearNumber,
+                        "currentYear" to effectiveCurrentYear,
+                        "admissionYear" to admissionYear,
+                        "semester" to semester,
+                        "batch" to batch,
+                        "onboardingCompleted" to true,
+                        "isProfileCompleted" to true,
+                        "photoUrl" to _studentDpUrl.value,
+                        "dpPreset" to _studentDpPreset.value,
+                        "updatedAt" to com.google.firebase.Timestamp.now()
+                    )
+                    
+                    val existingDoc = try { db.collection("users").document(uid).get().await() } catch (e: Exception) { null }
+                    if (existingDoc == null || !existingDoc.contains("createdAt")) {
+                        rootData["createdAt"] = com.google.firebase.Timestamp.now()
+                    }
+                    
+                    db.collection("users").document(uid)
+                        .set(rootData, com.google.firebase.firestore.SetOptions.merge())
+                        .await()
+
+                    // Compatibility subdocument
                     db.collection("users").document(uid).collection("profile").document("info")
                         .set(profile)
+                        .await()
                     
                     // Backup everything as well on initial setup completion!
                     syncDataToFirebase()
@@ -3125,7 +3466,11 @@ class PlannerViewModel(
     }
 
     fun restoreDataFromFirebase(onComplete: (Boolean) -> Unit = {}) {
-        val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: return
+        val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+        if (uid.isNullOrBlank()) {
+            onComplete(false)
+            return
+        }
         val email = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email ?: _studentEmail.value
         
         viewModelScope.launch(Dispatchers.IO) {
@@ -3784,6 +4129,13 @@ enum class Screen {
     AIChat,
     Settings,
     Attendance
+}
+
+enum class AuthState {
+    LOADING,
+    UNAUTHENTICATED,
+    AUTHENTICATED_PROFILE_INCOMPLETE,
+    AUTHENTICATED_PROFILE_COMPLETE
 }
 
 enum class LoginMode {

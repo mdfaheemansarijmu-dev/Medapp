@@ -260,7 +260,6 @@ fun WelcomeScreen(
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        viewModel.setAuthenticating(false)
         if (result.resultCode == Activity.RESULT_OK) {
             val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
             try {
@@ -274,26 +273,45 @@ fun WelcomeScreen(
                 if (studentName.isBlank()) {
                     studentName = name
                 }
-                viewModel.signInWithGoogle(name, email, photoUrl, id, idToken)
-                Toast.makeText(context, "Welcome, $name!", Toast.LENGTH_SHORT).show()
-                if (viewModel.isOnboardingCompleted()) {
-                    viewModel.navigateTo(com.example.ui.viewmodel.Screen.Dashboard)
-                } else if (currentStep == OnboardingStep.AUTH_CHOICE) {
-                    val course = selectedCourse ?: MedicalCourse.MBBS
-                    persistProfileAndTimetable(course)
-                    viewModel.completeOnboarding(course)
-                } else {
-                    currentStep = OnboardingStep.COURSE
+                viewModel.signInWithGoogle(name, email, photoUrl, id, idToken) { isReturningUser, isSuccess, errorMsg ->
+                    if (isSuccess) {
+                        if (isReturningUser) {
+                            Toast.makeText(context, "Welcome back, $name!", Toast.LENGTH_SHORT).show()
+                            viewModel.navigateTo(com.example.ui.viewmodel.Screen.Dashboard)
+                        } else if (currentStep == OnboardingStep.AUTH_CHOICE) {
+                            val course = selectedCourse ?: MedicalCourse.MBBS
+                            persistProfileAndTimetable(course)
+                            viewModel.completeOnboarding(course)
+                            viewModel.navigateTo(com.example.ui.viewmodel.Screen.Dashboard)
+                        } else {
+                            currentStep = OnboardingStep.COURSE
+                        }
+                    } else if (errorMsg != null) {
+                        Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                    }
                 }
             } catch (e: ApiException) {
                 val errorMsg = when (e.statusCode) {
-                    com.google.android.gms.common.api.CommonStatusCodes.NETWORK_ERROR -> "Network error. Continuing in guest mode."
+                    com.google.android.gms.common.api.CommonStatusCodes.NETWORK_ERROR -> "Network error connecting to Google. Please check your internet connection."
                     com.google.android.gms.common.api.CommonStatusCodes.CANCELED -> "Google sign-in cancelled."
-                    else -> "Sign-in error (${e.statusCode}). You can continue as guest."
+                    10 -> "Google Sign-In configuration error (Developer Error 10). Please ensure debug/release SHA-1 is registered in Firebase Console."
+                    12500 -> "Google Sign-In failed (Status 12500). Please check Google Play Services."
+                    12501 -> "Google sign-in cancelled."
+                    else -> "Google sign-in failed (${e.statusCode}). Please try again."
                 }
-                viewModel.setAuthError(errorMsg)
-                Toast.makeText(context, errorMsg, Toast.LENGTH_SHORT).show()
+                viewModel.setAuthenticating(false)
+                if (e.statusCode != com.google.android.gms.common.api.CommonStatusCodes.CANCELED && e.statusCode != 12501) {
+                    viewModel.setAuthError(errorMsg)
+                    Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                } else {
+                    viewModel.setAuthError(null)
+                }
             }
+        } else if (result.resultCode == Activity.RESULT_CANCELED) {
+            viewModel.setAuthenticating(false)
+            viewModel.setAuthError(null)
+        } else {
+            viewModel.setAuthenticating(false)
         }
     }
 
@@ -472,8 +490,8 @@ fun WelcomeScreen(
     if (loginMode == LoginMode.UNDECIDED || loginMode == LoginMode.GUEST) {
         AuthScreen(
             viewModel = viewModel,
-            onAuthSuccess = { isNewUser ->
-                if (viewModel.isOnboardingCompleted()) {
+            onAuthSuccess = { isReturningUser ->
+                if (isReturningUser || viewModel.isOnboardingCompleted()) {
                     viewModel.navigateTo(com.example.ui.viewmodel.Screen.Dashboard)
                 } else {
                     currentStep = OnboardingStep.STUDENT_NAME
@@ -603,6 +621,7 @@ fun WelcomeScreen(
                             persistProfileAndTimetable(course)
                             viewModel.completeOnboarding(course)
                             Toast.makeText(context, "Welcome! Your medical routine is securely synced with your batch.", Toast.LENGTH_SHORT).show()
+                            viewModel.navigateTo(com.example.ui.viewmodel.Screen.Dashboard)
                         },
                         onGoogleClick = {
                             viewModel.setAuthenticating(true)
@@ -1837,7 +1856,7 @@ fun OnboardingAddTimetableScreen(
                     }
                 }
             } else {
-                // Confirmation / Review Screen ("I found 42 classes")
+                // Confirmation / Review Screen ("I found X classes")
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1852,8 +1871,9 @@ fun OnboardingAddTimetableScreen(
                             ),
                             color = MaterialTheme.colorScheme.onBackground
                         )
+                        val distinctDays = extractedClasses.map { it.day_of_week }.distinct().size
                         Text(
-                            text = "Review extracted classes before adding them to your schedule.",
+                            text = if (distinctDays > 1) "Covering $distinctDays days of your weekly schedule." else "Review extracted classes before adding them to your schedule.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1861,6 +1881,50 @@ fun OnboardingAddTimetableScreen(
                     TextButton(onClick = onClearExtracted) {
                         Text("Clear")
                     }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                if (extractedClasses.size < 6) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onAddManuallyOrPreset() }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Want the full weekly routine?",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    text = "Tap to load the complete standard ${selectedCourse.displayName} 1st-year schedule (all 7 days)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.ChevronRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))

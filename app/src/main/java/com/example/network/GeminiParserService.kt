@@ -48,7 +48,8 @@ data class GeminiContent(
 @JsonClass(generateAdapter = true)
 data class GenerationConfig(
     val responseMimeType: String? = null,
-    val temperature: Float? = null
+    val temperature: Float? = null,
+    val maxOutputTokens: Int? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -85,9 +86,9 @@ object RetrofitClient {
         .build()
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
         .addInterceptor { chain ->
             val request = chain.request()
             Log.d("RetrofitClient", "Request: ${request.url}")
@@ -107,19 +108,46 @@ object RetrofitClient {
     val moshiParser: Moshi = moshi
 }
 
+data class OcrLine(
+    val text: String,
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int
+)
+
 data class LocalOcrResult(
     val cleanText: String,
-    val spatialText: String
+    val spatialText: String,
+    val lines: List<OcrLine> = emptyList()
 )
 
 class GeminiParserService {
-    private fun getActiveApiKey(): String {
-        val buildKey = BuildConfig.GEMINI_API_KEY
-        return if (!buildKey.isNullOrBlank() && buildKey != "MY_GEMINI_API_KEY") {
-            buildKey
-        } else {
-            ""
+    companion object {
+        var customApiKeyProvider: (() -> String?)? = null
+
+        fun isValidApiKey(key: String?): Boolean {
+            if (key.isNullOrBlank()) return false
+            val trimmed = key.trim()
+            if (trimmed.equals("MY_GEMINI_API_KEY", ignoreCase = true)) return false
+            if (trimmed.equals("your_gemini_api_key_here", ignoreCase = true)) return false
+            if (trimmed.startsWith("your_", ignoreCase = true)) return false
+            if (trimmed.contains("placeholder", ignoreCase = true)) return false
+            if (trimmed.length < 15) return false
+            return true
         }
+    }
+
+    private fun getActiveApiKey(): String {
+        val custom = customApiKeyProvider?.invoke()
+        if (isValidApiKey(custom)) {
+            return custom!!.trim()
+        }
+        val buildKey = BuildConfig.GEMINI_API_KEY
+        if (isValidApiKey(buildKey)) {
+            return buildKey.trim()
+        }
+        return ""
     }
 
     private suspend fun recognizeTextFromBitmap(bitmap: android.graphics.Bitmap): LocalOcrResult = suspendCancellableCoroutine { continuation ->
@@ -130,18 +158,24 @@ class GeminiParserService {
                 .addOnSuccessListener { visionText ->
                     val cleanSb = StringBuilder()
                     val spatialSb = StringBuilder()
+                    val lineList = mutableListOf<OcrLine>()
                     for (block in visionText.textBlocks) {
                         for (line in block.lines) {
                             val frame = line.boundingBox
                             val text = line.text.trim()
                             if (text.isNotBlank()) {
                                 cleanSb.append(text).append("\n")
-                                spatialSb.append("Text: \"$text\", Box: [L=${frame?.left}, T=${frame?.top}, R=${frame?.right}, B=${frame?.bottom}]\n")
+                                val l = frame?.left ?: 0
+                                val t = frame?.top ?: 0
+                                val r = frame?.right ?: 0
+                                val b = frame?.bottom ?: 0
+                                spatialSb.append("Text: \"$text\", Box: [L=$l, T=$t, R=$r, B=$b]\n")
+                                lineList.add(OcrLine(text, l, t, r, b))
                             }
                         }
                     }
                     recognizer.close()
-                    continuation.resume(LocalOcrResult(cleanSb.toString(), spatialSb.toString()))
+                    continuation.resume(LocalOcrResult(cleanSb.toString(), spatialSb.toString(), lineList))
                 }
                 .addOnFailureListener { exception ->
                     recognizer.close()
@@ -180,9 +214,9 @@ class GeminiParserService {
         }
 
         val activeKey = getActiveApiKey()
-        if (activeKey.isEmpty() || activeKey == "MY_GEMINI_API_KEY") {
-            Log.e("GeminiParser", "Gemini API Key is not configured! Using local intelligent parser.")
-            val localRes = getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrResult.cleanText, currentScheduleContext)
+        if (activeKey.isEmpty()) {
+            Log.d("GeminiParser", "No valid cloud Gemini API key detected. Using high-precision local ML Kit intelligent timetable engine.")
+            val localRes = getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrResult, currentScheduleContext)
             return@withContext sanitizeResponse(localRes, inputPrompt)
         }
 
@@ -191,7 +225,7 @@ class GeminiParserService {
         } else ""
 
         val prompt = """
-            You are an expert medical student AI assistant. Analyze the provided input (which can be a text notice, an image of a weekly/exam timetable, a WhatsApp message, a document scan, or a conversational user question/message) and extract schedule information with high precision.
+            You are an expert college and medical student academic AI assistant. Analyze the provided input (which can be an image of a weekly class timetable/routine, a document scan, a WhatsApp message, or student question) and extract schedule information with high precision.
 
             $contextStr
 
@@ -202,12 +236,13 @@ class GeminiParserService {
                - Put your answer in "conversational_response" (using rich markdown)
                - Keep "extracted_timetable" = [] and "extracted_items" = []
 
-            2. TIMETABLE & CLASS SCHEDULES (CRITICAL):
-               If the input contains a timetable, routine, or class schedule (whether an image of a weekly routine/grid, handwritten/printed timetable, a single-day routine, or plain text with class timings):
+            2. TIMETABLE & CLASS SCHEDULES (CRITICAL - EXTRACT ALL DAYS & ALL PERIODS):
+               If the input contains a timetable, routine, or class schedule (e.g. an image of a weekly routine/grid, college timetable with multiple days, or plain text with class timings):
                - Set document_type = "Weekly Timetable"
-               - Extract EVERY period/class found into "extracted_timetable"
-               - Map days to day_of_week: 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday, 7=Sunday (default to 1 if no day specified)
-               - Extract period_number (1, 2, 3...), start_time (e.g. "09:00 AM"), end_time (e.g. "10:00 AM"), subject, teacher_name (if any), room (if any), is_practical (true for labs, dissection, practicals, clinics), is_lunch_break (true for recess, lunch)
+               - Extract EVERY period/class found across ALL 7 DAYS into "extracted_timetable". A standard college weekly routine has 5 to 7 days (Monday through Saturday/Sunday) and 4 to 8 periods every day. DO NOT EXTRACT JUST ONE CLASS! You MUST extract every single period for EVERY day shown in the table (Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday).
+               - Map days to day_of_week: 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday, 7=Sunday
+               - Extract period_number (1, 2, 3, 4, 5, 6, 7...), start_time (e.g. "09:00 AM"), end_time (e.g. "10:00 AM"), subject, teacher_name (if any), room (if any), is_practical (true for labs, dissection, practicals, clinics), is_lunch_break (true for recess, lunch)
+               - If period times are given in a header row (e.g. 9-10, 10-11, 11-12, 1-2, 2-4), align each day's row of subjects with those column times!
                - Keep "extracted_items" = []
 
             3. ASSIGNMENTS & HOMEWORK:
@@ -219,14 +254,14 @@ class GeminiParserService {
             4. ASSESSMENTS, TESTS & EXAMS:
                If the input contains internal assessments, class tests, vivas, exams, quizzes, or evaluations:
                - Set document_type = "Assessment Notice"
-               - Add each item to "extracted_items" with category = "Assessment" (Map all exams, vivas, and tests strictly to "Assessment")
+               - Add each item to "extracted_items" with category = "Assessment"
                - Keep "extracted_timetable" = []
 
             5. SCHEDULE ADJUSTMENTS & TEMPORARY OVERRIDES:
-               If the input announces a specific class cancellation, room change, teacher substitute, extra class, or temporary timing change for a specific day (NOT a routine timetable):
+               If the input announces a specific class cancellation, room change, teacher substitute, extra class, or temporary timing change for a specific day:
                - Set document_type = "Schedule Override"
                - Set is_temporary_override = true
-               - Set override_date to the affected date or day (e.g. "Tomorrow", "Monday", "2026-09-20")
+               - Set override_date to the affected date or day
                - Add each adjustment to "extracted_items" with category = "Class Cancellation", "Room Change", "Teacher Change", or "Schedule Change"
                - Keep "extracted_timetable" = []
 
@@ -236,23 +271,13 @@ class GeminiParserService {
                - Add item to "extracted_items" with category = "Holiday"
                - Keep "extracted_timetable" = []
 
-            7. WHATSAPP & FORWARDED CHAT MESSAGES (CRITICAL):
-               When analyzing messages copied from WhatsApp, Telegram, or class groups (e.g. `[17/09, 3:54 pm] +91 80759 02502: ...`):
-               - Strip timestamps, phone numbers, and sender names completely from titles/details.
-               - NEVER extract numbers, decimal times, or fragments (like "30 to" or "2.30") as standalone general notices.
-               - Extract clean, academic titles describing the specific topic (e.g., "Hypothalamic & Post. Pituitary Assessment", "Biochemistry: Tryptophan Metabolism").
-               - Infer medical subject accurately (e.g. "Hypothalamic hormones / Pituitary" -> "Physiology", "Tryptophan metabolism" -> "Biochemistry").
-               - Extract day, date, and timings into due_date_description (e.g., "Tuesday 2.30 to 3.30" -> "Tuesday (02:30 PM - 03:30 PM)").
-
-            8. UNRELATED, NON-ACADEMIC, OR BLURRY IMAGES (CRITICAL):
-               If the image or text is NOT an academic timetable, schedule, routine, syllabus, exam notice, assignment, or college announcement (e.g. photos of people, selfies, nature, animals, vehicles, food, random objects, receipts, memes, or completely unreadable text):
+            7. UNRELATED, NON-ACADEMIC, OR BLURRY IMAGES:
+               If the image is completely unreadable or unrelated:
                - Set document_type = "Unrelated"
                - Set conversational_response = "I couldn't detect any academic timetable or schedule in this image. Please upload a clear photo or screenshot of your college timetable, routine, or class announcement."
-               - You MUST set "extracted_timetable" = [] (empty array)
-               - You MUST set "extracted_items" = [] (empty array)
-               - NEVER invent, generate, or hallucinate dummy subjects or classes!
+               - Keep "extracted_timetable" = [] and "extracted_items" = []
 
-            ${if (ocrResult.spatialText.isNotBlank()) "LOCAL OCR SPATIAL RECONSTRUCTION:\nUse this local high-precision spatial text with coordinates to align and map rows and columns perfectly. Ensure NO row or column is missed:\n${ocrResult.spatialText}\n" else ""}
+            ${if (ocrResult.spatialText.isNotBlank()) "LOCAL OCR SPATIAL RECONSTRUCTION:\nUse this local high-precision spatial text with coordinates to align and map rows and columns perfectly. Ensure NO row or column is missed:\n${ocrResult.spatialText.take(4000)}\n" else ""}
 
             Input to analyze:
             "$inputPrompt"
@@ -289,10 +314,11 @@ class GeminiParserService {
             ),
             generationConfig = GenerationConfig(
                 responseMimeType = "application/json",
-                temperature = 0.2f
+                temperature = 0.2f,
+                maxOutputTokens = 8192
             ),
             systemInstruction = GeminiContent(
-                parts = listOf(GeminiPart(text = "You are a professional medical student assistant. Extract schedule details with absolute structure in JSON."))
+                parts = listOf(GeminiPart(text = "You are a professional medical and college student assistant. Extract all weekly schedule classes across all days in structured JSON."))
             )
         )
 
@@ -307,7 +333,7 @@ class GeminiParserService {
             val fallbackModel = if (targetModel != "gemini-2.5-flash") {
                 "gemini-2.5-flash"
             } else {
-                GeminiModelOption.FLASH_35.modelId
+                GeminiModelOption.FLASH_LITE.modelId
             }
             try {
                 Log.d("GeminiParser", "Calling fallback model $fallbackModel...")
@@ -321,22 +347,23 @@ class GeminiParserService {
         val rawResponse = if (jsonText != null) {
             Log.d("GeminiParser", "Raw response: $jsonText")
             val adapter = RetrofitClient.moshiParser.adapter(UnifiedParserResponse::class.java)
-            adapter.fromJson(jsonText) ?: getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrResult.cleanText, currentScheduleContext)
+            adapter.fromJson(jsonText) ?: getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrResult, currentScheduleContext)
         } else {
             Log.e("GeminiParser", "Direct API pathway failed or returned empty content")
-            getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrResult.cleanText, currentScheduleContext)
+            getLocalFallbackResponse(inputPrompt, hasImage, mimeType, ocrResult, currentScheduleContext)
         }
         return@withContext sanitizeResponse(rawResponse, inputPrompt)
     }
 
-    // High quality offline fallback parsing logic using heuristics
+    // High quality offline fallback parsing logic using spatial grid and heuristic reconstruction
     private fun getLocalFallbackResponse(
         input: String,
         hasImage: Boolean,
         mimeType: String?,
-        ocrText: String = "",
+        ocrResult: LocalOcrResult = LocalOcrResult("", ""),
         currentScheduleContext: String? = null
     ): UnifiedParserResponse {
+        val ocrText = ocrResult.cleanText
         val lowercaseInput = input.lowercase()
         val combinedText = (lowercaseInput + "\n" + ocrText.lowercase()).trim()
 
@@ -361,7 +388,7 @@ class GeminiParserService {
         if (isCasualChat) {
             val responseText = when {
                 lowercaseInput.contains("hi") || lowercaseInput.contains("hello") || lowercaseInput.contains("hey") -> {
-                    "Hello! I am **MedPulse AI**, your medical academic assistant 🩺\n\nI can help you:\n• **Intelligently Understand Class Announcements**: Paste WhatsApp messages to extract assignments, tests, and schedule adjustments.\n• **Manage Timetables**: Upload an image or photo of your official routine to configure your weekly schedule.\n• **Study & Exam Preparation**: Ask any questions regarding Anatomy, Physiology, Homoeopathic Pharmacy, Organon, or clinical concepts.\n\nHow can I help you today?"
+                    "Hello! I am **MedPulse AI**, your academic medical assistant 🩺\n\nI can help you:\n• **Intelligently Understand Class Announcements**: Paste WhatsApp messages to extract assignments, tests, and schedule adjustments.\n• **Manage Timetables**: Upload an image or photo of your official routine to configure your weekly schedule.\n• **Study & Exam Preparation**: Ask any questions regarding Anatomy, Physiology, Homoeopathic Pharmacy, Organon, or clinical concepts.\n\nHow can I help you today?"
                 }
                 lowercaseInput.contains("classes") || lowercaseInput.contains("schedule") || lowercaseInput.contains("today") -> {
                     if (!currentScheduleContext.isNullOrBlank()) {
@@ -371,7 +398,7 @@ class GeminiParserService {
                     }
                 }
                 lowercaseInput.contains("lunch") -> {
-                    "Standard lunch breaks in your medical planner are scheduled from **01:00 PM to 01:30 PM** (or 12:00 PM to 01:00 PM depending on your course batch)."
+                    "Standard lunch breaks in your medical planner are scheduled from **01:00 PM to 02:00 PM** (or 12:00 PM to 01:00 PM depending on your course batch)."
                 }
                 else -> {
                     "That's a great question! As your **MedPulse AI** academic companion, I am here to assist with medical studies, Anatomy, Physiology, Homoeopathic Pharmacy, and Organon concepts, as well as keeping your daily timetable and assignments organized."
@@ -395,22 +422,15 @@ class GeminiParserService {
                 combinedText.contains("shifted to") ||
                 combinedText.contains("holiday")
 
-        val dayKeywords = listOf("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
-        val dayMap = mapOf(
-            "monday" to 1, "mon" to 1,
-            "tuesday" to 2, "tue" to 2, "tues" to 2,
-            "wednesday" to 3, "wed" to 3,
-            "thursday" to 4, "thu" to 4, "thur" to 4, "thurs" to 4,
-            "friday" to 5, "fri" to 5,
-            "saturday" to 6, "sat" to 6,
-            "sunday" to 7, "sun" to 7
-        )
-
+        val dayKeywords = listOf("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "mon", "tue", "wed", "thu", "fri", "sat", "sun")
         val timeRegex = Regex("(?i)(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?\\s*(?:-|–|to)\\s*(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?")
 
         val hasExplicitScheduleKeywords = combinedText.contains("timetable") ||
                 combinedText.contains("routine") ||
                 combinedText.contains("schedule") ||
+                combinedText.contains("period") ||
+                combinedText.contains("class") ||
+                combinedText.contains("lecture") ||
                 timeRegex.containsMatchIn(combinedText) ||
                 dayKeywords.any { combinedText.contains(it) }
 
@@ -426,83 +446,7 @@ class GeminiParserService {
         }
 
         if (hasScheduleIntent) {
-            val timetable = mutableListOf<ParsedTimetableClass>()
-            var currentDayOfWeek = 1
-            var periodCounter = 1
-
-            val sourceLines = (if (ocrText.isNotBlank()) ocrText else input).lines()
-
-            for (line in sourceLines) {
-                val trimmed = line.trim()
-                if (trimmed.isBlank()) continue
-                val lowerLine = trimmed.lowercase()
-
-                // Check if line sets the day (e.g. "Monday:", "## Tuesday", "Wednesday Schedule")
-                var matchedDay: Int? = null
-                for ((dayName, dayNum) in dayMap) {
-                    if (Regex("\\b$dayName\\b", RegexOption.IGNORE_CASE).containsMatchIn(lowerLine)) {
-                        matchedDay = dayNum
-                        break
-                    }
-                }
-
-                if (matchedDay != null && !timeRegex.containsMatchIn(trimmed)) {
-                    currentDayOfWeek = matchedDay
-                    periodCounter = 1
-                    continue
-                }
-
-                // Check if line contains a time interval and class subject
-                val match = timeRegex.find(trimmed)
-                if (match != null) {
-                    val dayForClass = matchedDay ?: currentDayOfWeek
-                    val h1 = match.groupValues[1]
-                    val m1 = match.groupValues[2].ifEmpty { "00" }
-                    val p1 = match.groupValues[3].uppercase()
-                    val h2 = match.groupValues[4]
-                    val m2 = match.groupValues[5].ifEmpty { "00" }
-                    val p2 = match.groupValues[6].uppercase()
-
-                    val finalP2 = if (p2.isNotBlank()) p2 else if (h2.toIntOrNull() ?: 0 in 1..7) "PM" else "AM"
-                    val finalP1 = if (p1.isNotBlank()) p1 else if (h1.toIntOrNull() ?: 0 in 8..11) "AM" else finalP2
-
-                    val startTime = String.format(Locale.US, "%02d:%s %s", h1.toIntOrNull() ?: 9, m1, finalP1)
-                    val endTime = String.format(Locale.US, "%02d:%s %s", h2.toIntOrNull() ?: 10, m2, finalP2)
-
-                    // Extract subject text after removing the time string
-                    var rawSubject = trimmed.replace(match.value, "")
-                        .replace(Regex("^[0-9]+[.):-]\\s*"), "")
-                        .replace(Regex("^[-:•|]\\s*"), "")
-                        .replace(Regex("[-:•|]\\s*$"), "")
-                        .trim()
-
-                    if (rawSubject.isBlank()) {
-                        rawSubject = "Medical Class"
-                    }
-
-                    val isPractical = rawSubject.contains("practical", ignoreCase = true) ||
-                            rawSubject.contains("lab", ignoreCase = true) ||
-                            rawSubject.contains("dissection", ignoreCase = true) ||
-                            rawSubject.contains("clinic", ignoreCase = true)
-
-                    val isLunch = rawSubject.contains("lunch", ignoreCase = true) ||
-                            rawSubject.contains("break", ignoreCase = true) ||
-                            rawSubject.contains("recess", ignoreCase = true)
-
-                    timetable.add(
-                        ParsedTimetableClass(
-                            day_of_week = dayForClass,
-                            period_number = periodCounter++,
-                            start_time = startTime,
-                            end_time = endTime,
-                            subject = rawSubject,
-                            is_practical = isPractical,
-                            is_lunch_break = isLunch
-                        )
-                    )
-                }
-            }
-
+            val timetable = extractTimetableLocally(input, ocrResult)
             if (timetable.isNotEmpty()) {
                 return UnifiedParserResponse(
                     document_type = "Weekly Timetable",
@@ -800,6 +744,496 @@ class GeminiParserService {
         return response.extracted_items
     }
 
+    private fun extractTimetableLocally(
+        input: String,
+        ocrResult: LocalOcrResult
+    ): List<ParsedTimetableClass> {
+        val dayMap = mapOf(
+            "monday" to 1, "mon" to 1,
+            "tuesday" to 2, "tue" to 2, "tues" to 2,
+            "wednesday" to 3, "wed" to 3,
+            "thursday" to 4, "thu" to 4, "thur" to 4, "thurs" to 4,
+            "friday" to 5, "fri" to 5,
+            "saturday" to 6, "sat" to 6,
+            "sunday" to 7, "sun" to 7
+        )
+
+        val timeRegex = Regex("(?i)(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?\\s*(?:-|–|to)\\s*(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?")
+
+        val defaultSlots = listOf(
+            Pair("09:00 AM", "10:00 AM"),
+            Pair("10:05 AM", "11:05 AM"),
+            Pair("11:10 AM", "12:10 PM"),
+            Pair("12:15 PM", "01:00 PM"),
+            Pair("01:00 PM", "02:00 PM"), // Lunch
+            Pair("02:00 PM", "04:00 PM"), // Practical / Dissection / Lab / Clinical Posting
+            Pair("04:00 PM", "05:00 PM")
+        )
+
+        val discoveredSlots = mutableListOf<Pair<String, String>>()
+        val allSourceLines = (ocrResult.cleanText.ifBlank { input }).lines()
+        for (line in allSourceLines) {
+            val matches = timeRegex.findAll(line)
+            for (m in matches) {
+                val h1 = m.groupValues[1]
+                val m1 = m.groupValues[2].ifEmpty { "00" }
+                val p1 = m.groupValues[3].uppercase()
+                val h2 = m.groupValues[4]
+                val m2 = m.groupValues[5].ifEmpty { "00" }
+                val p2 = m.groupValues[6].uppercase()
+
+                val finalP2 = if (p2.isNotBlank()) p2 else if (h2.toIntOrNull() ?: 0 in 1..7) "PM" else "AM"
+                val finalP1 = if (p1.isNotBlank()) p1 else if (h1.toIntOrNull() ?: 0 in 8..11) "AM" else finalP2
+
+                val startTime = String.format(Locale.US, "%02d:%s %s", h1.toIntOrNull() ?: 9, m1, finalP1)
+                val endTime = String.format(Locale.US, "%02d:%s %s", h2.toIntOrNull() ?: 10, m2, finalP2)
+                val slot = Pair(startTime, endTime)
+                if (!discoveredSlots.contains(slot)) {
+                    discoveredSlots.add(slot)
+                }
+            }
+        }
+
+        val activeSlots = if (discoveredSlots.size >= 3) discoveredSlots else defaultSlots
+        val timetable = mutableListOf<ParsedTimetableClass>()
+
+        // 1. Spatial Grid Clustering if bounding boxes exist
+        if (ocrResult.lines.isNotEmpty()) {
+            val lines = ocrResult.lines.sortedBy { it.top }
+            
+            data class DayAnchor(val dayNum: Int, val dayName: String, val line: OcrLine)
+            val dayAnchors = mutableListOf<DayAnchor>()
+
+            for (l in lines) {
+                val lower = l.text.lowercase().trim()
+                for ((name, num) in dayMap) {
+                    if (Regex("\\b$name\\b", RegexOption.IGNORE_CASE).containsMatchIn(lower)) {
+                        if (dayAnchors.none { it.dayNum == num }) {
+                            dayAnchors.add(DayAnchor(num, name, l))
+                            break
+                        }
+                    }
+                }
+            }
+
+            if (dayAnchors.size >= 2) {
+                val ySpread = dayAnchors.maxOf { it.line.top } - dayAnchors.minOf { it.line.top }
+                val xSpread = dayAnchors.maxOf { it.line.left } - dayAnchors.minOf { it.line.left }
+                val isDaysAsColumns = dayAnchors.size >= 2 && (ySpread < 65 || xSpread > ySpread * 2)
+
+                if (isDaysAsColumns) {
+                    // DAYS ARE COLUMNS (Across the top: Mon | Tue | Wed | Thu | Fri | Sat | Sun)
+                    // Rows are Time Periods (Down the page: 9-10, 10-11, 11-12...)
+                    val sortedColAnchors = dayAnchors.sortedBy { it.line.left }
+                    val avgColWidth = if (sortedColAnchors.size > 1) {
+                        (sortedColAnchors.last().line.left - sortedColAnchors.first().line.left) / (sortedColAnchors.size - 1)
+                    } else 140
+
+                    val headerTop = sortedColAnchors.minOf { it.line.top }
+                    val cellsBelowHeader = lines.filter { it.top > headerTop + 20 }
+
+                    for (cIdx in sortedColAnchors.indices) {
+                        val anchor = sortedColAnchors[cIdx]
+                        val minX = anchor.line.left - (avgColWidth / 3)
+                        val maxX = if (cIdx < sortedColAnchors.size - 1) sortedColAnchors[cIdx + 1].line.left - 10 else anchor.line.left + avgColWidth + 60
+
+                        val colCells = cellsBelowHeader.filter { it.left in minX..maxX }.sortedBy { it.top }
+                        var periodIdx = 1
+
+                        for (cell in colCells) {
+                            val rawCell = cell.text.trim()
+                            if (rawCell.length < 3 || timeRegex.matches(rawCell) || isNoiseLine(rawCell)) continue
+
+                            val splitSubs = splitSubjectsInLine(rawCell)
+                            for (rawSub in splitSubs) {
+                                val subjectName = cleanSubjectName(rawSub)
+                                if (subjectName.isBlank() || isNoiseLine(subjectName)) continue
+
+                                val slot = activeSlots.getOrElse(periodIdx - 1) {
+                                    defaultSlots.getOrElse(periodIdx - 1) { Pair("04:00 PM", "05:00 PM") }
+                                }
+                                val isPractical = isPracticalSubject(subjectName)
+                                val isLunch = isLunchBreak(subjectName)
+
+                                timetable.add(
+                                    ParsedTimetableClass(
+                                        day_of_week = anchor.dayNum,
+                                        period_number = periodIdx++,
+                                        start_time = slot.first,
+                                        end_time = slot.second,
+                                        subject = subjectName,
+                                        teacher_name = extractTeacher(rawSub),
+                                        room = extractRoom(rawSub, isPractical),
+                                        is_practical = isPractical,
+                                        is_lunch_break = isLunch
+                                    )
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    // DAYS ARE ROWS (Down the left side: Monday, Tuesday, Wednesday...)
+                    // Columns are Time Periods (Across the page: 9-10, 10-11, 11-12...)
+                    val sortedRowAnchors = dayAnchors.sortedBy { it.line.top }
+                    val avgRowHeight = if (sortedRowAnchors.size > 1) {
+                        (sortedRowAnchors.last().line.top - sortedRowAnchors.first().line.top) / (sortedRowAnchors.size - 1)
+                    } else 80
+
+                    for (i in sortedRowAnchors.indices) {
+                        val anchor = sortedRowAnchors[i]
+                        val nextAnchorTop = if (i < sortedRowAnchors.size - 1) sortedRowAnchors[i + 1].line.top else anchor.line.top + avgRowHeight + 50
+                        val rowBandLines = lines.filter {
+                            it.top >= anchor.line.top - (avgRowHeight / 3) && it.top < nextAnchorTop - 10
+                        }.sortedBy { it.left }
+
+                        var periodIdx = 1
+                        for (cell in rowBandLines) {
+                            val rawCell = cell.text.trim()
+                            val lowerCell = rawCell.lowercase()
+                            if (dayMap.keys.any { lowerCell == it || lowerCell.startsWith("$it:") } || timeRegex.matches(rawCell)) {
+                                continue
+                            }
+                            if (rawCell.length < 3) continue
+
+                            val splitSubjects = splitSubjectsInLine(rawCell)
+                            for (rawSub in splitSubjects) {
+                                val subjectName = cleanSubjectName(rawSub)
+                                if (subjectName.isBlank() || isNoiseLine(subjectName)) continue
+
+                                val slot = activeSlots.getOrElse(periodIdx - 1) {
+                                    defaultSlots.getOrElse(periodIdx - 1) {
+                                        Pair("04:00 PM", "05:00 PM")
+                                    }
+                                }
+
+                                val isPractical = isPracticalSubject(subjectName)
+                                val isLunch = isLunchBreak(subjectName)
+
+                                timetable.add(
+                                    ParsedTimetableClass(
+                                        day_of_week = anchor.dayNum,
+                                        period_number = periodIdx++,
+                                        start_time = slot.first,
+                                        end_time = slot.second,
+                                        subject = subjectName,
+                                        teacher_name = extractTeacher(rawSub),
+                                        room = extractRoom(rawSub, isPractical),
+                                        is_practical = isPractical,
+                                        is_lunch_break = isLunch
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Sequential & Matrix-based Multi-Day Parser (Runs if spatial yielded fewer than 5 classes)
+        if (timetable.size < 5) {
+            timetable.clear()
+            var currentDay = 1
+            var periodCounter = 1
+            var activeMultiDayHeader: List<Int>? = null
+
+            for (line in allSourceLines) {
+                val trimmed = line.trim()
+                if (trimmed.isBlank()) continue
+                val lower = trimmed.lowercase()
+
+                // Check if this line is a multi-day header: e.g. "Mon Tue Wed Thu Fri Sat" or "Monday | Tuesday | Wednesday"
+                val multiDaysFound = mutableListOf<Pair<Int, Int>>() // index in line to dayNum
+                for ((dayName, dayNum) in dayMap) {
+                    val regex = Regex("\\b$dayName\\b", RegexOption.IGNORE_CASE)
+                    for (match in regex.findAll(lower)) {
+                        if (multiDaysFound.none { it.second == dayNum }) {
+                            multiDaysFound.add(Pair(match.range.first, dayNum))
+                        }
+                    }
+                }
+
+                if (multiDaysFound.size >= 2) {
+                    // This is a multi-day column header line!
+                    activeMultiDayHeader = multiDaysFound.sortedBy { it.first }.map { it.second }
+                    periodCounter = 1
+                    continue
+                }
+
+                // If active multi-day header exists, each row is a time slot containing subjects for all days in order!
+                if (activeMultiDayHeader != null && activeMultiDayHeader.size >= 2) {
+                    val timeMatch = timeRegex.find(trimmed)
+                    val slot = if (timeMatch != null) {
+                        val h1 = timeMatch.groupValues[1]
+                        val m1 = timeMatch.groupValues[2].ifEmpty { "00" }
+                        val p1 = timeMatch.groupValues[3].uppercase()
+                        val h2 = timeMatch.groupValues[4]
+                        val m2 = timeMatch.groupValues[5].ifEmpty { "00" }
+                        val p2 = timeMatch.groupValues[6].uppercase()
+                        val finalP2 = if (p2.isNotBlank()) p2 else if (h2.toIntOrNull() ?: 0 in 1..7) "PM" else "AM"
+                        val finalP1 = if (p1.isNotBlank()) p1 else if (h1.toIntOrNull() ?: 0 in 8..11) "AM" else finalP2
+                        val sTime = String.format(Locale.US, "%02d:%s %s", h1.toIntOrNull() ?: 9, m1, finalP1)
+                        val eTime = String.format(Locale.US, "%02d:%s %s", h2.toIntOrNull() ?: 10, m2, finalP2)
+                        Pair(sTime, eTime)
+                    } else {
+                        activeSlots.getOrElse(periodCounter - 1) { defaultSlots.last() }
+                    }
+
+                    val lineWithoutTime = if (timeMatch != null) trimmed.replace(timeMatch.value, "").trim() else trimmed
+                    val rowSubjects = splitSubjectsInLine(lineWithoutTime)
+
+                    if (rowSubjects.isNotEmpty() && !isNoiseLine(lineWithoutTime)) {
+                        for (subIdx in rowSubjects.indices) {
+                            val sub = rowSubjects[subIdx]
+                            val cleanSub = cleanSubjectName(sub)
+                            if (cleanSub.isNotBlank() && !isNoiseLine(cleanSub)) {
+                                val targetDay = activeMultiDayHeader.getOrElse(subIdx) { (subIdx % 7) + 1 }
+                                val isPractical = isPracticalSubject(cleanSub)
+                                val isLunch = isLunchBreak(cleanSub)
+
+                                timetable.add(
+                                    ParsedTimetableClass(
+                                        day_of_week = targetDay,
+                                        period_number = periodCounter,
+                                        start_time = slot.first,
+                                        end_time = slot.second,
+                                        subject = cleanSub,
+                                        teacher_name = extractTeacher(sub),
+                                        room = extractRoom(sub, isPractical),
+                                        is_practical = isPractical,
+                                        is_lunch_break = isLunch
+                                    )
+                                )
+                            }
+                        }
+                        periodCounter++
+                        continue
+                    }
+                }
+
+                // Check single-day heading
+                var matchedDay: Int? = null
+                for ((dayName, dayNum) in dayMap) {
+                    if (Regex("\\b$dayName\\b", RegexOption.IGNORE_CASE).containsMatchIn(lower)) {
+                        matchedDay = dayNum
+                        break
+                    }
+                }
+
+                if (matchedDay != null) {
+                    currentDay = matchedDay
+                    periodCounter = 1
+
+                    val afterDay = trimmed.replace(Regex("(?i)^.*?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)[.:\\s-]*"), "").trim()
+                    if (afterDay.isNotBlank() && afterDay.length > 2) {
+                        val splitSubs = splitSubjectsInLine(afterDay)
+                        for (sub in splitSubs) {
+                            val cleanSub = cleanSubjectName(sub)
+                            if (cleanSub.isNotBlank() && !isNoiseLine(cleanSub)) {
+                                val slot = activeSlots.getOrElse(periodCounter - 1) { defaultSlots.last() }
+                                val isPractical = isPracticalSubject(cleanSub)
+                                val isLunch = isLunchBreak(cleanSub)
+                                timetable.add(
+                                    ParsedTimetableClass(
+                                        day_of_week = currentDay,
+                                        period_number = periodCounter++,
+                                        start_time = slot.first,
+                                        end_time = slot.second,
+                                        subject = cleanSub,
+                                        teacher_name = extractTeacher(sub),
+                                        room = extractRoom(sub, isPractical),
+                                        is_practical = isPractical,
+                                        is_lunch_break = isLunch
+                                    )
+                                )
+                            }
+                        }
+                    }
+                    continue
+                }
+
+                val timeMatch = timeRegex.find(trimmed)
+                if (timeMatch != null) {
+                    val h1 = timeMatch.groupValues[1]
+                    val m1 = timeMatch.groupValues[2].ifEmpty { "00" }
+                    val p1 = timeMatch.groupValues[3].uppercase()
+                    val h2 = timeMatch.groupValues[4]
+                    val m2 = timeMatch.groupValues[5].ifEmpty { "00" }
+                    val p2 = timeMatch.groupValues[6].uppercase()
+                    val finalP2 = if (p2.isNotBlank()) p2 else if (h2.toIntOrNull() ?: 0 in 1..7) "PM" else "AM"
+                    val finalP1 = if (p1.isNotBlank()) p1 else if (h1.toIntOrNull() ?: 0 in 8..11) "AM" else finalP2
+                    val startTime = String.format(Locale.US, "%02d:%s %s", h1.toIntOrNull() ?: 9, m1, finalP1)
+                    val endTime = String.format(Locale.US, "%02d:%s %s", h2.toIntOrNull() ?: 10, m2, finalP2)
+
+                    val subjectPart = trimmed.replace(timeMatch.value, "").trim()
+                    val splitSubs = splitSubjectsInLine(subjectPart)
+                    for (sub in splitSubs) {
+                        val cleanSub = cleanSubjectName(sub)
+                        if (cleanSub.isNotBlank() && !isNoiseLine(cleanSub)) {
+                            val isPractical = isPracticalSubject(cleanSub)
+                            val isLunch = isLunchBreak(cleanSub)
+                            timetable.add(
+                                ParsedTimetableClass(
+                                    day_of_week = currentDay,
+                                    period_number = periodCounter++,
+                                    start_time = startTime,
+                                    end_time = endTime,
+                                    subject = cleanSub,
+                                    teacher_name = extractTeacher(sub),
+                                    room = extractRoom(sub, isPractical),
+                                    is_practical = isPractical,
+                                    is_lunch_break = isLunch
+                                )
+                            )
+                        }
+                    }
+                } else {
+                    val splitSubs = splitSubjectsInLine(trimmed)
+                    for (sub in splitSubs) {
+                        val cleanSub = cleanSubjectName(sub)
+                        if (cleanSub.isNotBlank() && !isNoiseLine(cleanSub) && isLikelySubject(cleanSub)) {
+                            val slot = activeSlots.getOrElse(periodCounter - 1) { defaultSlots.last() }
+                            val isPractical = isPracticalSubject(cleanSub)
+                            val isLunch = isLunchBreak(cleanSub)
+                            timetable.add(
+                                ParsedTimetableClass(
+                                    day_of_week = currentDay,
+                                    period_number = periodCounter++,
+                                    start_time = slot.first,
+                                    end_time = slot.second,
+                                    subject = cleanSub,
+                                    teacher_name = extractTeacher(sub),
+                                    room = extractRoom(sub, isPractical),
+                                    is_practical = isPractical,
+                                    is_lunch_break = isLunch
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        return timetable
+    }
+
+    private fun splitSubjectsInLine(line: String): List<String> {
+        val delimiters = Regex("[,;|/\\t]|(?<=\\s)-(?=\\s)|\\s{2,}")
+        var parts = line.split(delimiters).map { it.trim() }.filter { it.length >= 3 }
+        if (parts.isEmpty()) parts = listOf(line.trim())
+
+        // Check if individual parts contain multiple known subject keywords separated by spaces
+        val subjectKeywords = listOf(
+            "anatomy", "physiology", "biochemistry", "pathology", "pharmacology",
+            "microbiology", "community medicine", "forensic", "medicine", "surgery",
+            "pediatrics", "organon", "materia medica", "pharmacy", "repertory",
+            "dissection", "histology", "physio lab", "lunch", "break", "posting",
+            "clinical", "seminar", "skills lab", "ward"
+        )
+
+        val expanded = mutableListOf<String>()
+        for (part in parts) {
+            val lower = part.lowercase()
+            val matches = mutableListOf<Pair<Int, String>>()
+            for (kw in subjectKeywords) {
+                val idx = lower.indexOf(kw)
+                if (idx >= 0) {
+                    matches.add(Pair(idx, kw))
+                }
+            }
+            if (matches.size >= 2) {
+                val sorted = matches.sortedBy { it.first }
+                for (i in sorted.indices) {
+                    val start = sorted[i].first
+                    val end = if (i < sorted.size - 1) sorted[i + 1].first else part.length
+                    val subText = part.substring(start, end).trim()
+                    if (subText.length >= 3) {
+                        expanded.add(subText)
+                    }
+                }
+            } else {
+                expanded.add(part)
+            }
+        }
+        return if (expanded.isNotEmpty()) expanded else parts
+    }
+
+    private fun cleanSubjectName(text: String): String {
+        var clean = text
+            .replace(Regex("^[0-9]+[.):-]\\s*"), "")
+            .replace(Regex("^[-:•|*]\\s*"), "")
+            .replace(Regex("[-:•|*]\\s*$"), "")
+            .replace(Regex("\\b(dr|prof|mrs|mr)\\.?\\s+[A-Za-z]+", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\b(hall|room|lt|lab)\\s*[-0-9A-Za-z]+", RegexOption.IGNORE_CASE), "")
+            .trim()
+
+        val lower = clean.lowercase()
+        return when {
+            lower.contains("dissect") || lower.contains("cadaver") || lower == "dh" -> "Dissection Hall"
+            lower.contains("histol") || lower == "histo" -> "Histology Lab"
+            lower.contains("physio lab") || lower.contains("hematol") -> "Physiology Lab"
+            lower.contains("bioch lab") || lower.contains("chem lab") -> "Biochemistry Lab"
+            lower.contains("anat") -> if (lower.contains("pract") || lower.contains("lab")) "Anatomy Practical" else "Anatomy Lecture"
+            lower.contains("physio") -> if (lower.contains("pract") || lower.contains("lab")) "Physiology Practical" else "Physiology Lecture"
+            lower.contains("bioch") -> if (lower.contains("pract") || lower.contains("lab")) "Biochemistry Practical" else "Biochemistry Lecture"
+            lower.contains("comm med") || lower.contains("psm") || lower.contains("spm") -> "Community Medicine"
+            lower.contains("pharmacy") || lower.contains("pharm") -> "Homoeopathic Pharmacy"
+            lower.contains("organon") || lower.contains("aphorism") -> "Organon of Medicine"
+            lower.contains("materia") || lower.contains("mm") -> "Homoeopathic Materia Medica"
+            lower.contains("repert") -> "Repertory"
+            lower.contains("patho") -> "Pathology"
+            lower.contains("micro") -> "Microbiology"
+            lower.contains("clinic") || lower.contains("posting") || lower.contains("ward") -> "Clinical Posting"
+            lower.contains("seminar") || lower.contains("journal club") -> "Clinical Seminar"
+            lower.contains("ece") || lower.contains("early clinical") -> "Early Clinical Exposure (ECE)"
+            lower.contains("sdl") || lower.contains("self directed") -> "Self Directed Learning"
+            lower.contains("aetcom") -> "AETCOM Module"
+            lower.contains("lunch") || lower.contains("tiffin") || lower.contains("break") || lower.contains("recess") -> "Lunch Break"
+            lower.contains("sports") || lower.contains("yoga") || lower.contains("library") -> clean.replaceFirstChar { it.uppercase() }
+            clean.length in 3..40 -> clean.split(" ").filter { it.isNotBlank() }.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+            else -> clean.take(40)
+        }
+    }
+
+    private fun isNoiseLine(text: String): Boolean {
+        val lower = text.lowercase().trim()
+        if (lower.length < 3) return true
+        if (lower in listOf("time", "days", "day", "date", "period", "routine", "timetable", "schedule", "class", "semester", "year", "session")) return true
+        if (lower.matches(Regex("^[0-9\\s:.-]+$"))) return true
+        return false
+    }
+
+    private fun isLikelySubject(text: String): Boolean {
+        val lower = text.lowercase().trim()
+        if (isNoiseLine(lower)) return false
+        val medicalKeywords = listOf(
+            "anat", "physio", "bioch", "med", "surg", "path", "micro", "pharm", "comm",
+            "psm", "lab", "pract", "clinic", "ward", "dissect", "histo", "embryo", "organon",
+            "materia", "repert", "lecture", "hall", "ece", "sdl", "aetcom", "lunch", "break",
+            "seminar", "posting", "sports", "library", "class"
+        )
+        return medicalKeywords.any { lower.contains(it) } || text.split(" ").size in 1..4
+    }
+
+    private fun isPracticalSubject(name: String): Boolean {
+        val lower = name.lowercase()
+        return lower.contains("practical") || lower.contains("lab") || lower.contains("dissect") || lower.contains("clinic") || lower.contains("posting")
+    }
+
+    private fun isLunchBreak(name: String): Boolean {
+        val lower = name.lowercase()
+        return lower.contains("lunch") || lower.contains("break") || lower.contains("recess") || lower.contains("tiffin")
+    }
+
+    private fun extractTeacher(text: String): String? {
+        val match = Regex("(?:Dr|Prof|Mr|Mrs)\\.?\\s+([A-Za-z]+)", RegexOption.IGNORE_CASE).find(text)
+        return match?.value
+    }
+
+    private fun extractRoom(text: String, isPractical: Boolean): String? {
+        val match = Regex("(?:Hall|Room|LT|Lab)\\s*[-0-9A-Za-z]+", RegexOption.IGNORE_CASE).find(text)
+        return match?.value ?: if (isPractical) "Practical Lab" else "Lecture Hall"
+    }
+
     suspend fun generateDailyClassRevision(
         subject: String,
         explanation: String,
@@ -808,7 +1242,7 @@ class GeminiParserService {
         classTime: String = ""
     ): DailySubjectRevision = withContext(Dispatchers.IO) {
         val activeKey = getActiveApiKey()
-        if (activeKey.isEmpty() || activeKey == "MY_GEMINI_API_KEY") {
+        if (activeKey.isEmpty()) {
             // Local fallback
             return@withContext DailySubjectRevision(
                 dateString = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date()),

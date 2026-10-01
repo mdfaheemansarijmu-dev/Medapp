@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -34,7 +35,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
 import com.example.R
+import com.example.data.model.GeminiModelOption
 import com.example.data.model.MedicalCourse
+import com.example.network.GeminiParserService
 import com.example.data.university.CollegeCategory
 import com.example.data.university.CollegeInfo
 import com.example.data.university.UniversityDirectory
@@ -1248,6 +1251,13 @@ fun SettingsScreen(
                     }
                 )
             }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Gemini AI Engine & Speed Settings Group
+            SettingsSectionHeader(title = "Gemini AI Engine & Speed")
+
+            GeminiAISettingsCard(viewModel = viewModel)
 
             Spacer(modifier = Modifier.height(20.dp))
 
@@ -2571,6 +2581,258 @@ fun ProfilePictureSourceDialog(
             }
         }
     )
+}
+
+@Composable
+fun GeminiAISettingsCard(
+    viewModel: PlannerViewModel,
+    modifier: Modifier = Modifier
+) {
+    val selectedModel by viewModel.selectedGeminiModel.collectAsStateWithLifecycle()
+    val customApiKey by viewModel.customGeminiApiKey.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    var showModelChooserDialog by remember { mutableStateOf(false) }
+    var showApiKeyDialog by remember { mutableStateOf(false) }
+    var apiKeyInput by remember(customApiKey) { mutableStateOf(customApiKey) }
+
+    val isCloudKeyConfigured = GeminiParserService.isValidApiKey(customApiKey) ||
+            GeminiParserService.isValidApiKey(BuildConfig.GEMINI_API_KEY)
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Header
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(14.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "AI Schedule & Chat Engine",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = if (isCloudKeyConfigured) "Google Gemini Cloud Active" else "Local ML Kit Intelligent Engine Active",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isCloudKeyConfigured) Color(0xFF059669) else MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                Surface(
+                    color = if (isCloudKeyConfigured) Color(0xFF10B981).copy(alpha = 0.15f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, if (isCloudKeyConfigured) Color(0xFF10B981).copy(alpha = 0.4f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+                ) {
+                    Text(
+                        text = if (isCloudKeyConfigured) "⚡ CLOUD" else "🔒 OFFLINE",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = if (isCloudKeyConfigured) Color(0xFF059669) else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+
+            // Model Selection Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showModelChooserDialog = true }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Active AI Model",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "${selectedModel.displayName} (${selectedModel.shortBadge})",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = selectedModel.latencyLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                OutlinedButton(
+                    onClick = { showModelChooserDialog = true },
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text("Change", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+
+            // API Key Configuration Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showApiKeyDialog = true }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Google AI Studio API Key",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = if (customApiKey.isNotBlank()) "••••••••••••${customApiKey.takeLast(4)}" else if (GeminiParserService.isValidApiKey(BuildConfig.GEMINI_API_KEY)) "Injected from Environment" else "Not set (Using built-in offline engine)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                OutlinedButton(
+                    onClick = { showApiKeyDialog = true },
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(if (customApiKey.isNotBlank()) "Edit Key" else "Add Key", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+    }
+
+    // Model Selector Dialog
+    if (showModelChooserDialog) {
+        AlertDialog(
+            onDismissRequest = { showModelChooserDialog = false },
+            title = {
+                Text("Select Gemini AI Model", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GeminiModelOption.entries.forEach { option ->
+                        val isSel = option == selectedModel
+                        Surface(
+                            onClick = {
+                                viewModel.setGeminiModel(option)
+                                showModelChooserDialog = false
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSel) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                            border = BorderStroke(1.dp, if (isSel) MaterialTheme.colorScheme.primary else Color.Transparent),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = option.displayName,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        text = option.latencyLabel,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (option.isFastest) Color(0xFF059669) else MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = option.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showModelChooserDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
+
+    // API Key Dialog
+    if (showApiKeyDialog) {
+        AlertDialog(
+            onDismissRequest = { showApiKeyDialog = false },
+            title = {
+                Text("Google AI Studio Key", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Paste your Gemini API key from Google AI Studio (aistudio.google.com). Leave empty to use the 100% offline ML Kit intelligent table engine.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = apiKeyInput,
+                        onValueChange = { apiKeyInput = it },
+                        label = { Text("Gemini API Key") },
+                        placeholder = { Text("AIzaSy...") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.setCustomGeminiApiKey(apiKeyInput.trim())
+                    showApiKeyDialog = false
+                    Toast.makeText(context, if (apiKeyInput.trim().isNotBlank()) "Gemini API Key saved!" else "Offline mode active", Toast.LENGTH_SHORT).show()
+                }) {
+                    Text("Save Key")
+                }
+            },
+            dismissButton = {
+                if (customApiKey.isNotBlank()) {
+                    TextButton(onClick = {
+                        apiKeyInput = ""
+                        viewModel.setCustomGeminiApiKey("")
+                        showApiKeyDialog = false
+                        Toast.makeText(context, "API Key cleared. Using offline intelligent engine.", Toast.LENGTH_SHORT).show()
+                    }) {
+                        Text("Clear Key", color = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    TextButton(onClick = { showApiKeyDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            }
+        )
+    }
 }
 
 

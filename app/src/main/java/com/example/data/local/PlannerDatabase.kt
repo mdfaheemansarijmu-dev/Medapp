@@ -147,6 +147,9 @@ interface PlannerDao {
     @Query("SELECT * FROM user_profiles WHERE uid = :uid LIMIT 1")
     fun getUserProfile(uid: String): Flow<UserProfile?>
 
+    @Query("SELECT * FROM user_profiles WHERE uid = :uid LIMIT 1")
+    suspend fun getUserProfileOnce(uid: String): UserProfile?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertUserProfile(profile: UserProfile)
 

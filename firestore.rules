@@ -1,15 +1,21 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // User personal cloud backups and sync
-    match /users/{userId}/{document=**} {
+    // User personal cloud profile, backups, and sync
+    match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
+      match /{document=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
     }
 
-    // Real-time batch broadcasting: assignments, assessments, and notices
+    // Real-time batch broadcasting: assignments, assessments, timetable, completed topics, notices
     // Shared between students of the same college, course, year, and batch
-    match /shared_batches/{batchKey}/{document=**} {
+    match /shared_batches/{batchKey} {
       allow read, write: if true;
+      match /{document=**} {
+        allow read, write: if true;
+      }
     }
 
     // Reference data (gazetted holidays)

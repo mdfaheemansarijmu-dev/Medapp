@@ -38,10 +38,20 @@ enum class GeminiModelOption(
     );
 
     companion object {
-        val DEFAULT = FLASH_35
+        val DEFAULT = FLASH_LITE
 
         fun fromModelId(id: String): GeminiModelOption {
-            return entries.find { it.modelId == id } ?: DEFAULT
+            val lower = id.lowercase().trim()
+            if (lower.contains("3.8") || lower.contains("3.5") || lower == "gemini-3.5-flash") {
+                return FLASH_35
+            }
+            if (lower.contains("lite") || lower.contains("fast") || lower.contains("3.1-flash-lite")) {
+                return FLASH_LITE
+            }
+            if (lower.contains("pro") || lower.contains("reasoning")) {
+                return PRO_31
+            }
+            return entries.find { it.modelId.equals(id, ignoreCase = true) } ?: DEFAULT
         }
     }
 }

@@ -73,6 +73,7 @@ fun AuthScreen(
     var currentAuthMode by remember { mutableStateOf(AuthMode.SPLASH) }
     val isAuthenticating by viewModel.isAuthenticating.collectAsStateWithLifecycle()
     val authError by viewModel.authError.collectAsStateWithLifecycle()
+    val authLoadingMessage by viewModel.authLoadingMessage.collectAsStateWithLifecycle()
     val phoneOtpSent by viewModel.phoneOtpSent.collectAsStateWithLifecycle()
     val loginMode by viewModel.loginMode.collectAsStateWithLifecycle()
 
@@ -114,7 +115,6 @@ fun AuthScreen(
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        viewModel.setAuthenticating(false)
         if (result.resultCode == Activity.RESULT_OK) {
             val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
             try {
@@ -125,25 +125,42 @@ fun AuthScreen(
                 val id = account.id ?: ""
                 val idToken = account.idToken
 
-                viewModel.signInWithGoogle(name, email, photoUrl, id, idToken)
-                Toast.makeText(context, "Signed in as $name", Toast.LENGTH_SHORT).show()
-
-                // Restore cloud data
-                viewModel.restoreDataFromFirebase { success ->
-                    if (success && viewModel.isOnboardingCompleted()) {
-                        viewModel.navigateTo(Screen.Dashboard)
-                    } else {
-                        onAuthSuccess(false)
+                viewModel.signInWithGoogle(name, email, photoUrl, id, idToken) { isReturningUser, isSuccess, errorMsg ->
+                    if (isSuccess) {
+                        if (isReturningUser) {
+                            Toast.makeText(context, "Welcome back, $name!", Toast.LENGTH_SHORT).show()
+                            viewModel.navigateTo(Screen.Dashboard)
+                        } else {
+                            Toast.makeText(context, "Welcome, $name! Please complete your academic profile.", Toast.LENGTH_SHORT).show()
+                            onAuthSuccess(false)
+                        }
+                    } else if (errorMsg != null) {
+                        Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (e: ApiException) {
                 val errorMsg = when (e.statusCode) {
-                    com.google.android.gms.common.api.CommonStatusCodes.NETWORK_ERROR -> "Network error connecting to Google. Please check internet connection."
+                    com.google.android.gms.common.api.CommonStatusCodes.NETWORK_ERROR -> "Network error connecting to Google. Please check your internet connection."
                     com.google.android.gms.common.api.CommonStatusCodes.CANCELED -> "Google sign-in cancelled."
-                    else -> "Sign-in error (${e.statusCode}). Please try again."
+                    10 -> "Google Sign-In configuration error (Developer Error 10). Please ensure the debug/release SHA-1 fingerprint is registered in Firebase Console."
+                    12500 -> "Google Sign-In failed (Status 12500). Please ensure Google Play Services is available."
+                    12501 -> "Google sign-in cancelled."
+                    else -> "Google sign-in failed (${e.statusCode}). Please try again."
                 }
-                viewModel.setAuthError(errorMsg)
+                viewModel.setAuthenticating(false)
+                if (e.statusCode != com.google.android.gms.common.api.CommonStatusCodes.CANCELED && e.statusCode != 12501) {
+                    viewModel.setAuthError(errorMsg)
+                    Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                } else {
+                    viewModel.setAuthError(null)
+                }
             }
+        } else if (result.resultCode == Activity.RESULT_CANCELED) {
+            viewModel.setAuthenticating(false)
+            viewModel.setAuthError(null)
+        } else {
+            viewModel.setAuthenticating(false)
+            viewModel.setAuthError("Google sign-in was cancelled or failed.")
         }
     }
 
@@ -152,17 +169,6 @@ fun AuthScreen(
         if (currentAuthMode == AuthMode.SPLASH) {
             delay(1200)
             currentAuthMode = AuthMode.LOGIN
-        }
-    }
-
-    // React to successful Firebase login
-    LaunchedEffect(loginMode) {
-        if (loginMode == LoginMode.FIREBASE || loginMode == LoginMode.GOOGLE) {
-            if (viewModel.isOnboardingCompleted()) {
-                viewModel.navigateTo(Screen.Dashboard)
-            } else {
-                onAuthSuccess(currentAuthMode == AuthMode.SIGN_UP)
-            }
         }
     }
 
@@ -215,7 +221,18 @@ fun AuthScreen(
                                 return@AuthLoginScreen
                             }
                             localValidationError = null
-                            viewModel.signInWithEmailAndPassword(loginEmail.trim(), loginPassword)
+                            viewModel.signInWithEmailAndPassword(loginEmail.trim(), loginPassword) { isReturningUser, isSuccess, errorMsg ->
+                                if (isSuccess) {
+                                    if (isReturningUser) {
+                                        Toast.makeText(context, "Welcome back!", Toast.LENGTH_SHORT).show()
+                                        viewModel.navigateTo(Screen.Dashboard)
+                                    } else {
+                                        onAuthSuccess(false)
+                                    }
+                                } else if (errorMsg != null) {
+                                    localValidationError = errorMsg
+                                }
+                            }
                         },
                         onGoogleSignIn = {
                             viewModel.setAuthenticating(true)
@@ -329,6 +346,39 @@ fun AuthScreen(
                             )
                         }
                     )
+                }
+            }
+        }
+
+        if (isAuthenticating) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.45f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 8.dp,
+                    shadowElevation = 8.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 2.5.dp
+                        )
+                        Text(
+                            text = authLoadingMessage,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             }
         }

@@ -35,6 +35,7 @@ import com.example.ui.components.ForceUpdateScreen
 import com.example.ui.components.DuplicateContributionDialog
 import com.example.ui.screens.*
 import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.viewmodel.AuthState
 import com.example.ui.viewmodel.PlannerViewModel
 import com.example.ui.viewmodel.PlannerViewModelFactory
 import com.example.ui.viewmodel.Screen
@@ -81,6 +82,9 @@ class MainActivity : ComponentActivity() {
             val isDarkTheme by viewModel.isDarkTheme.collectAsStateWithLifecycle()
             MyApplicationTheme(darkTheme = isDarkTheme) {
                 val currentScreen by viewModel.currentScreen.collectAsStateWithLifecycle()
+                val authState by viewModel.authState.collectAsStateWithLifecycle()
+                val authLoadingMessage by viewModel.authLoadingMessage.collectAsStateWithLifecycle()
+                val authError by viewModel.authError.collectAsStateWithLifecycle()
                 val updateAvailable by viewModel.updateAvailable.collectAsStateWithLifecycle()
                 val updateResult by viewModel.updateResult.collectAsStateWithLifecycle()
                 val isUpdateDialogDismissed by viewModel.isUpdateDialogDismissed.collectAsStateWithLifecycle()
@@ -93,10 +97,69 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxSize(),
                         color = MaterialTheme.colorScheme.background
                     ) {
-                        if (currentScreen == Screen.Welcome) {
-                            WelcomeScreen(viewModel = viewModel)
-                        } else {
-                            MainAppLayout(viewModel = viewModel, currentScreen = currentScreen)
+                        when (authState) {
+                            AuthState.LOADING -> {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(24.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                                    ) {
+                                        if (authError == null) {
+                                            CircularProgressIndicator(
+                                                color = MaterialTheme.colorScheme.primary,
+                                                strokeWidth = 3.dp
+                                            )
+                                            Text(
+                                                text = authLoadingMessage,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Default.CloudOff,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.size(48.dp)
+                                            )
+                                            Text(
+                                                text = "Cloud Sync Error",
+                                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = authError ?: "Unable to connect to academic profile.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                            )
+                                            Button(
+                                                onClick = { viewModel.retryAuthCheck() },
+                                                shape = RoundedCornerShape(12.dp)
+                                            ) {
+                                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text("Retry")
+                                            }
+                                            TextButton(onClick = { viewModel.signOut() }) {
+                                                Text("Sign out / Try different account")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            AuthState.UNAUTHENTICATED, AuthState.AUTHENTICATED_PROFILE_INCOMPLETE -> {
+                                WelcomeScreen(viewModel = viewModel)
+                            }
+                            AuthState.AUTHENTICATED_PROFILE_COMPLETE -> {
+                                val effectiveScreen = if (currentScreen == Screen.Welcome) Screen.Dashboard else currentScreen
+                                MainAppLayout(viewModel = viewModel, currentScreen = effectiveScreen)
+                            }
                         }
                     }
 
