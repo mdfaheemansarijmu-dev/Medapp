@@ -27,6 +27,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.model.Assessment
+import com.example.data.model.Assignment
 import com.example.data.model.CompletedSyllabusTopic
 import com.example.data.model.MedicalCourse
 import com.example.data.syllabus.CourseSyllabusDirectory
@@ -34,6 +36,13 @@ import com.example.data.syllabus.SyllabusSubject
 import com.example.ui.viewmodel.PlannerViewModel
 import java.text.SimpleDateFormat
 import java.util.*
+
+enum class FinishedCategory(val label: String) {
+    ALL("All Finished"),
+    CHAPTERS("Chapters"),
+    ASSIGNMENTS("Assignments"),
+    ASSESSMENTS("Assessments")
+}
 
 @Composable
 fun SyllabusFinishedSubList(
@@ -45,6 +54,10 @@ fun SyllabusFinishedSubList(
     val studentYear by viewModel.studentYear.collectAsStateWithLifecycle()
     val completedTopics by viewModel.completedSyllabusTopics.collectAsStateWithLifecycle()
     val selectedSyllabusYear by viewModel.selectedSyllabusYear.collectAsStateWithLifecycle()
+    val assignments by viewModel.assignments.collectAsStateWithLifecycle()
+    val assessments by viewModel.assessments.collectAsStateWithLifecycle()
+
+    var selectedCategory by remember { mutableStateOf(FinishedCategory.ALL) }
 
     val courseCode = selectedCourse?.code ?: "MBBS"
     val courseDisplayName = selectedCourse?.displayName ?: "Medicine"
@@ -81,6 +94,28 @@ fun SyllabusFinishedSubList(
         }
     }
 
+    // Filter completed assignments
+    val completedAssignments = remember(assignments, searchQuery) {
+        assignments.filter { it.status.equals("Completed", ignoreCase = true) }
+            .filter { asg ->
+                searchQuery.isBlank() ||
+                        asg.title.contains(searchQuery, ignoreCase = true) ||
+                        asg.subject.contains(searchQuery, ignoreCase = true) ||
+                        (asg.notes?.contains(searchQuery, ignoreCase = true) == true)
+            }
+    }
+
+    // Filter completed assessments
+    val completedAssessments = remember(assessments, searchQuery) {
+        assessments.filter { it.status.equals("Completed", ignoreCase = true) }
+            .filter { ass ->
+                searchQuery.isBlank() ||
+                        ass.title.contains(searchQuery, ignoreCase = true) ||
+                        ass.subject.contains(searchQuery, ignoreCase = true) ||
+                        (ass.syllabus?.contains(searchQuery, ignoreCase = true) == true)
+            }
+    }
+
     // Group topics by subject
     val topicsBySubject = remember(filteredTopics) {
         filteredTopics.groupBy { it.subject.trim().lowercase() }
@@ -96,45 +131,47 @@ fun SyllabusFinishedSubList(
         verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(bottom = 80.dp)
     ) {
-        // 1. Academic Year Switcher Chips
-        item {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = "ACADEMIC YEAR CURRICULUM",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    items(availableYears) { yr ->
-                        val isSelected = CourseSyllabusDirectory.normalizeYear(yr) == CourseSyllabusDirectory.normalizeYear(effectiveYear)
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { viewModel.setSelectedSyllabusYear(yr) },
-                            label = {
-                                Text(
-                                    text = yr,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            },
-                            leadingIcon = if (isSelected) {
-                                {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
+        // 1. Academic Year Switcher Chips (shown for chapters)
+        if (selectedCategory == FinishedCategory.ALL || selectedCategory == FinishedCategory.CHAPTERS) {
+            item {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "ACADEMIC YEAR CURRICULUM",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(availableYears) { yr ->
+                            val isSelected = CourseSyllabusDirectory.normalizeYear(yr) == CourseSyllabusDirectory.normalizeYear(effectiveYear)
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { viewModel.setSelectedSyllabusYear(yr) },
+                                label = {
+                                    Text(
+                                        text = yr,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                     )
-                                }
-                            } else null,
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            ),
-                            shape = RoundedCornerShape(12.dp)
-                        )
+                                },
+                                leadingIcon = if (isSelected) {
+                                    {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                } else null,
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -171,11 +208,11 @@ fun SyllabusFinishedSubList(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Syllabus Coverage Tracker",
+                                text = "Finished Syllabus Tracker",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "$courseDisplayName • $effectiveYear",
+                                text = "$courseDisplayName • All Finished Portions",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -200,92 +237,250 @@ fun SyllabusFinishedSubList(
                     ) {
                         CoverageStatItem(
                             value = "${filteredTopics.size}",
-                            label = "Chapters Covered",
-                            icon = Icons.Default.CheckCircle,
+                            label = "Chapters",
+                            icon = Icons.Default.MenuBook,
                             tint = MaterialTheme.colorScheme.primary
                         )
                         CoverageStatItem(
-                            value = "${subjectsForYear.size}",
-                            label = "Total Subjects",
-                            icon = Icons.Default.MenuBook,
+                            value = "${completedAssignments.size}",
+                            label = "Assignments",
+                            icon = Icons.Default.AssignmentTurnedIn,
                             tint = MaterialTheme.colorScheme.secondary
                         )
-                        val activeSubjectsCount = subjectsForYear.count { sub ->
-                            topicsBySubject[sub.name.trim().lowercase()]?.isNotEmpty() == true
-                        }
                         CoverageStatItem(
-                            value = "$activeSubjectsCount/${subjectsForYear.size}",
-                            label = "Subjects Started",
-                            icon = Icons.Default.TrendingUp,
+                            value = "${completedAssessments.size}",
+                            label = "Assessments",
+                            icon = Icons.Default.FactCheck,
                             tint = MaterialTheme.colorScheme.tertiary
+                        )
+                        CoverageStatItem(
+                            value = "${filteredTopics.size + completedAssignments.size + completedAssessments.size}",
+                            label = "Total Finished",
+                            icon = Icons.Default.CheckCircle,
+                            tint = Color(0xFF10B981)
                         )
                     }
                 }
             }
         }
 
-        // 3. Section Title
+        // 3. Category Filter Chips (All, Chapters, Assignments, Assessments)
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    text = "SUBJECTS FOR $effectiveYear".uppercase(),
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp),
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = "${subjectsForYear.size} Subjects",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        // 4. Subjects Cards
-        items(subjectsForYear) { subject ->
-            val subjectKey = subject.name.trim().lowercase()
-            val completedForSubject = topicsBySubject[subjectKey] ?: emptyList()
-            var isExpanded by remember { mutableStateOf(false) }
-
-            SubjectSyllabusCard(
-                subject = subject,
-                completedTopics = completedForSubject,
-                isExpanded = isExpanded,
-                onToggleExpand = { isExpanded = !isExpanded },
-                onAddTopic = { onOpenAddDialog(subject.name) },
-                onDeleteTopic = { topicToDelete = it },
-                onQuickAddSuggestedTopic = { suggestedTitle ->
-                    viewModel.addCompletedTopic(
-                        subject = subject.name,
-                        topicTitle = suggestedTitle,
-                        academicYear = effectiveYear,
-                        notes = "Completed from syllabus guide",
-                        shareWithBatch = true
+                items(FinishedCategory.values()) { cat ->
+                    val isSelected = selectedCategory == cat
+                    val count = when (cat) {
+                        FinishedCategory.ALL -> filteredTopics.size + completedAssignments.size + completedAssessments.size
+                        FinishedCategory.CHAPTERS -> filteredTopics.size
+                        FinishedCategory.ASSIGNMENTS -> completedAssignments.size
+                        FinishedCategory.ASSESSMENTS -> completedAssessments.size
+                    }
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { selectedCategory = cat },
+                        label = {
+                            Text(
+                                text = "${cat.label} ($count)",
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 12.sp
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        shape = RoundedCornerShape(12.dp)
                     )
                 }
-            )
+            }
         }
 
-        // 5. Custom / Additional Topics outside predefined subjects
-        val standardSubjectNames = subjectsForYear.map { it.name.trim().lowercase() }.toSet()
-        val otherTopics = filteredTopics.filter { it.subject.trim().lowercase() !in standardSubjectNames }
-        if (otherTopics.isNotEmpty()) {
+        // 4. Chapters Section
+        if (selectedCategory == FinishedCategory.ALL || selectedCategory == FinishedCategory.CHAPTERS) {
             item {
-                Text(
-                    text = "OTHER RECORDED TOPICS",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.padding(top = 8.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "COVERED CHAPTERS ($effectiveYear)".uppercase(),
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "${filteredTopics.size} Chapters Logged",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            items(subjectsForYear) { subject ->
+                val subjectKey = subject.name.trim().lowercase()
+                val completedForSubject = topicsBySubject[subjectKey] ?: emptyList()
+                var isExpanded by remember { mutableStateOf(false) }
+
+                SubjectSyllabusCard(
+                    subject = subject,
+                    completedTopics = completedForSubject,
+                    isExpanded = isExpanded,
+                    onToggleExpand = { isExpanded = !isExpanded },
+                    onAddTopic = { onOpenAddDialog(subject.name) },
+                    onDeleteTopic = { topicToDelete = it },
+                    onQuickAddSuggestedTopic = { suggestedTitle ->
+                        viewModel.addCompletedTopic(
+                            subject = subject.name,
+                            topicTitle = suggestedTitle,
+                            academicYear = effectiveYear,
+                            notes = "Completed from syllabus guide",
+                            shareWithBatch = true
+                        )
+                    }
                 )
             }
-            items(otherTopics) { topic ->
-                CompletedTopicRow(
-                    topic = topic,
-                    onDelete = { topicToDelete = topic }
-                )
+
+            // Custom / Additional Topics outside predefined subjects
+            val standardSubjectNames = subjectsForYear.map { it.name.trim().lowercase() }.toSet()
+            val otherTopics = filteredTopics.filter { it.subject.trim().lowercase() !in standardSubjectNames }
+            if (otherTopics.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "OTHER RECORDED TOPICS",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+                items(otherTopics) { topic ->
+                    CompletedTopicRow(
+                        topic = topic,
+                        onDelete = { topicToDelete = topic }
+                    )
+                }
+            }
+        }
+
+        // 5. Completed Assignments Section
+        if (selectedCategory == FinishedCategory.ALL || selectedCategory == FinishedCategory.ASSIGNMENTS) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.AssignmentTurnedIn,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "COMPLETED ASSIGNMENTS (${completedAssignments.size})".uppercase(),
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp),
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                }
+            }
+
+            if (completedAssignments.isEmpty()) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "No finished assignments yet",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "When you complete tasks in the Assignments tab, they are automatically saved here!",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            } else {
+                items(completedAssignments, key = { it.firestoreId }) { asg ->
+                    CompletedAssignmentCard(
+                        assignment = asg,
+                        onToggle = { viewModel.toggleAssignment(it) },
+                        onDelete = { viewModel.removeAssignment(it) }
+                    )
+                }
+            }
+        }
+
+        // 6. Completed Assessments Section
+        if (selectedCategory == FinishedCategory.ALL || selectedCategory == FinishedCategory.ASSESSMENTS) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.FactCheck,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "COMPLETED ASSESSMENTS (${completedAssessments.size})".uppercase(),
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp),
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+                }
+            }
+
+            if (completedAssessments.isEmpty()) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "No finished assessments yet",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Tests and vivas marked completed in the Assessments tab will be archived here!",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            } else {
+                items(completedAssessments, key = { it.firestoreId }) { ass ->
+                    CompletedAssessmentCard(
+                        assessment = ass,
+                        onToggle = { viewModel.toggleAssessment(it) },
+                        onDelete = { viewModel.removeAssessment(it) }
+                    )
+                }
             }
         }
     }
@@ -894,5 +1089,288 @@ fun resolveSubjectIcon(iconType: String): ImageVector {
         "herb" -> Icons.Default.Spa
         "cross" -> Icons.Default.LocalHospital
         else -> Icons.Default.School
+    }
+}
+
+@Composable
+fun CompletedAssignmentCard(
+    assignment: Assignment,
+    onToggle: (Assignment) -> Unit,
+    onDelete: (Int) -> Unit
+) {
+    val formatter = remember { SimpleDateFormat("dd MMM yyyy", Locale.getDefault()) }
+    val dateStr = if (assignment.dueDate > 0) formatter.format(Date(assignment.dueDate)) else "Completed"
+    val accentColor = CourseSyllabusDirectory.getSubjectColor(assignment.subject)
+
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = accentColor.copy(alpha = 0.15f)
+                ) {
+                    Text(
+                        text = assignment.subject,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = accentColor,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF10B981).copy(alpha = 0.15f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = Color(0xFF10B981),
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "COMPLETED",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 9.sp),
+                            color = Color(0xFF10B981)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = assignment.title,
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.EventAvailable,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    text = "Due / Written: $dateStr",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (assignment.type.isNotBlank()) {
+                    Text(
+                        text = "• ${assignment.type}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            if (!assignment.notes.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = assignment.notes,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(
+                    onClick = { onToggle(assignment) },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Icon(Icons.Default.Undo, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Mark Pending", fontSize = 11.sp)
+                }
+                IconButton(
+                    onClick = { onDelete(assignment.id) },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteOutline,
+                        contentDescription = "Delete",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CompletedAssessmentCard(
+    assessment: Assessment,
+    onToggle: (Assessment) -> Unit,
+    onDelete: (Int) -> Unit
+) {
+    val formatter = remember { SimpleDateFormat("dd MMM yyyy", Locale.getDefault()) }
+    val dateStr = if (assessment.date > 0) formatter.format(Date(assessment.date)) else "Completed"
+    val accentColor = CourseSyllabusDirectory.getSubjectColor(assessment.subject)
+
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = accentColor.copy(alpha = 0.15f)
+                ) {
+                    Text(
+                        text = assessment.subject,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = accentColor,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF10B981).copy(alpha = 0.15f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FactCheck,
+                            contentDescription = null,
+                            tint = Color(0xFF10B981),
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "COMPLETED",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 9.sp),
+                            color = Color(0xFF10B981)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = assessment.title,
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.EventAvailable,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    text = "Attempted: $dateStr",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (assessment.type.isNotBlank()) {
+                    Text(
+                        text = "• ${assessment.type}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            if (!assessment.syllabus.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Portions tested: ${assessment.syllabus}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(
+                    onClick = { onToggle(assessment) },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Icon(Icons.Default.Undo, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Mark Upcoming", fontSize = 11.sp)
+                }
+                IconButton(
+                    onClick = { onDelete(assessment.id) },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteOutline,
+                        contentDescription = "Delete",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
     }
 }

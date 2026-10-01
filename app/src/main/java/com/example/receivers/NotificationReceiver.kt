@@ -45,7 +45,10 @@ class NotificationReceiver : BroadcastReceiver() {
                                 context.applicationContext,
                                 PlannerDatabase::class.java,
                                 "acuity_planner_db"
-                            ).fallbackToDestructiveMigration().build()
+                            )
+                            .addMigrations(PlannerDatabase.MIGRATION_9_10)
+                            .fallbackToDestructiveMigration()
+                            .build()
 
                             when {
                                 itemId.startsWith("asg_") -> {

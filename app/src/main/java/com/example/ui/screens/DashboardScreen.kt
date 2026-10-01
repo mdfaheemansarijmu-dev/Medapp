@@ -434,7 +434,7 @@ fun DashboardScreen(
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { viewModel.navigateTo(com.example.ui.viewmodel.Screen.Planner) }
+                            .clickable { viewModel.navigateTo(com.example.ui.viewmodel.Screen.Finished) }
                     ) {
                         Row(
                             modifier = Modifier

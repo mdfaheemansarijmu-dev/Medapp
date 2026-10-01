@@ -1246,4 +1246,23 @@ object CourseSyllabusDirectory {
             else -> "1st Year"
         }
     }
+
+    fun getSubjectColor(subjectName: String): androidx.compose.ui.graphics.Color {
+        val clean = subjectName.trim().lowercase()
+        val allSubs = curricula.values.flatMap { it.years.flatMap { y -> y.subjects } }
+        val found = allSubs.firstOrNull { it.name.trim().lowercase() == clean || it.shortName.trim().lowercase() == clean }
+        val hex = found?.colorHex ?: when (kotlin.math.abs(subjectName.hashCode()) % 6) {
+            0 -> "#4F46E5"
+            1 -> "#06B6D4"
+            2 -> "#10B981"
+            3 -> "#F59E0B"
+            4 -> "#EF4444"
+            else -> "#8B5CF6"
+        }
+        return try {
+            androidx.compose.ui.graphics.Color(android.graphics.Color.parseColor(hex))
+        } catch (e: Exception) {
+            androidx.compose.ui.graphics.Color(0xFF4F46E5)
+        }
+    }
 }

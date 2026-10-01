@@ -25,7 +25,9 @@ data class TimetableClass(
     val room: String? = null,
     val teacherName: String? = null,
     val colorHex: String = "#4F46E5", // Color representation
-    val firestoreId: String = java.util.UUID.randomUUID().toString()
+    val firestoreId: String = java.util.UUID.randomUUID().toString(),
+    val authorName: String = "",
+    val authorUid: String = ""
 )
 
 @Entity(tableName = "assignments")
@@ -39,7 +41,9 @@ data class Assignment(
     val status: String, // "Pending", "Completed"
     val type: String, // "Assignment", "Practical", "Seminar", "Viva", "Homework", "Case Record"
     val notes: String? = null,
-    val firestoreId: String = java.util.UUID.randomUUID().toString()
+    val firestoreId: String = java.util.UUID.randomUUID().toString(),
+    val authorName: String = "",
+    val authorUid: String = ""
 )
 
 @Entity(tableName = "assessments")
@@ -52,7 +56,9 @@ data class Assessment(
     val type: String, // "Class Test", "Internal", "Practical Exam", "Viva", "University Exam"
     val status: String = "Upcoming", // "Upcoming", "Completed"
     val syllabus: String? = null,
-    val firestoreId: String = java.util.UUID.randomUUID().toString()
+    val firestoreId: String = java.util.UUID.randomUUID().toString(),
+    val authorName: String = "",
+    val authorUid: String = ""
 )
 
 @Entity(tableName = "study_tasks")
@@ -261,7 +267,20 @@ data class CompletedSyllabusTopic(
     val teacherName: String? = null,
     val notes: String? = null,
     val isSharedWithBatch: Boolean = true,
-    val firestoreId: String = java.util.UUID.randomUUID().toString()
+    val firestoreId: String = java.util.UUID.randomUUID().toString(),
+    val authorName: String = "",
+    val authorUid: String = ""
+)
+
+data class DuplicateContributionInfo(
+    val itemType: String, // "Assignment", "Assessment", "Chapter", "Class Schedule"
+    val subject: String,
+    val title: String,
+    val authorName: String,
+    val submissionTimestamp: Long = System.currentTimeMillis(),
+    val batchName: String = "",
+    val extraDetails: String? = null,
+    val onConfirmSaveAnyway: (() -> Unit)? = null
 )
 
 

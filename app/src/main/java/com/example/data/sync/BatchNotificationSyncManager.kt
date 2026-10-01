@@ -4,6 +4,8 @@ import android.app.Application
 import android.util.Log
 import com.example.data.model.Assignment
 import com.example.data.model.Assessment
+import com.example.data.model.CompletedSyllabusTopic
+import com.example.data.model.TimetableClass
 import com.example.data.model.InAppNotification
 import com.example.data.repository.PlannerRepository
 import com.example.util.AcademicNotificationManager
@@ -69,6 +71,38 @@ data class SharedBatchAssessment(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+data class SharedBatchCompletedTopic(
+    val firestoreId: String = "",
+    val batchKey: String = "",
+    val courseCode: String = "",
+    val academicYear: String = "",
+    val subject: String = "",
+    val topicTitle: String = "",
+    val completionDate: Long = System.currentTimeMillis(),
+    val teacherName: String? = null,
+    val notes: String? = null,
+    val authorName: String = "Classmate",
+    val authorUid: String = "",
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+data class SharedBatchTimetableClass(
+    val firestoreId: String = "",
+    val batchKey: String = "",
+    val courseCode: String = "",
+    val dayOfWeek: Int = 1,
+    val periodNumber: Int = 1,
+    val subject: String = "",
+    val startTime: String = "",
+    val endTime: String = "",
+    val room: String? = null,
+    val teacherName: String? = null,
+    val colorHex: String = "#4F46E5",
+    val authorName: String = "Classmate",
+    val authorUid: String = "",
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 class BatchNotificationSyncManager(
     private val application: Application,
     private val repository: PlannerRepository
@@ -114,11 +148,65 @@ class BatchNotificationSyncManager(
     private var noticeListener: ListenerRegistration? = null
     private var assignmentListener: ListenerRegistration? = null
     private var assessmentListener: ListenerRegistration? = null
+    private var completedTopicListener: ListenerRegistration? = null
+    private var timetableListener: ListenerRegistration? = null
     private var currentBatchKey: String? = null
     private var reconnectJob: Job? = null
 
+    private var isNoticesConnected = false
+    private var isAssignmentsConnected = false
+    private var isAssessmentsConnected = false
+    private var isCompletedTopicsConnected = false
+    private var isTimetableConnected = false
+    private var lastNoticeError: String? = null
+    private var lastAssignmentError: String? = null
+    private var lastAssessmentError: String? = null
+    private var lastCompletedTopicsError: String? = null
+    private var lastTimetableError: String? = null
+
+    private fun updateAggregateStatus(key: String) {
+        val anyPermDenied = (lastNoticeError?.contains("PERMISSION_DENIED", true) == true) ||
+                (lastAssignmentError?.contains("PERMISSION_DENIED", true) == true) ||
+                (lastAssessmentError?.contains("PERMISSION_DENIED", true) == true) ||
+                (lastCompletedTopicsError?.contains("PERMISSION_DENIED", true) == true) ||
+                (lastTimetableError?.contains("PERMISSION_DENIED", true) == true)
+
+        if (isNoticesConnected && isAssignmentsConnected && isAssessmentsConnected) {
+            _isListening.value = true
+            _syncStatus.value = "Connected to $key"
+        } else if (isNoticesConnected && anyPermDenied) {
+            _isListening.value = true
+            _syncStatus.value = "Notices online. Batch items blocked: Add 'match /shared_batches/{batchKey}/{document=**} { allow read, write: if true; }' in Firebase Console"
+        } else if (isNoticesConnected) {
+            _isListening.value = true
+            _syncStatus.value = "Notices online. Syncing batch items..."
+        } else if (anyPermDenied) {
+            _isListening.value = false
+            _syncStatus.value = "Permission Denied: Configure Firestore rules for 'shared_batches/{batchKey}/{document=**}' in Firebase Console"
+        } else if (isAssignmentsConnected || isAssessmentsConnected || isCompletedTopicsConnected || isTimetableConnected) {
+            _isListening.value = true
+            _syncStatus.value = "Connected to $key (Partial)"
+        } else {
+            _isListening.value = false
+            val err = lastNoticeError ?: lastAssignmentError ?: lastAssessmentError ?: lastCompletedTopicsError ?: lastTimetableError
+            _syncStatus.value = if (err != null) "Connection error: $err" else "Connecting to $key..."
+        }
+    }
+
     private val _sharedNotices = MutableStateFlow<List<SharedBatchNotice>>(emptyList())
     val sharedNotices: StateFlow<List<SharedBatchNotice>> = _sharedNotices.asStateFlow()
+
+    private val _sharedAssignments = MutableStateFlow<List<SharedBatchAssignment>>(emptyList())
+    val sharedAssignments: StateFlow<List<SharedBatchAssignment>> = _sharedAssignments.asStateFlow()
+
+    private val _sharedAssessments = MutableStateFlow<List<SharedBatchAssessment>>(emptyList())
+    val sharedAssessments: StateFlow<List<SharedBatchAssessment>> = _sharedAssessments.asStateFlow()
+
+    private val _sharedCompletedTopics = MutableStateFlow<List<SharedBatchCompletedTopic>>(emptyList())
+    val sharedCompletedTopics: StateFlow<List<SharedBatchCompletedTopic>> = _sharedCompletedTopics.asStateFlow()
+
+    private val _sharedTimetableClasses = MutableStateFlow<List<SharedBatchTimetableClass>>(emptyList())
+    val sharedTimetableClasses: StateFlow<List<SharedBatchTimetableClass>> = _sharedTimetableClasses.asStateFlow()
 
     private val _isListening = MutableStateFlow(false)
     val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
@@ -213,27 +301,23 @@ class BatchNotificationSyncManager(
                 .addSnapshotListener { snapshots, error ->
                     if (error != null) {
                         Log.e(TAG, "Batch notices listener error: ${error.message}")
-                        val isPerm = error.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
-                        val errorDesc = if (isPerm) {
-                            "Permission Denied: Configure Firestore rules in Firebase Console"
-                        } else {
-                            error.localizedMessage ?: "Connection error"
+                        isNoticesConnected = false
+                        lastNoticeError = error.message
+                        updateAggregateStatus(key)
+                        if (error.message?.contains("PERMISSION_DENIED", ignoreCase = true) != true) {
+                            scheduleReconnect(college, course, admissionYear, batch, customBatchCode)
                         }
-                        if (isPerm) {
-                            _isListening.value = false
-                            _syncStatus.value = "Feed offline: $errorDesc"
-                        }
-                        scheduleReconnect(college, course, admissionYear, batch, customBatchCode)
                         return@addSnapshotListener
                     }
 
                     if (snapshots != null) {
+                        isNoticesConnected = true
+                        lastNoticeError = null
+                        updateAggregateStatus(key)
                         val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: localDeviceUid
                         val notices = snapshots.documents.mapNotNull { doc -> parseNotice(doc) }
                             .sortedByDescending { it.timestamp }
                         _sharedNotices.value = notices
-                        _isListening.value = true
-                        _syncStatus.value = "Connected to $key"
 
                         scope.launch {
                             processIncomingNotices(notices, currentUserId, snapshots.metadata.hasPendingWrites())
@@ -249,24 +333,23 @@ class BatchNotificationSyncManager(
                 .addSnapshotListener { snapshots, error ->
                     if (error != null) {
                         Log.e(TAG, "Batch assignments listener error: ${error.message}")
-                        val isPerm = error.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
-                        val errorDesc = if (isPerm) {
-                            "Permission Denied: Configure Firestore rules in Firebase Console"
-                        } else {
-                            error.localizedMessage ?: "Connection error"
+                        isAssignmentsConnected = false
+                        lastAssignmentError = error.message
+                        updateAggregateStatus(key)
+                        if (error.message?.contains("PERMISSION_DENIED", ignoreCase = true) != true) {
+                            scheduleReconnect(college, course, admissionYear, batch, customBatchCode)
                         }
-                        if (isPerm) {
-                            _isListening.value = false
-                            _syncStatus.value = "Sync error: $errorDesc"
-                        }
-                        scheduleReconnect(college, course, admissionYear, batch, customBatchCode)
                         return@addSnapshotListener
                     }
 
                     if (snapshots != null) {
-                        _isListening.value = true
-                        _syncStatus.value = "Connected to $key"
+                        isAssignmentsConnected = true
+                        lastAssignmentError = null
+                        updateAggregateStatus(key)
                         val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: localDeviceUid
+                        val asgs = snapshots.documents.mapNotNull { parseBatchAssignment(it) }
+                        _sharedAssignments.value = asgs
+
                         scope.launch {
                             for (change in snapshots.documentChanges) {
                                 when (change.type) {
@@ -286,7 +369,9 @@ class BatchNotificationSyncManager(
                                                 status = asg.status,
                                                 type = asg.type,
                                                 notes = if (asg.notes.isNullOrBlank()) "Shared by ${asg.authorName}" else "${asg.notes} (Shared by ${asg.authorName})",
-                                                firestoreId = asg.firestoreId
+                                                firestoreId = asg.firestoreId,
+                                                authorName = asg.authorName,
+                                                authorUid = asg.authorUid
                                             )
                                             val insertedId = repository.addAssignmentLocally(newAsg)
                                             Log.d(TAG, "Inserted batch assignment: ${asg.title} (ID: $insertedId)")
@@ -360,24 +445,23 @@ class BatchNotificationSyncManager(
                 .addSnapshotListener { snapshots, error ->
                     if (error != null) {
                         Log.e(TAG, "Batch assessments listener error: ${error.message}")
-                        val isPerm = error.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
-                        val errorDesc = if (isPerm) {
-                            "Permission Denied: Configure Firestore rules in Firebase Console"
-                        } else {
-                            error.localizedMessage ?: "Connection error"
+                        isAssessmentsConnected = false
+                        lastAssessmentError = error.message
+                        updateAggregateStatus(key)
+                        if (error.message?.contains("PERMISSION_DENIED", ignoreCase = true) != true) {
+                            scheduleReconnect(college, course, admissionYear, batch, customBatchCode)
                         }
-                        if (isPerm) {
-                            _isListening.value = false
-                            _syncStatus.value = "Sync error: $errorDesc"
-                        }
-                        scheduleReconnect(college, course, admissionYear, batch, customBatchCode)
                         return@addSnapshotListener
                     }
 
                     if (snapshots != null) {
-                        _isListening.value = true
-                        _syncStatus.value = "Connected to $key"
+                        isAssessmentsConnected = true
+                        lastAssessmentError = null
+                        updateAggregateStatus(key)
                         val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: localDeviceUid
+                        val asms = snapshots.documents.mapNotNull { parseBatchAssessment(it) }
+                        _sharedAssessments.value = asms
+
                         scope.launch {
                             for (change in snapshots.documentChanges) {
                                 when (change.type) {
@@ -396,7 +480,9 @@ class BatchNotificationSyncManager(
                                                 type = asm.type,
                                                 status = asm.status,
                                                 syllabus = asm.syllabus,
-                                                firestoreId = asm.firestoreId
+                                                firestoreId = asm.firestoreId,
+                                                authorName = asm.authorName,
+                                                authorUid = asm.authorUid
                                             )
                                             val insertedId = repository.addAssessmentLocally(newAsm)
                                             Log.d(TAG, "Inserted batch assessment: ${asm.title} (ID: $insertedId)")
@@ -462,6 +548,168 @@ class BatchNotificationSyncManager(
                     }
                 }
 
+            // 4. Listen to shared batch completed chapters (Common for batch)
+            completedTopicListener = db.collection("shared_batches")
+                .document(key)
+                .collection("completed_chapters")
+                .limit(150)
+                .addSnapshotListener { snapshots, error ->
+                    if (error != null) {
+                        Log.e(TAG, "Batch completed chapters listener error: ${error.message}")
+                        isCompletedTopicsConnected = false
+                        lastCompletedTopicsError = error.message
+                        updateAggregateStatus(key)
+                        return@addSnapshotListener
+                    }
+
+                    if (snapshots != null) {
+                        isCompletedTopicsConnected = true
+                        lastCompletedTopicsError = null
+                        updateAggregateStatus(key)
+                        val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: localDeviceUid
+                        val topics = snapshots.documents.mapNotNull { parseBatchCompletedTopic(it) }
+                        _sharedCompletedTopics.value = topics
+
+                        scope.launch {
+                            for (change in snapshots.documentChanges) {
+                                when (change.type) {
+                                    DocumentChange.Type.ADDED,
+                                    DocumentChange.Type.MODIFIED -> {
+                                        val topic = parseBatchCompletedTopic(change.document) ?: continue
+                                        val localExisting = repository.getCompletedTopicByFirestoreId(topic.firestoreId)
+                                            ?: repository.findMatchingCompletedTopic(topic.courseCode, topic.subject, topic.topicTitle)
+
+                                        if (localExisting == null) {
+                                            val newTopic = CompletedSyllabusTopic(
+                                                courseCode = topic.courseCode.trim().uppercase(),
+                                                academicYear = topic.academicYear,
+                                                subject = topic.subject,
+                                                topicTitle = topic.topicTitle,
+                                                completionDate = topic.completionDate,
+                                                teacherName = topic.teacherName,
+                                                notes = if (topic.notes.isNullOrBlank()) "Completed with batch (by ${topic.authorName})" else "${topic.notes} (Recorded by ${topic.authorName})",
+                                                isSharedWithBatch = true,
+                                                firestoreId = topic.firestoreId,
+                                                authorName = topic.authorName,
+                                                authorUid = topic.authorUid
+                                            )
+                                            val insertedId = repository.addCompletedTopicLocally(newTopic)
+                                            Log.d(TAG, "Inserted batch completed chapter: ${topic.topicTitle} (ID: $insertedId)")
+
+                                            val isLocallyPosted = locallyPostedFirestoreIds.contains(topic.firestoreId) ||
+                                                    (topic.authorUid.isNotBlank() && topic.authorUid == currentUserId)
+
+                                            if (!isLocallyPosted) {
+                                                repository.addNotification(
+                                                    InAppNotification(
+                                                        title = "Chapter Completed: ${topic.subject}",
+                                                        message = "'${topic.topicTitle}' marked completed by ${topic.authorName} for your batch schedule.",
+                                                        timestamp = topic.timestamp,
+                                                        isRead = false,
+                                                        type = "syllabus"
+                                                    )
+                                                )
+                                                val notifId = kotlin.math.abs(topic.topicTitle.hashCode()) % 100000 + 50000
+                                                try {
+                                                    NotificationHelper.showNotification(
+                                                        context = application,
+                                                        title = "Chapter Completed: ${topic.subject}",
+                                                        message = "${topic.topicTitle} (Marked by: ${topic.authorName})",
+                                                        notificationId = notifId,
+                                                        type = "class",
+                                                        subject = topic.subject,
+                                                        targetTime = topic.completionDate
+                                                    )
+                                                } catch (e: Exception) {
+                                                    Log.e(TAG, "Notification show error", e)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    DocumentChange.Type.REMOVED -> {
+                                        val firestoreId = change.document.getString("firestoreId") ?: change.document.id
+                                        repository.deleteCompletedTopicByFirestoreId(firestoreId)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            // 5. Listen to shared batch timetable schedule (Common for batch)
+            timetableListener = db.collection("shared_batches")
+                .document(key)
+                .collection("timetable")
+                .limit(150)
+                .addSnapshotListener { snapshots, error ->
+                    if (error != null) {
+                        Log.e(TAG, "Batch timetable listener error: ${error.message}")
+                        isTimetableConnected = false
+                        lastTimetableError = error.message
+                        updateAggregateStatus(key)
+                        return@addSnapshotListener
+                    }
+
+                    if (snapshots != null) {
+                        isTimetableConnected = true
+                        lastTimetableError = null
+                        updateAggregateStatus(key)
+                        val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: localDeviceUid
+                        val classes = snapshots.documents.mapNotNull { parseBatchTimetableClass(it) }
+                        _sharedTimetableClasses.value = classes
+
+                        scope.launch {
+                            for (change in snapshots.documentChanges) {
+                                when (change.type) {
+                                    DocumentChange.Type.ADDED,
+                                    DocumentChange.Type.MODIFIED -> {
+                                        val cls = parseBatchTimetableClass(change.document) ?: continue
+                                        val localExisting = repository.getTimetableClassByFirestoreId(cls.firestoreId)
+                                            ?: repository.findMatchingTimetableClass(cls.courseCode, cls.dayOfWeek, cls.periodNumber)
+
+                                        val updatedClass = TimetableClass(
+                                            id = localExisting?.id ?: 0,
+                                            courseCode = cls.courseCode.trim().uppercase(),
+                                            dayOfWeek = cls.dayOfWeek,
+                                            periodNumber = cls.periodNumber,
+                                            subject = cls.subject,
+                                            startTime = cls.startTime,
+                                            endTime = cls.endTime,
+                                            room = cls.room,
+                                            teacherName = cls.teacherName,
+                                            colorHex = cls.colorHex,
+                                            firestoreId = cls.firestoreId,
+                                            authorName = cls.authorName,
+                                            authorUid = cls.authorUid
+                                        )
+                                        repository.addClassLocally(updatedClass)
+                                        Log.d(TAG, "Synced batch timetable class: ${cls.subject} P${cls.periodNumber}")
+
+                                        val isLocallyPosted = locallyPostedFirestoreIds.contains(cls.firestoreId) ||
+                                                (cls.authorUid.isNotBlank() && cls.authorUid == currentUserId)
+
+                                        if (!isLocallyPosted && localExisting == null) {
+                                            repository.addNotification(
+                                                InAppNotification(
+                                                    title = "Timetable Updated: ${cls.subject}",
+                                                    message = "Class on ${getDayName(cls.dayOfWeek)} Period ${cls.periodNumber} (${cls.startTime} - ${cls.endTime}) updated by ${cls.authorName}.",
+                                                    timestamp = cls.timestamp,
+                                                    isRead = false,
+                                                    type = "class"
+                                                )
+                                            )
+                                        }
+                                    }
+                                    DocumentChange.Type.REMOVED -> {
+                                        val firestoreId = change.document.getString("firestoreId") ?: change.document.id
+                                        repository.deleteTimetableClassByFirestoreId(firestoreId)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
         } catch (e: Exception) {
             Log.e(TAG, "Failed to register batch snapshot listeners", e)
             _isListening.value = false
@@ -482,6 +730,19 @@ class BatchNotificationSyncManager(
         }
     }
 
+    private fun getDayName(dayOfWeek: Int): String {
+        return when (dayOfWeek) {
+            1 -> "Monday"
+            2 -> "Tuesday"
+            3 -> "Wednesday"
+            4 -> "Thursday"
+            5 -> "Friday"
+            6 -> "Saturday"
+            7 -> "Sunday"
+            else -> "Day $dayOfWeek"
+        }
+    }
+
     fun stopListening() {
         reconnectJob?.cancel()
         reconnectJob = null
@@ -491,7 +752,21 @@ class BatchNotificationSyncManager(
         assignmentListener = null
         assessmentListener?.remove()
         assessmentListener = null
+        completedTopicListener?.remove()
+        completedTopicListener = null
+        timetableListener?.remove()
+        timetableListener = null
         currentBatchKey = null
+        isNoticesConnected = false
+        isAssignmentsConnected = false
+        isAssessmentsConnected = false
+        isCompletedTopicsConnected = false
+        isTimetableConnected = false
+        lastNoticeError = null
+        lastAssignmentError = null
+        lastAssessmentError = null
+        lastCompletedTopicsError = null
+        lastTimetableError = null
         _isListening.value = false
         _syncStatus.value = "Stopped"
     }
@@ -556,6 +831,52 @@ class BatchNotificationSyncManager(
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing batch assessment ${doc.id}", e)
+            null
+        }
+    }
+
+    private fun parseBatchCompletedTopic(doc: DocumentSnapshot): SharedBatchCompletedTopic? {
+        return try {
+            SharedBatchCompletedTopic(
+                firestoreId = doc.getString("firestoreId") ?: doc.id,
+                batchKey = doc.getString("batchKey") ?: "",
+                courseCode = doc.getString("courseCode") ?: "MBBS",
+                academicYear = doc.getString("academicYear") ?: "1st Year",
+                subject = doc.getString("subject") ?: "",
+                topicTitle = doc.getString("topicTitle") ?: "",
+                completionDate = doc.getLong("completionDate") ?: System.currentTimeMillis(),
+                teacherName = doc.getString("teacherName"),
+                notes = doc.getString("notes"),
+                authorName = doc.getString("authorName") ?: "Classmate",
+                authorUid = doc.getString("authorUid") ?: "",
+                timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing batch completed topic ${doc.id}", e)
+            null
+        }
+    }
+
+    private fun parseBatchTimetableClass(doc: DocumentSnapshot): SharedBatchTimetableClass? {
+        return try {
+            SharedBatchTimetableClass(
+                firestoreId = doc.getString("firestoreId") ?: doc.id,
+                batchKey = doc.getString("batchKey") ?: "",
+                courseCode = doc.getString("courseCode") ?: "MBBS",
+                dayOfWeek = doc.getLong("dayOfWeek")?.toInt() ?: 1,
+                periodNumber = doc.getLong("periodNumber")?.toInt() ?: 1,
+                subject = doc.getString("subject") ?: "",
+                startTime = doc.getString("startTime") ?: "",
+                endTime = doc.getString("endTime") ?: "",
+                room = doc.getString("room"),
+                teacherName = doc.getString("teacherName"),
+                colorHex = doc.getString("colorHex") ?: "#4F46E5",
+                authorName = doc.getString("authorName") ?: "Classmate",
+                authorUid = doc.getString("authorUid") ?: "",
+                timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing batch timetable class ${doc.id}", e)
             null
         }
     }
@@ -785,6 +1106,238 @@ class BatchNotificationSyncManager(
         }
     }
 
+    suspend fun postSharedCompletedTopic(
+        topic: CompletedSyllabusTopic,
+        college: String,
+        course: String,
+        admissionYear: Int,
+        batch: String,
+        authorName: String,
+        customBatchCode: String? = null
+    ): Result<String> {
+        return try {
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
+            val uid = ensureAuthenticated()
+            val docRef = db.collection("shared_batches")
+                .document(key)
+                .collection("completed_chapters")
+                .document(topic.firestoreId)
+
+            val data = hashMapOf(
+                "firestoreId" to topic.firestoreId,
+                "batchKey" to key,
+                "courseCode" to topic.courseCode.trim().uppercase(),
+                "academicYear" to topic.academicYear,
+                "subject" to topic.subject,
+                "topicTitle" to topic.topicTitle,
+                "completionDate" to topic.completionDate,
+                "teacherName" to (topic.teacherName ?: ""),
+                "notes" to (topic.notes ?: ""),
+                "authorName" to authorName.ifBlank { "Classmate" },
+                "authorUid" to uid,
+                "timestamp" to System.currentTimeMillis()
+            )
+            docRef.set(data).await()
+            locallyPostedFirestoreIds.add(topic.firestoreId)
+            _syncStatus.value = "Synced with $key"
+            Log.i(TAG, "Shared completed chapter '${topic.topicTitle}' to batch $key")
+
+            // Local alert confirmation
+            try {
+                val notifId = kotlin.math.abs(topic.topicTitle.hashCode()) % 100000 + 45000
+                NotificationHelper.showNotification(
+                    context = application,
+                    title = "Chapter Shared with Batch",
+                    message = "${topic.topicTitle} (${topic.subject}) logged for $batch.",
+                    notificationId = notifId,
+                    type = "class",
+                    subject = topic.subject,
+                    targetTime = topic.completionDate
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Confirmation notification failed: ${e.message}")
+            }
+
+            Result.success(docRef.id)
+        } catch (e: Exception) {
+            val isPerm = e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
+            val errorMsg = if (isPerm) "Firebase Permission Denied: Allow shared_batches read/write in Firebase Console" else (e.localizedMessage ?: "Unknown network error")
+            _syncStatus.value = "Share failed: $errorMsg"
+            Log.e(TAG, "Error posting shared completed topic", e)
+            Result.failure(Exception(errorMsg, e))
+        }
+    }
+
+    suspend fun deleteSharedCompletedTopic(
+        firestoreId: String,
+        college: String,
+        course: String,
+        admissionYear: Int,
+        batch: String,
+        customBatchCode: String? = null
+    ) {
+        try {
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
+            db.collection("shared_batches")
+                .document(key)
+                .collection("completed_chapters")
+                .document(firestoreId)
+                .delete()
+                .await()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to delete shared completed topic: ${e.message}")
+        }
+    }
+
+    suspend fun postSharedTimetableClass(
+        cls: TimetableClass,
+        college: String,
+        course: String,
+        admissionYear: Int,
+        batch: String,
+        authorName: String,
+        customBatchCode: String? = null
+    ): Result<String> {
+        return try {
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
+            val uid = ensureAuthenticated()
+            val docRef = db.collection("shared_batches")
+                .document(key)
+                .collection("timetable")
+                .document(cls.firestoreId)
+
+            val data = hashMapOf(
+                "firestoreId" to cls.firestoreId,
+                "batchKey" to key,
+                "courseCode" to cls.courseCode.trim().uppercase(),
+                "dayOfWeek" to cls.dayOfWeek,
+                "periodNumber" to cls.periodNumber,
+                "subject" to cls.subject,
+                "startTime" to cls.startTime,
+                "endTime" to cls.endTime,
+                "room" to (cls.room ?: ""),
+                "teacherName" to (cls.teacherName ?: ""),
+                "colorHex" to cls.colorHex,
+                "authorName" to authorName.ifBlank { "Classmate" },
+                "authorUid" to uid,
+                "timestamp" to System.currentTimeMillis()
+            )
+            docRef.set(data).await()
+            locallyPostedFirestoreIds.add(cls.firestoreId)
+            _syncStatus.value = "Synced with $key"
+            Log.i(TAG, "Shared timetable class '${cls.subject}' to batch $key")
+            Result.success(docRef.id)
+        } catch (e: Exception) {
+            val isPerm = e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
+            val errorMsg = if (isPerm) "Firebase Permission Denied: Allow shared_batches read/write in Firebase Console" else (e.localizedMessage ?: "Unknown network error")
+            _syncStatus.value = "Share failed: $errorMsg"
+            Log.e(TAG, "Error posting shared timetable class", e)
+            Result.failure(Exception(errorMsg, e))
+        }
+    }
+
+    suspend fun postSharedFullTimetable(
+        classes: List<TimetableClass>,
+        college: String,
+        course: String,
+        admissionYear: Int,
+        batch: String,
+        authorName: String,
+        customBatchCode: String? = null
+    ): Result<Int> {
+        if (classes.isEmpty()) return Result.success(0)
+        return try {
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
+            val uid = ensureAuthenticated()
+            val batchWriter = db.batch()
+            val timetableCol = db.collection("shared_batches").document(key).collection("timetable")
+
+            for (cls in classes) {
+                val docRef = timetableCol.document(cls.firestoreId)
+                val data = hashMapOf(
+                    "firestoreId" to cls.firestoreId,
+                    "batchKey" to key,
+                    "courseCode" to cls.courseCode.trim().uppercase(),
+                    "dayOfWeek" to cls.dayOfWeek,
+                    "periodNumber" to cls.periodNumber,
+                    "subject" to cls.subject,
+                    "startTime" to cls.startTime,
+                    "endTime" to cls.endTime,
+                    "room" to (cls.room ?: ""),
+                    "teacherName" to (cls.teacherName ?: ""),
+                    "colorHex" to cls.colorHex,
+                    "authorName" to authorName.ifBlank { "Classmate" },
+                    "authorUid" to uid,
+                    "timestamp" to System.currentTimeMillis()
+                )
+                batchWriter.set(docRef, data)
+                locallyPostedFirestoreIds.add(cls.firestoreId)
+            }
+            batchWriter.commit().await()
+            _syncStatus.value = "Synced full timetable with $key"
+            Log.i(TAG, "Shared ${classes.size} classes for batch $key")
+            Result.success(classes.size)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error posting full timetable to batch", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteSharedTimetableClass(
+        firestoreId: String,
+        college: String,
+        course: String,
+        admissionYear: Int,
+        batch: String,
+        customBatchCode: String? = null
+    ) {
+        try {
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
+            db.collection("shared_batches")
+                .document(key)
+                .collection("timetable")
+                .document(firestoreId)
+                .delete()
+                .await()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to delete shared timetable class: ${e.message}")
+        }
+    }
+
+    // Duplicate Detection Helpers
+    fun checkDuplicateAssignment(subject: String, title: String): SharedBatchAssignment? {
+        val sTrim = subject.trim()
+        val tTrim = title.trim()
+        return _sharedAssignments.value.firstOrNull {
+            it.subject.trim().equals(sTrim, ignoreCase = true) &&
+            it.title.trim().equals(tTrim, ignoreCase = true)
+        }
+    }
+
+    fun checkDuplicateAssessment(subject: String, title: String): SharedBatchAssessment? {
+        val sTrim = subject.trim()
+        val tTrim = title.trim()
+        return _sharedAssessments.value.firstOrNull {
+            it.subject.trim().equals(sTrim, ignoreCase = true) &&
+            it.title.trim().equals(tTrim, ignoreCase = true)
+        }
+    }
+
+    fun checkDuplicateCompletedTopic(subject: String, topicTitle: String): SharedBatchCompletedTopic? {
+        val sTrim = subject.trim()
+        val tTrim = topicTitle.trim()
+        return _sharedCompletedTopics.value.firstOrNull {
+            it.subject.trim().equals(sTrim, ignoreCase = true) &&
+            it.topicTitle.trim().equals(tTrim, ignoreCase = true)
+        }
+    }
+
+    fun checkDuplicateTimetableClass(dayOfWeek: Int, periodNumber: Int): SharedBatchTimetableClass? {
+        return _sharedTimetableClasses.value.firstOrNull {
+            it.dayOfWeek == dayOfWeek && it.periodNumber == periodNumber
+        }
+    }
+
     suspend fun postBatchNotice(
         college: String,
         course: String,
@@ -894,6 +1447,88 @@ class BatchNotificationSyncManager(
         }
     }
 
+    data class BatchSyncDiagnostics(
+        val batchKey: String,
+        val noticesOk: Boolean,
+        val noticesMessage: String,
+        val assignmentsOk: Boolean,
+        val assignmentsMessage: String,
+        val assessmentsOk: Boolean,
+        val assessmentsMessage: String,
+        val isAnyRuleViolation: Boolean,
+        val overallStatus: String
+    )
+
+    suspend fun diagnoseBatchSync(
+        college: String,
+        course: String,
+        admissionYear: Int,
+        batch: String,
+        customBatchCode: String? = null
+    ): BatchSyncDiagnostics {
+        val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
+        try { ensureAuthenticated() } catch (_: Exception) {}
+
+        var noticesOk = false
+        var noticesMsg = ""
+        var assignmentsOk = false
+        var assignmentsMsg = ""
+        var assessmentsOk = false
+        var assessmentsMsg = ""
+
+        // Test Notices Read
+        try {
+            val res = db.collection("shared_batches").document(key).collection("notices").limit(1).get().await()
+            noticesOk = true
+            noticesMsg = "Accessible (${res.size()} notices)"
+        } catch (e: Exception) {
+            noticesOk = false
+            noticesMsg = e.message ?: "Failed"
+        }
+
+        // Test Assignments Read
+        try {
+            val res = db.collection("shared_batches").document(key).collection("assignments").limit(1).get().await()
+            assignmentsOk = true
+            assignmentsMsg = "Accessible (${res.size()} assignments)"
+        } catch (e: Exception) {
+            assignmentsOk = false
+            assignmentsMsg = e.message ?: "Failed"
+        }
+
+        // Test Assessments Read
+        try {
+            val res = db.collection("shared_batches").document(key).collection("assessments").limit(1).get().await()
+            assessmentsOk = true
+            assessmentsMsg = "Accessible (${res.size()} assessments)"
+        } catch (e: Exception) {
+            assessmentsOk = false
+            assessmentsMsg = e.message ?: "Failed"
+        }
+
+        val anyRuleViolation = noticesMsg.contains("PERMISSION_DENIED", true) ||
+                assignmentsMsg.contains("PERMISSION_DENIED", true) ||
+                assessmentsMsg.contains("PERMISSION_DENIED", true)
+
+        val overall = when {
+            noticesOk && assignmentsOk && assessmentsOk -> "All 3 batch subcollections (Notices, Assignments, Assessments) are accessible and communicating!"
+            anyRuleViolation -> "Firebase Firestore Rules are blocking subcollections! In Firebase Console, set rules to: match /shared_batches/{batchKey}/{document=**} { allow read, write: if true; }"
+            else -> "Network or connection error. Please verify device internet connectivity."
+        }
+
+        return BatchSyncDiagnostics(
+            batchKey = key,
+            noticesOk = noticesOk,
+            noticesMessage = noticesMsg,
+            assignmentsOk = assignmentsOk,
+            assignmentsMessage = assignmentsMsg,
+            assessmentsOk = assessmentsOk,
+            assessmentsMessage = assessmentsMsg,
+            isAnyRuleViolation = anyRuleViolation,
+            overallStatus = overall
+        )
+    }
+
     suspend fun fetchAndSyncBatchNow(
         college: String,
         course: String,
@@ -928,7 +1563,9 @@ class BatchNotificationSyncManager(
                         status = asg.status,
                         type = asg.type,
                         notes = if (asg.notes.isNullOrBlank()) "Shared by ${asg.authorName}" else "${asg.notes} (Shared by ${asg.authorName})",
-                        firestoreId = asg.firestoreId
+                        firestoreId = asg.firestoreId,
+                        authorName = asg.authorName,
+                        authorUid = asg.authorUid
                     )
                     repository.addAssignmentLocally(newAsg)
                     importedCount++
@@ -956,14 +1593,79 @@ class BatchNotificationSyncManager(
                         type = asm.type,
                         status = asm.status,
                         syllabus = asm.syllabus,
-                        firestoreId = asm.firestoreId
+                        firestoreId = asm.firestoreId,
+                        authorName = asm.authorName,
+                        authorUid = asm.authorUid
                     )
                     repository.addAssessmentLocally(newAsm)
                     importedCount++
                 }
             }
 
-            // 3. Fetch notices
+            // 3. Fetch completed chapters
+            val topicSnapshots = db.collection("shared_batches")
+                .document(key)
+                .collection("completed_chapters")
+                .limit(100)
+                .get()
+                .await()
+
+            for (doc in topicSnapshots.documents) {
+                val topic = parseBatchCompletedTopic(doc) ?: continue
+                val localExisting = repository.getCompletedTopicByFirestoreId(topic.firestoreId)
+                    ?: repository.findMatchingCompletedTopic(topic.courseCode, topic.subject, topic.topicTitle)
+                if (localExisting == null) {
+                    val newTopic = CompletedSyllabusTopic(
+                        courseCode = topic.courseCode.trim().uppercase(),
+                        academicYear = topic.academicYear,
+                        subject = topic.subject,
+                        topicTitle = topic.topicTitle,
+                        completionDate = topic.completionDate,
+                        teacherName = topic.teacherName,
+                        notes = if (topic.notes.isNullOrBlank()) "Completed with batch (by ${topic.authorName})" else "${topic.notes} (Recorded by ${topic.authorName})",
+                        isSharedWithBatch = true,
+                        firestoreId = topic.firestoreId,
+                        authorName = topic.authorName,
+                        authorUid = topic.authorUid
+                    )
+                    repository.addCompletedTopicLocally(newTopic)
+                    importedCount++
+                }
+            }
+
+            // 4. Fetch timetable schedule
+            val timetableSnapshots = db.collection("shared_batches")
+                .document(key)
+                .collection("timetable")
+                .limit(100)
+                .get()
+                .await()
+
+            for (doc in timetableSnapshots.documents) {
+                val cls = parseBatchTimetableClass(doc) ?: continue
+                val localExisting = repository.getTimetableClassByFirestoreId(cls.firestoreId)
+                    ?: repository.findMatchingTimetableClass(cls.courseCode, cls.dayOfWeek, cls.periodNumber)
+                if (localExisting == null) {
+                    val newClass = TimetableClass(
+                        courseCode = cls.courseCode.trim().uppercase(),
+                        dayOfWeek = cls.dayOfWeek,
+                        periodNumber = cls.periodNumber,
+                        subject = cls.subject,
+                        startTime = cls.startTime,
+                        endTime = cls.endTime,
+                        room = cls.room,
+                        teacherName = cls.teacherName,
+                        colorHex = cls.colorHex,
+                        firestoreId = cls.firestoreId,
+                        authorName = cls.authorName,
+                        authorUid = cls.authorUid
+                    )
+                    repository.addClassLocally(newClass)
+                    importedCount++
+                }
+            }
+
+            // 5. Fetch notices
             val noticeSnapshots = db.collection("shared_batches")
                 .document(key)
                 .collection("notices")

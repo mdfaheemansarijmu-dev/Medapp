@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
 import java.util.*
 import android.app.Activity
@@ -379,6 +380,14 @@ class PlannerViewModel(
     private val _isFirebaseMessagingAvailable = MutableStateFlow(false)
     val isFirebaseMessagingAvailable: StateFlow<Boolean> = _isFirebaseMessagingAvailable.asStateFlow()
 
+    // Duplicate Item Dialog with Student Contribution
+    private val _duplicateContributionDialog = MutableStateFlow<DuplicateContributionInfo?>(null)
+    val duplicateContributionDialog: StateFlow<DuplicateContributionInfo?> = _duplicateContributionDialog.asStateFlow()
+
+    fun dismissDuplicateDialog() {
+        _duplicateContributionDialog.value = null
+    }
+
     private val geminiService = GeminiParserService()
 
     private val _selectedGeminiModel = MutableStateFlow(GeminiModelOption.DEFAULT)
@@ -492,6 +501,8 @@ class PlannerViewModel(
                     _studentSemester.value = sharedPrefs.getString("student_semester", "") ?: ""
                     _studentBatch.value = sharedPrefs.getString("student_batch", "") ?: ""
                     _isProfileCompleted.value = sharedPrefs.getBoolean("is_profile_completed", false)
+                    repository.startCloudSync(user.uid)
+                    restoreDataFromFirebase()
                 } else {
                     _loginMode.value = LoginMode.UNDECIDED
                     _studentName.value = ""
@@ -711,50 +722,89 @@ class PlannerViewModel(
     // In-app operations
     fun addTimetableClass(subject: String, day: Int, start: String, end: String, room: String?, teacher: String?, period: Int) {
         val course = selectedCourse.value ?: return
+        val currentUserName = _studentName.value.ifBlank { "Classmate" }
+        val currentUserId = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: ""
         viewModelScope.launch {
-            repository.addClass(
-                TimetableClass(
-                    courseCode = course.code,
-                    dayOfWeek = day,
-                    periodNumber = period,
-                    subject = subject,
-                    startTime = start,
-                    endTime = end,
-                    room = room,
-                    teacherName = teacher
-                )
+            val classItem = TimetableClass(
+                courseCode = course.code,
+                dayOfWeek = day,
+                periodNumber = period,
+                subject = subject,
+                startTime = start,
+                endTime = end,
+                room = room,
+                teacherName = teacher,
+                authorName = currentUserName,
+                authorUid = currentUserId
             )
+            repository.addClass(classItem)
             generateSmartNotifications()
             scheduleTimetableClassNotifications()
             syncDataToFirebase()
+
+            // Broadcast timetable change to batch peers
+            batchSyncManager.postSharedTimetableClass(
+                cls = classItem,
+                college = _studentCollege.value,
+                course = course.code,
+                admissionYear = _studentAdmissionYear.value,
+                batch = _studentBatch.value,
+                authorName = currentUserName,
+                customBatchCode = _customBatchCode.value
+            )
         }
     }
 
     fun updateTimetableClass(id: Int, subject: String, day: Int, start: String, end: String, room: String?, teacher: String?, period: Int) {
         val course = selectedCourse.value ?: return
+        val currentUserName = _studentName.value.ifBlank { "Classmate" }
+        val currentUserId = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: ""
         viewModelScope.launch {
-            repository.addClass(
-                TimetableClass(
-                    id = id,
-                    courseCode = course.code,
-                    dayOfWeek = day,
-                    periodNumber = period,
-                    subject = subject,
-                    startTime = start,
-                    endTime = end,
-                    room = room,
-                    teacherName = teacher
-                )
+            val classItem = TimetableClass(
+                id = id,
+                courseCode = course.code,
+                dayOfWeek = day,
+                periodNumber = period,
+                subject = subject,
+                startTime = start,
+                endTime = end,
+                room = room,
+                teacherName = teacher,
+                authorName = currentUserName,
+                authorUid = currentUserId
             )
+            repository.addClass(classItem)
             generateSmartNotifications()
             scheduleTimetableClassNotifications()
             syncDataToFirebase()
+
+            // Broadcast updated class to batch peers
+            batchSyncManager.postSharedTimetableClass(
+                cls = classItem,
+                college = _studentCollege.value,
+                course = course.code,
+                admissionYear = _studentAdmissionYear.value,
+                batch = _studentBatch.value,
+                authorName = currentUserName,
+                customBatchCode = _customBatchCode.value
+            )
         }
     }
 
     fun removeTimetableClass(id: Int) {
         viewModelScope.launch {
+            val existing = repository.getAllTimetableClassesOnce().find { it.id == id }
             repository.deleteClass(id)
+            if (existing != null && existing.firestoreId.isNotBlank()) {
+                batchSyncManager.deleteSharedTimetableClass(
+                    firestoreId = existing.firestoreId,
+                    college = _studentCollege.value,
+                    course = selectedCourse.value?.code ?: "MBBS",
+                    admissionYear = _studentAdmissionYear.value,
+                    batch = _studentBatch.value,
+                    customBatchCode = _customBatchCode.value
+                )
+            }
             generateSmartNotifications()
             scheduleTimetableClassNotifications()
             syncDataToFirebase()
@@ -768,10 +818,45 @@ class PlannerViewModel(
         priority: String,
         type: String,
         notes: String? = null,
-        shareWithBatch: Boolean = true
+        shareWithBatch: Boolean = true,
+        forceSave: Boolean = false
     ) {
         val course = selectedCourse.value ?: return
+        val currentUserName = _studentName.value.ifBlank { "Classmate" }
+        val currentUserId = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: ""
+
         viewModelScope.launch {
+            if (!forceSave) {
+                val batchMatch = batchSyncManager.checkDuplicateAssignment(subject, title)
+                val localMatch = repository.findMatchingAssignmentExact(course.code, subject.trim(), title.trim())
+
+                if (batchMatch != null || localMatch != null) {
+                    val author = when {
+                        batchMatch != null && batchMatch.authorName.isNotBlank() && batchMatch.authorName != "Classmate" -> batchMatch.authorName
+                        localMatch != null && localMatch.authorName.isNotBlank() && localMatch.authorName != "Classmate" -> localMatch.authorName
+                        localMatch?.notes?.contains("Shared by ") == true -> localMatch.notes.substringAfter("Shared by ").substringBefore(")").trim()
+                        batchMatch?.authorName?.isNotBlank() == true -> batchMatch.authorName
+                        localMatch?.authorName?.isNotBlank() == true -> localMatch.authorName
+                        else -> "Your Classmate"
+                    }
+                    val timestamp = batchMatch?.timestamp ?: localMatch?.dueDate ?: System.currentTimeMillis()
+
+                    _duplicateContributionDialog.value = DuplicateContributionInfo(
+                        itemType = "Assignment",
+                        subject = subject.trim(),
+                        title = title.trim(),
+                        authorName = author,
+                        submissionTimestamp = timestamp,
+                        batchName = _studentBatch.value.ifBlank { "Batch" },
+                        extraDetails = "Due: " + java.text.SimpleDateFormat("dd MMM, yyyy", java.util.Locale.getDefault()).format(java.util.Date(dueDate)),
+                        onConfirmSaveAnyway = {
+                            addAssignment(subject, title, dueDate, priority, type, notes, shareWithBatch, forceSave = true)
+                        }
+                    )
+                    return@launch
+                }
+            }
+
             val assignment = Assignment(
                 courseCode = course.code,
                 subject = subject,
@@ -780,7 +865,9 @@ class PlannerViewModel(
                 priority = priority,
                 status = "Pending",
                 type = type,
-                notes = notes
+                notes = notes,
+                authorName = currentUserName,
+                authorUid = currentUserId
             )
             val insertedId = repository.addAssignment(assignment)
             generateSmartNotifications()
@@ -815,7 +902,7 @@ class PlannerViewModel(
                     course = course.code,
                     admissionYear = _studentAdmissionYear.value,
                     batch = _studentBatch.value,
-                    authorName = _studentName.value.ifBlank { "Classmate" },
+                    authorName = currentUserName,
                     customBatchCode = _customBatchCode.value
                 )
                 shareResult.fold(
@@ -866,10 +953,44 @@ class PlannerViewModel(
         date: Long,
         type: String,
         syllabus: String? = null,
-        shareWithBatch: Boolean = true
+        shareWithBatch: Boolean = true,
+        forceSave: Boolean = false
     ) {
         val course = selectedCourse.value ?: return
+        val currentUserName = _studentName.value.ifBlank { "Classmate" }
+        val currentUserId = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: ""
+
         viewModelScope.launch {
+            if (!forceSave) {
+                val batchMatch = batchSyncManager.checkDuplicateAssessment(subject, title)
+                val localMatch = repository.findMatchingAssessmentExact(course.code, subject.trim(), title.trim())
+
+                if (batchMatch != null || localMatch != null) {
+                    val author = when {
+                        batchMatch != null && batchMatch.authorName.isNotBlank() && batchMatch.authorName != "Classmate" -> batchMatch.authorName
+                        localMatch != null && localMatch.authorName.isNotBlank() && localMatch.authorName != "Classmate" -> localMatch.authorName
+                        batchMatch?.authorName?.isNotBlank() == true -> batchMatch.authorName
+                        localMatch?.authorName?.isNotBlank() == true -> localMatch.authorName
+                        else -> "Your Classmate"
+                    }
+                    val timestamp = batchMatch?.timestamp ?: localMatch?.date ?: System.currentTimeMillis()
+
+                    _duplicateContributionDialog.value = DuplicateContributionInfo(
+                        itemType = "Assessment",
+                        subject = subject.trim(),
+                        title = title.trim(),
+                        authorName = author,
+                        submissionTimestamp = timestamp,
+                        batchName = _studentBatch.value.ifBlank { "Batch" },
+                        extraDetails = "Date: " + java.text.SimpleDateFormat("dd MMM, yyyy", java.util.Locale.getDefault()).format(java.util.Date(date)),
+                        onConfirmSaveAnyway = {
+                            addAssessment(subject, title, date, type, syllabus, shareWithBatch, forceSave = true)
+                        }
+                    )
+                    return@launch
+                }
+            }
+
             val assessment = Assessment(
                 courseCode = course.code,
                 subject = subject,
@@ -877,7 +998,9 @@ class PlannerViewModel(
                 date = date,
                 type = type,
                 status = "Upcoming",
-                syllabus = syllabus
+                syllabus = syllabus,
+                authorName = currentUserName,
+                authorUid = currentUserId
             )
             val insertedId = repository.addAssessment(assessment)
             generateSmartNotifications()
@@ -912,7 +1035,7 @@ class PlannerViewModel(
                     course = course.code,
                     admissionYear = _studentAdmissionYear.value,
                     batch = _studentBatch.value,
-                    authorName = _studentName.value.ifBlank { "Classmate" },
+                    authorName = currentUserName,
                     customBatchCode = _customBatchCode.value
                 )
                 shareResult.fold(
@@ -1011,11 +1134,47 @@ class PlannerViewModel(
         academicYear: String,
         teacherName: String? = null,
         notes: String? = null,
-        shareWithBatch: Boolean = true
+        shareWithBatch: Boolean = true,
+        forceSave: Boolean = false
     ) {
         val course = selectedCourse.value ?: MedicalCourse.MBBS
         val effectiveYear = academicYear.ifBlank { _studentYear.value.ifBlank { "1st Year" } }
+        val currentUserName = _studentName.value.ifBlank { "Classmate" }
+        val currentUserId = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: ""
+
         viewModelScope.launch {
+            if (!forceSave) {
+                val batchMatch = batchSyncManager.checkDuplicateCompletedTopic(subject, topicTitle)
+                val localMatch = repository.findMatchingCompletedTopic(course.code, subject.trim(), topicTitle.trim())
+
+                if (batchMatch != null || localMatch != null) {
+                    val author = when {
+                        batchMatch != null && batchMatch.authorName.isNotBlank() && batchMatch.authorName != "Classmate" -> batchMatch.authorName
+                        localMatch != null && localMatch.authorName.isNotBlank() && localMatch.authorName != "Classmate" -> localMatch.authorName
+                        localMatch?.notes?.contains("Recorded by ") == true -> localMatch.notes.substringAfter("Recorded by ").substringBefore(")").trim()
+                        localMatch?.notes?.contains("Completed with batch (by ") == true -> localMatch.notes.substringAfter("Completed with batch (by ").substringBefore(")").trim()
+                        batchMatch?.authorName?.isNotBlank() == true -> batchMatch.authorName
+                        localMatch?.authorName?.isNotBlank() == true -> localMatch.authorName
+                        else -> "Your Classmate"
+                    }
+                    val timestamp = batchMatch?.completionDate ?: localMatch?.completionDate ?: System.currentTimeMillis()
+
+                    _duplicateContributionDialog.value = DuplicateContributionInfo(
+                        itemType = "Chapter",
+                        subject = subject.trim(),
+                        title = topicTitle.trim(),
+                        authorName = author,
+                        submissionTimestamp = timestamp,
+                        batchName = _studentBatch.value.ifBlank { "Batch" },
+                        extraDetails = "Syllabus Year: $effectiveYear",
+                        onConfirmSaveAnyway = {
+                            addCompletedTopic(subject, topicTitle, academicYear, teacherName, notes, shareWithBatch, forceSave = true)
+                        }
+                    )
+                    return@launch
+                }
+            }
+
             val topic = CompletedSyllabusTopic(
                 courseCode = course.code,
                 academicYear = effectiveYear,
@@ -1024,7 +1183,9 @@ class PlannerViewModel(
                 completionDate = System.currentTimeMillis(),
                 teacherName = teacherName?.trim()?.ifBlank { null },
                 notes = notes?.trim()?.ifBlank { null },
-                isSharedWithBatch = shareWithBatch
+                isSharedWithBatch = shareWithBatch,
+                authorName = currentUserName,
+                authorUid = currentUserId
             )
             repository.addCompletedTopic(topic)
 
@@ -1037,6 +1198,18 @@ class PlannerViewModel(
             )
 
             if (shareWithBatch) {
+                // 1. Post to batch completed chapters collection
+                batchSyncManager.postSharedCompletedTopic(
+                    topic = topic,
+                    college = _studentCollege.value,
+                    course = course.code,
+                    admissionYear = _studentAdmissionYear.value,
+                    batch = _studentBatch.value,
+                    authorName = currentUserName,
+                    customBatchCode = _customBatchCode.value
+                )
+
+                // 2. Broadcast batch notice
                 val postResult = batchSyncManager.postBatchNotice(
                     college = _studentCollege.value,
                     course = course.code,
@@ -1044,14 +1217,14 @@ class PlannerViewModel(
                     batch = _studentBatch.value,
                     title = "Syllabus Finished: $subject",
                     message = "Covered in class: '$topicTitle' ($effectiveYear).",
-                    authorName = _studentName.value.ifBlank { "Classmate" },
+                    authorName = currentUserName,
                     category = "syllabus",
                     urgent = false,
                     customBatchCode = _customBatchCode.value
                 )
                 postResult.fold(
                     onSuccess = {
-                        _batchShareFeedbackMessage.value = "Shared covered topic '$topicTitle' with your batch channel!"
+                        _batchShareFeedbackMessage.value = "Shared covered chapter '$topicTitle' with your batch channel!"
                     },
                     onFailure = { err ->
                         _batchShareFeedbackMessage.value = "Saved locally. Batch sync: ${err.message}"
@@ -1064,7 +1237,19 @@ class PlannerViewModel(
 
     fun removeCompletedTopic(id: Int) {
         viewModelScope.launch {
+            val topic = repository.getCompletedTopicById(id)
             repository.deleteCompletedTopic(id)
+            if (topic != null && topic.firestoreId.isNotBlank()) {
+                val course = selectedCourse.value ?: MedicalCourse.MBBS
+                batchSyncManager.deleteSharedCompletedTopic(
+                    firestoreId = topic.firestoreId,
+                    college = _studentCollege.value,
+                    course = course.code,
+                    admissionYear = _studentAdmissionYear.value,
+                    batch = _studentBatch.value,
+                    customBatchCode = _customBatchCode.value
+                )
+            }
             syncDataToFirebase()
         }
     }
@@ -1250,6 +1435,8 @@ class PlannerViewModel(
             repository.clearTimetable(course.code)
             
             // Map parsed timetable classes to local Room TimetableClass entities
+            val currentUserName = _studentName.value.ifBlank { "Classmate" }
+            val currentUserId = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: ""
             val colors = listOf("#4F46E5", "#06B6D4", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6")
             val newClasses = timetableList.mapIndexed { idx, parsed ->
                 TimetableClass(
@@ -1261,7 +1448,9 @@ class PlannerViewModel(
                     endTime = parsed.end_time,
                     room = parsed.room ?: "General",
                     teacherName = parsed.teacher_name,
-                    colorHex = colors[idx % colors.size]
+                    colorHex = colors[idx % colors.size],
+                    authorName = currentUserName,
+                    authorUid = currentUserId
                 )
             }
             
@@ -1269,6 +1458,30 @@ class PlannerViewModel(
             for (cls in newClasses) {
                 repository.addClass(cls)
             }
+
+            // Broadcast entire new schedule to the batch
+            batchSyncManager.postSharedFullTimetable(
+                classes = newClasses,
+                college = _studentCollege.value,
+                course = course.code,
+                admissionYear = _studentAdmissionYear.value,
+                batch = _studentBatch.value,
+                authorName = currentUserName,
+                customBatchCode = _customBatchCode.value
+            )
+
+            batchSyncManager.postBatchNotice(
+                college = _studentCollege.value,
+                course = course.code,
+                admissionYear = _studentAdmissionYear.value,
+                batch = _studentBatch.value,
+                title = "Timetable Updated for Batch",
+                message = "The weekly class timetable has been updated by $currentUserName.",
+                authorName = currentUserName,
+                category = "batch_notice",
+                urgent = false,
+                customBatchCode = _customBatchCode.value
+            )
             
             // Insert Teachers and Rooms if available
             for (parsed in timetableList) {
@@ -2052,43 +2265,42 @@ class PlannerViewModel(
                     val user = task.result?.user
                     if (user != null) {
                         val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+                        val fallbackName = user.displayName ?: sharedPrefs.getString("student_name", "") ?: email.substringBefore("@")
                         
-                        val name = user.displayName ?: sharedPrefs.getString("student_name", "") ?: email.substringBefore("@")
-                        val photoUrl = user.photoUrl?.toString() ?: ""
-                        val preset = sharedPrefs.getString("student_dp_preset", "doctor_male") ?: "doctor_male"
-                        
-                        _loginMode.value = LoginMode.FIREBASE
-                        _studentName.value = name
-                        _studentEmail.value = user.email ?: email
-                        _studentDpUrl.value = photoUrl
-                        _studentDpPreset.value = preset
-                        _isAuthenticating.value = false
-                        _authError.value = null
-                        
-                        sharedPrefs.edit()
-                            .putString("login_mode", LoginMode.FIREBASE.name)
-                            .putString("student_name", name)
-                            .putString("student_email", user.email ?: email)
-                            .putString("student_dp_url", photoUrl)
-                            .putString("student_dp_preset", preset)
-                            .apply()
-                            
+                        repository.startCloudSync(user.uid)
                         startBatchNotificationSync()
+                        
+                        viewModelScope.launch(Dispatchers.IO) {
+                            val restored = restoreDataFromFirebaseInternal(user.uid, user.email ?: email)
+                            val finalName = _studentName.value.ifBlank { fallbackName }
                             
-                        viewModelScope.launch {
-                            addNotificationWithDuplicateCheck(
-                                InAppNotification(
-                                    title = "Signed in as $name",
-                                    message = "Welcome back! Your academic profile is successfully synced.",
-                                    type = "alert"
+                            withContext(Dispatchers.Main) {
+                                _loginMode.value = LoginMode.FIREBASE
+                                _isAuthenticating.value = false
+                                _authError.value = null
+                                
+                                sharedPrefs.edit()
+                                    .putString("login_mode", LoginMode.FIREBASE.name)
+                                    .putString("student_name", finalName)
+                                    .putString("student_email", user.email ?: email)
+                                    .putString("student_dp_url", _studentDpUrl.value)
+                                    .putString("student_dp_preset", _studentDpPreset.value)
+                                    .apply()
+                                
+                                addNotificationWithDuplicateCheck(
+                                    InAppNotification(
+                                        title = "Signed in as $finalName",
+                                        message = "Welcome back! Your academic profile, timetable, and completed records are restored.",
+                                        type = "alert"
+                                    )
                                 )
-                            )
-                        }
-
-                        // Automatically restore cloud backup data
-                        restoreDataFromFirebase { success ->
-                            if (success && isOnboardingCompleted()) {
-                                _currentScreen.value = Screen.Dashboard
+                                
+                                if (isOnboardingCompleted()) {
+                                    _currentScreen.value = Screen.Dashboard
+                                }
+                                
+                                // Auto backup any local items to cloud
+                                syncDataToFirebase()
                             }
                         }
                     } else {
@@ -2133,7 +2345,9 @@ class PlannerViewModel(
                                 .putString("student_dp_preset", dpPreset)
                                 .apply()
                                 
+                            repository.startCloudSync(user.uid)
                             startBatchNotificationSync()
+                            syncDataToFirebase()
                                 
                             viewModelScope.launch {
                                 addNotificationWithDuplicateCheck(
@@ -2504,7 +2718,39 @@ class PlannerViewModel(
         
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 1. Sync Profile
+                val emailVal = _studentEmail.value.ifBlank { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email ?: "" }
+                val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+                val base64Pic = sharedPrefs.getString("student_dp_base64", "") ?: ""
+                val photoToSync = if (_studentDpUrl.value.startsWith("http")) {
+                    _studentDpUrl.value
+                } else if (base64Pic.isNotBlank()) {
+                    base64Pic
+                } else {
+                    _studentDpUrl.value
+                }
+
+                // 1. Sync User Root Document & Profile with all academic & profile details
+                val profileMap = mapOf(
+                    "uid" to uid,
+                    "email" to emailVal,
+                    "fullName" to _studentName.value,
+                    "displayName" to _studentName.value,
+                    "college" to _studentCollege.value,
+                    "course" to (_selectedCourse.value?.code ?: ""),
+                    "year" to _studentYear.value,
+                    "currentYear" to _studentYear.value,
+                    "admissionYear" to _studentAdmissionYear.value,
+                    "semester" to _studentSemester.value,
+                    "batch" to _studentBatch.value,
+                    "photoUrl" to photoToSync,
+                    "dpPreset" to _studentDpPreset.value,
+                    "lastSyncTimestamp" to System.currentTimeMillis()
+                )
+                // Set on users/{uid} root document with merge
+                db.collection("users").document(uid)
+                    .set(profileMap, com.google.firebase.firestore.SetOptions.merge())
+
+                // Also set in subcollection for compatibility
                 val profile = UserProfile(
                     uid = uid,
                     fullName = _studentName.value,
@@ -2530,49 +2776,72 @@ class PlannerViewModel(
                 db.collection("users").document(uid).collection("settings").document("info")
                     .set(settings)
 
-                // Timetable Classes backup
+                // 3. Timetable Classes backup
                 val classes = timetable.value
                 classes.forEach { classItem ->
+                    db.collection("users").document(uid).collection("timetable_classes").document(classItem.firestoreId)
+                        .set(classItem)
                     db.collection("users").document(uid).collection("timetable").document(classItem.id.toString())
                         .set(classItem)
                 }
 
-                // Attendance Records backup
+                // 4. Attendance Records backup (attended classes with date, time, subject, status)
                 val attendance = allAttendanceRecords.value
                 attendance.forEach { rec ->
+                    db.collection("users").document(uid).collection("attendance_records").document(rec.firestoreId)
+                        .set(rec)
                     db.collection("users").document(uid).collection("attendance").document(rec.id.toString())
                         .set(rec)
                 }
 
-                // Daily Revisions backup
+                // 5. Completed Syllabus Topics backup (completed chapters with date, faculty, notes)
+                val topics = completedSyllabusTopics.value
+                topics.forEach { topic ->
+                    db.collection("users").document(uid).collection("completed_syllabus_topics").document(topic.firestoreId)
+                        .set(topic)
+                }
+
+                // 6. Assignments backup (written assignments with date, priority, notes)
+                val assignmentsList = assignments.value
+                assignmentsList.forEach { asg ->
+                    db.collection("users").document(uid).collection("assignments").document(asg.firestoreId)
+                        .set(asg)
+                }
+
+                // 7. Assessments backup (written assessments with date, type, syllabus)
+                val assessmentsList = assessments.value
+                assessmentsList.forEach { ass ->
+                    db.collection("users").document(uid).collection("assessments").document(ass.firestoreId)
+                        .set(ass)
+                }
+
+                // 8. Daily Revisions & Study Tasks backup
                 val revisions = allRevisions.value
                 revisions.forEach { rev ->
                     db.collection("users").document(uid).collection("revisions").document(rev.id.toString())
                         .set(rev)
                 }
-
-                // Assignments backup
-                val assignmentsList = assignments.value
-                assignmentsList.forEach { asg ->
-                    db.collection("users").document(uid).collection("assignments").document(asg.id.toString())
-                        .set(asg)
-                }
-
-                // Exams backup
-                val examsList = exams.value
-                examsList.forEach { ex ->
-                    db.collection("users").document(uid).collection("exams").document(ex.id.toString())
-                        .set(ex)
-                }
-
-                // Planner backup
-                val plannerList = plannerTasks.value
-                plannerList.forEach { task ->
-                    db.collection("users").document(uid).collection("planner").document(task.id.toString())
+                val studyList = studyTasks.value
+                studyList.forEach { task ->
+                    db.collection("users").document(uid).collection("study_tasks").document(task.firestoreId)
                         .set(task)
                 }
 
-                // Chat history backup
+                // 9. Exams backup
+                val examsList = exams.value
+                examsList.forEach { ex ->
+                    db.collection("users").document(uid).collection("exams").document(ex.firestoreId)
+                        .set(ex)
+                }
+
+                // 10. Planner Tasks backup
+                val plannerList = plannerTasks.value
+                plannerList.forEach { task ->
+                    db.collection("users").document(uid).collection("planner_tasks").document(task.firestoreId)
+                        .set(task)
+                }
+
+                // 11. Chat history backup
                 val chatList = chatMessages.value
                 chatList.forEach { chat ->
                     db.collection("users").document(uid).collection("chat_history").document(chat.id.toString())
@@ -2586,148 +2855,283 @@ class PlannerViewModel(
         }
     }
 
+    suspend fun restoreDataFromFirebaseInternal(uid: String, fallbackEmail: String): Boolean {
+        val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+        var profileFound = false
+        try {
+            repository.startCloudSync(uid)
+
+            // 1. Restore Profile from users/{uid} root or users/{uid}/profile/info
+            val rootDoc = try { db.collection("users").document(uid).get().await() } catch (e: Exception) { null }
+            val subDoc = try { db.collection("users").document(uid).collection("profile").document("info").get().await() } catch (e: Exception) { null }
+
+            val data = rootDoc?.data ?: emptyMap()
+            val subData = subDoc?.data ?: emptyMap()
+
+            val name = (data["fullName"] as? String)
+                ?: (data["displayName"] as? String)
+                ?: (subData["fullName"] as? String)
+                ?: ""
+            val emailVal = (data["email"] as? String)
+                ?: (subData["email"] as? String)
+                ?: com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email
+                ?: fallbackEmail
+            val college = (data["college"] as? String)
+                ?: (subData["college"] as? String)
+                ?: ""
+            val courseCode = (data["course"] as? String)
+                ?: (subData["course"] as? String)
+                ?: ""
+            val year = (data["currentYear"] as? String)
+                ?: (data["year"] as? String)
+                ?: (subData["currentYear"] as? String)
+                ?: (subData["year"] as? String)
+                ?: ""
+            val admissionYearVal = (data["admissionYear"] as? Long)?.toInt()
+                ?: (subData["admissionYear"] as? Long)?.toInt()
+                ?: 2024
+            val semester = (data["semester"] as? String)
+                ?: (subData["semester"] as? String)
+                ?: ""
+            val batch = (data["batch"] as? String)
+                ?: (subData["batch"] as? String)
+                ?: ""
+            val photoUrl = (data["photoUrl"] as? String)
+                ?: (subData["photoUrl"] as? String)
+                ?: ""
+            val dpPreset = (data["dpPreset"] as? String)
+                ?: (subData["dpPreset"] as? String)
+                ?: "doctor_male"
+
+            withContext(Dispatchers.Main) {
+                if (name.isNotBlank()) {
+                    _studentName.value = name
+                    profileFound = true
+                }
+                if (emailVal.isNotBlank()) _studentEmail.value = emailVal
+                if (college.isNotBlank()) _studentCollege.value = college
+                if (year.isNotBlank()) _studentYear.value = year
+                _studentAdmissionYear.value = admissionYearVal
+                if (semester.isNotBlank()) _studentSemester.value = semester
+                if (batch.isNotBlank()) _studentBatch.value = batch
+                _studentDpPreset.value = dpPreset
+
+                // Handle profile picture restoration (including base64 decoded custom avatars)
+                if (photoUrl.isNotBlank()) {
+                    if (photoUrl.startsWith("data:image/")) {
+                        try {
+                            val base64Data = photoUrl.substringAfter("base64,")
+                            val decodedBytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
+                            val file = java.io.File(getApplication<Application>().filesDir, "custom_profile_picture.jpg")
+                            file.writeBytes(decodedBytes)
+                            val localUri = "file://" + file.absolutePath
+                            _studentDpUrl.value = localUri
+                            val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+                            sharedPrefs.edit().putString("student_dp_url", localUri).putString("student_dp_base64", photoUrl).apply()
+                        } catch (e: Exception) {
+                            _studentDpUrl.value = photoUrl
+                        }
+                    } else {
+                        _studentDpUrl.value = photoUrl
+                    }
+                }
+
+                if (courseCode.isNotEmpty()) {
+                    val courseObj = MedicalCourse.entries.firstOrNull {
+                        it.name.equals(courseCode, ignoreCase = true) ||
+                        it.code.equals(courseCode, ignoreCase = true) ||
+                        it.displayName.equals(courseCode, ignoreCase = true)
+                    }
+                    if (courseObj != null) {
+                        _selectedCourse.value = courseObj
+                        profileFound = true
+                    }
+                }
+
+                val hasCompletedProfile = _studentName.value.isNotBlank() && (_selectedCourse.value != null || courseCode.isNotBlank())
+                _isProfileCompleted.value = hasCompletedProfile
+
+                val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+                sharedPrefs.edit()
+                    .putString("student_name", _studentName.value)
+                    .putString("student_email", _studentEmail.value)
+                    .putString("student_dp_url", _studentDpUrl.value)
+                    .putString("student_dp_preset", _studentDpPreset.value)
+                    .putString("selected_course_code", _selectedCourse.value?.name ?: courseCode.ifBlank { null })
+                    .putString("student_college", _studentCollege.value)
+                    .putString("student_year", _studentYear.value)
+                    .putInt("student_admission_year", _studentAdmissionYear.value)
+                    .putString("student_semester", _studentSemester.value)
+                    .putString("student_batch", _studentBatch.value)
+                    .putBoolean("is_profile_completed", hasCompletedProfile)
+                    .putBoolean("is_onboarding_completed", hasCompletedProfile || sharedPrefs.getBoolean("is_onboarding_completed", false))
+                    .apply()
+            }
+
+            // 2. Restore Timetable Classes
+            try {
+                val timetableSnapshot = db.collection("users").document(uid).collection("timetable_classes").get().await()
+                if (!timetableSnapshot.isEmpty) {
+                    for (doc in timetableSnapshot) {
+                        try {
+                            val c = doc.toObject(TimetableClass::class.java)
+                            if (c != null) repository.addClass(c)
+                        } catch (e: Exception) {
+                            val c = com.example.data.sync.FirestoreSyncManager.mapToTimetableClass(doc.data, doc.id, null)
+                            repository.addClass(c)
+                        }
+                    }
+                } else {
+                    val legacySnapshot = db.collection("users").document(uid).collection("timetable").get().await()
+                    for (doc in legacySnapshot) {
+                        try {
+                            val c = doc.toObject(TimetableClass::class.java)
+                            if (c != null) repository.addClass(c)
+                        } catch (e: Exception) {
+                            // ignore
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("FirestoreSync", "Error restoring timetable: ${e.message}")
+            }
+
+            // 3. Restore Attendance Records (Class attended with date, time, subject, status)
+            try {
+                val attendanceSnapshot = db.collection("users").document(uid).collection("attendance_records").get().await()
+                if (!attendanceSnapshot.isEmpty) {
+                    for (doc in attendanceSnapshot) {
+                        try {
+                            val r = doc.toObject(AttendanceRecord::class.java)
+                            if (r != null) repository.saveAttendanceRecord(r)
+                        } catch (e: Exception) {
+                            val r = com.example.data.sync.FirestoreSyncManager.mapToAttendanceRecord(doc.data, doc.id, null)
+                            repository.saveAttendanceRecord(r)
+                        }
+                    }
+                } else {
+                    val legacyAtt = db.collection("users").document(uid).collection("attendance").get().await()
+                    for (doc in legacyAtt) {
+                        try {
+                            val r = doc.toObject(AttendanceRecord::class.java)
+                            if (r != null) repository.saveAttendanceRecord(r)
+                        } catch (e: Exception) {
+                            // ignore
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("FirestoreSync", "Error restoring attendance: ${e.message}")
+            }
+
+            // 4. Restore Completed Syllabus Topics (Chapters completed with date, faculty, notes)
+            try {
+                val topicsSnapshot = db.collection("users").document(uid).collection("completed_syllabus_topics").get().await()
+                for (doc in topicsSnapshot) {
+                    try {
+                        val t = doc.toObject(CompletedSyllabusTopic::class.java)
+                        if (t != null) repository.addCompletedTopic(t)
+                    } catch (e: Exception) {
+                        val t = com.example.data.sync.FirestoreSyncManager.mapToCompletedTopic(doc.data, doc.id, null)
+                        repository.addCompletedTopic(t)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("FirestoreSync", "Error restoring completed topics: ${e.message}")
+            }
+
+            // 5. Restore Assignments (Written with date & status)
+            try {
+                val assignmentsSnapshot = db.collection("users").document(uid).collection("assignments").get().await()
+                for (doc in assignmentsSnapshot) {
+                    try {
+                        val a = doc.toObject(Assignment::class.java)
+                        if (a != null) repository.addAssignmentLocally(a)
+                    } catch (e: Exception) {
+                        val a = com.example.data.sync.FirestoreSyncManager.mapToAssignment(doc.data, doc.id, null)
+                        repository.addAssignmentLocally(a)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("FirestoreSync", "Error restoring assignments: ${e.message}")
+            }
+
+            // 6. Restore Assessments (Written with date, type, syllabus)
+            try {
+                val assessmentsSnapshot = db.collection("users").document(uid).collection("assessments").get().await()
+                for (doc in assessmentsSnapshot) {
+                    try {
+                        val ass = doc.toObject(Assessment::class.java)
+                        if (ass != null) repository.addAssessmentLocally(ass)
+                    } catch (e: Exception) {
+                        val ass = com.example.data.sync.FirestoreSyncManager.mapToAssessment(doc.data, doc.id, null)
+                        repository.addAssessmentLocally(ass)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("FirestoreSync", "Error restoring assessments: ${e.message}")
+            }
+
+            // 7. Restore Daily Revisions & Study Tasks
+            try {
+                val studySnapshot = db.collection("users").document(uid).collection("study_tasks").get().await()
+                for (doc in studySnapshot) {
+                    try {
+                        val task = doc.toObject(StudyTask::class.java)
+                        if (task != null) repository.addStudyTask(task)
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                }
+            } catch (e: Exception) {
+                // ignore
+            }
+
+            // 8. Restore Exams
+            try {
+                val examsSnapshot = db.collection("users").document(uid).collection("exams").get().await()
+                for (doc in examsSnapshot) {
+                    try {
+                        val ex = doc.toObject(Exam::class.java)
+                        if (ex != null) repository.addExam(ex)
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                }
+            } catch (e: Exception) {
+                // ignore
+            }
+
+            // 9. Restore Planner Tasks
+            try {
+                val plannerSnapshot = db.collection("users").document(uid).collection("planner_tasks").get().await()
+                for (doc in plannerSnapshot) {
+                    try {
+                        val task = doc.toObject(PlannerTask::class.java)
+                        if (task != null) repository.addPlannerTask(task)
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                }
+            } catch (e: Exception) {
+                // ignore
+            }
+
+            return profileFound
+        } catch (e: Exception) {
+            Log.e("FirestoreSync", "Restore internal failed: ${e.message}", e)
+            return false
+        }
+    }
+
     fun restoreDataFromFirebase(onComplete: (Boolean) -> Unit = {}) {
         val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: return
-        val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+        val email = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email ?: _studentEmail.value
         
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                // 1. Restore Profile
-                db.collection("users").document(uid).collection("profile").document("info")
-                    .get()
-                    .addOnSuccessListener { doc ->
-                        if (doc.exists()) {
-                            val name = doc.getString("fullName") ?: ""
-                            val college = doc.getString("college") ?: ""
-                            val courseCode = doc.getString("course") ?: ""
-                            val year = doc.getString("currentYear") ?: doc.getString("year") ?: ""
-                            val admissionYearVal = doc.getLong("admissionYear")?.toInt() ?: 2024
-                            val semester = doc.getString("semester") ?: ""
-                            val batch = doc.getString("batch") ?: ""
-                            
-                            _studentName.value = name
-                            _studentCollege.value = college
-                            _studentYear.value = year
-                            _studentAdmissionYear.value = admissionYearVal
-                            _studentSemester.value = semester
-                            _studentBatch.value = batch
-                            _isProfileCompleted.value = true
-                            
-                            if (courseCode.isNotEmpty()) {
-                                try {
-                                    val courseObj = MedicalCourse.valueOf(courseCode)
-                                    _selectedCourse.value = courseObj
-                                    
-                                    val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
-                                    sharedPrefs.edit()
-                                        .putString("student_name", name)
-                                        .putString("selected_course_code", courseObj.name)
-                                        .putString("student_college", college)
-                                        .putString("student_year", year)
-                                        .putInt("student_admission_year", admissionYearVal)
-                                        .putString("student_semester", semester)
-                                        .putString("student_batch", batch)
-                                        .putBoolean("is_profile_completed", true)
-                                        .putBoolean("is_onboarding_completed", true)
-                                        .apply()
-                                } catch (e: Exception) {
-                                    // ignore
-                                }
-                            }
-                        }
-                    }
-
-                // 2. Restore Timetable
-                db.collection("users").document(uid).collection("timetable")
-                    .get()
-                    .addOnSuccessListener { result ->
-                        viewModelScope.launch(Dispatchers.IO) {
-                            val list = mutableListOf<TimetableClass>()
-                            for (doc in result) {
-                                val c = doc.toObject(TimetableClass::class.java)
-                                list.add(c)
-                            }
-                            if (list.isNotEmpty()) {
-                                _selectedCourse.value?.code?.let { code ->
-                                    repository.clearTimetable(code)
-                                    list.forEach { repository.addClass(it) }
-                                }
-                            }
-                        }
-                    }
-
-                // 3. Restore Attendance Records
-                db.collection("users").document(uid).collection("attendance")
-                    .get()
-                    .addOnSuccessListener { result ->
-                        viewModelScope.launch(Dispatchers.IO) {
-                            val list = mutableListOf<AttendanceRecord>()
-                            for (doc in result) {
-                                val r = doc.toObject(AttendanceRecord::class.java)
-                                list.add(r)
-                            }
-                            if (list.isNotEmpty()) {
-                                list.forEach { repository.saveAttendanceRecord(it) }
-                            }
-                        }
-                    }
-
-                // 4. Restore Daily Revisions
-                db.collection("users").document(uid).collection("revisions")
-                    .get()
-                    .addOnSuccessListener { result ->
-                        viewModelScope.launch(Dispatchers.IO) {
-                            val list = mutableListOf<DailySubjectRevision>()
-                            for (doc in result) {
-                                val r = doc.toObject(DailySubjectRevision::class.java)
-                                list.add(r)
-                            }
-                            if (list.isNotEmpty()) {
-                                list.forEach { repository.saveRevision(it) }
-                            }
-                        }
-                    }
-
-                // 5. Restore Assignments
-                db.collection("users").document(uid).collection("assignments")
-                    .get()
-                    .addOnSuccessListener { result ->
-                        viewModelScope.launch(Dispatchers.IO) {
-                            for (doc in result) {
-                                val a = doc.toObject(Assignment::class.java)
-                                repository.addAssignment(a)
-                            }
-                        }
-                    }
-
-                // 6. Restore Exams
-                db.collection("users").document(uid).collection("exams")
-                    .get()
-                    .addOnSuccessListener { result ->
-                        viewModelScope.launch(Dispatchers.IO) {
-                            for (doc in result) {
-                                val ex = doc.toObject(Exam::class.java)
-                                repository.addExam(ex)
-                            }
-                        }
-                    }
-
-                // 7. Restore Planner
-                db.collection("users").document(uid).collection("planner")
-                    .get()
-                    .addOnSuccessListener { result ->
-                        viewModelScope.launch(Dispatchers.IO) {
-                            for (doc in result) {
-                                val task = doc.toObject(PlannerTask::class.java)
-                                repository.addPlannerTask(task)
-                            }
-                        }
-                    }
-
-                onComplete(true)
-            } catch (e: Exception) {
-                Log.e("FirestoreSync", "Restore failed: ${e.message}", e)
-                onComplete(false)
+            val success = restoreDataFromFirebaseInternal(uid, email)
+            withContext(Dispatchers.Main) {
+                onComplete(success)
             }
         }
     }
@@ -2982,16 +3386,33 @@ class PlannerViewModel(
                 outputStream.flush()
                 outputStream.close()
 
+                val bOut = java.io.ByteArrayOutputStream()
+                val scaled = if (size > 240) {
+                    android.graphics.Bitmap.createScaledBitmap(croppedBitmap, 240, 240, true)
+                } else croppedBitmap
+                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, bOut)
+                val base64Data = "data:image/jpeg;base64," + android.util.Base64.encodeToString(bOut.toByteArray(), android.util.Base64.NO_WRAP)
+                if (scaled != croppedBitmap) {
+                    scaled.recycle()
+                }
+
                 if (bitmap != croppedBitmap) {
                     bitmap.recycle()
                 }
                 croppedBitmap.recycle()
 
                 val localPath = "file://" + file.absolutePath
-                _studentDpUrl.value = localPath
+                withContext(Dispatchers.Main) {
+                    _studentDpUrl.value = localPath
+                }
 
                 val sharedPrefs = context.getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
-                sharedPrefs.edit().putString("student_dp_url", localPath).apply()
+                sharedPrefs.edit()
+                    .putString("student_dp_url", localPath)
+                    .putString("student_dp_base64", base64Data)
+                    .apply()
+
+                syncDataToFirebase()
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -3358,6 +3779,7 @@ enum class Screen {
     Dashboard,
     Timetable,
     Planner,
+    Finished,
     Calendar,
     AIChat,
     Settings,

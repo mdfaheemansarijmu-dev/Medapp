@@ -143,20 +143,30 @@ fun PlannerScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
                             Text(
                                 text = "Batch Channel: ${activeBatchKey.ifBlank { "Connecting..." }}",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = if (isBatchListening) "● LIVE" else "○ OFFLINE",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
-                                color = if (isBatchListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                            )
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = if (isBatchListening) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = if (isBatchListening) "● LIVE" else "○ OFFLINE",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                                    color = if (isBatchListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                )
+                            }
                         }
                         Text(
                             text = if (isBatchListening) "Auto-sharing active with $effectiveBatchName peers. Tap to share code." else "$batchSyncStatus (Tap to diagnose)",
@@ -480,6 +490,31 @@ fun AssignmentCardRow(
                         }
                     }
                 }
+                if (asg.status == "Completed") {
+                    Surface(
+                        color = Color(0xFF10B981).copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.padding(top = 4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = Color(0xFF10B981),
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Saved in Finished Syllabus Area",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                                color = Color(0xFF047857)
+                            )
+                        }
+                    }
+                }
                 if (!asg.notes.isNullOrEmpty()) {
                     Text(
                         text = asg.notes,
@@ -646,6 +681,31 @@ fun AssessmentCardRow(
                                 text = "Batch Shared",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                                 color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+                if (exam.status == "Completed") {
+                    Surface(
+                        color = Color(0xFF10B981).copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.padding(top = 4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = Color(0xFF10B981),
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Saved in Finished Syllabus Area",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                                color = Color(0xFF047857)
                             )
                         }
                     }

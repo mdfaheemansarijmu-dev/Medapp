@@ -560,19 +560,77 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
         plannerDao.getCompletedTopicsForYear(courseCode, academicYear)
 
     suspend fun addCompletedTopic(topic: CompletedSyllabusTopic): Long {
-        return plannerDao.insertCompletedTopic(topic)
+        val id = plannerDao.insertCompletedTopic(topic)
+        syncManager.pushCompletedTopic(topic)
+        return id
     }
 
     suspend fun updateCompletedTopic(topic: CompletedSyllabusTopic) {
         plannerDao.updateCompletedTopic(topic)
+        syncManager.pushCompletedTopic(topic)
     }
 
     suspend fun deleteCompletedTopic(id: Int) {
+        val firestoreId = plannerDao.getCompletedTopicById(id)?.firestoreId
         plannerDao.deleteCompletedTopicById(id)
+        if (firestoreId != null) {
+            syncManager.deleteCompletedTopic(firestoreId)
+        }
     }
 
     suspend fun getCompletedTopicById(id: Int): CompletedSyllabusTopic? {
         return plannerDao.getCompletedTopicById(id)
+    }
+
+    suspend fun addCompletedTopicLocally(topic: CompletedSyllabusTopic): Long {
+        return plannerDao.insertCompletedTopic(topic)
+    }
+
+    suspend fun addClassLocally(classItem: TimetableClass) {
+        plannerDao.insertClass(classItem)
+    }
+
+    suspend fun getTimetableClassByFirestoreId(firestoreId: String): TimetableClass? {
+        return plannerDao.getTimetableClassByFirestoreId(firestoreId)
+    }
+
+    suspend fun getCompletedTopicByFirestoreId(firestoreId: String): CompletedSyllabusTopic? {
+        return plannerDao.getCompletedTopicByFirestoreId(firestoreId)
+    }
+
+    suspend fun deleteCompletedTopicByFirestoreId(firestoreId: String) {
+        plannerDao.deleteCompletedTopicByFirestoreId(firestoreId)
+    }
+
+    suspend fun deleteTimetableClassByFirestoreId(firestoreId: String) {
+        val cls = plannerDao.getTimetableClassByFirestoreId(firestoreId)
+        if (cls != null) {
+            plannerDao.deleteClassById(cls.id)
+        }
+    }
+
+    suspend fun findMatchingCompletedTopic(courseCode: String, subject: String, topicTitle: String): CompletedSyllabusTopic? {
+        return plannerDao.findMatchingCompletedTopic(courseCode, subject, topicTitle)
+    }
+
+    suspend fun findMatchingAssignmentExact(courseCode: String, subject: String, title: String): Assignment? {
+        return plannerDao.findMatchingAssignmentExact(courseCode, subject, title)
+    }
+
+    suspend fun findMatchingAssessmentExact(courseCode: String, subject: String, title: String): Assessment? {
+        return plannerDao.findMatchingAssessmentExact(courseCode, subject, title)
+    }
+
+    suspend fun findMatchingTimetableClass(courseCode: String, dayOfWeek: Int, periodNumber: Int): TimetableClass? {
+        return plannerDao.findMatchingTimetableClassByPeriod(courseCode, dayOfWeek, periodNumber)
+    }
+
+    suspend fun getTimetableClassById(id: Int): TimetableClass? {
+        return plannerDao.getTimetableClassById(id)
+    }
+
+    suspend fun getAllTimetableClassesOnce(): List<TimetableClass> {
+        return plannerDao.getAllTimetableClassesOnce()
     }
 }
 

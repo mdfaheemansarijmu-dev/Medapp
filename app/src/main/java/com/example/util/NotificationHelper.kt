@@ -78,6 +78,18 @@ object NotificationHelper {
                     setSound(soundUri, audioAttributes)
                 },
                 NotificationChannel(
+                    CHANNEL_STUDY,
+                    "Study Tasks & Progress",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Personal study goals and revision reminders"
+                    enableLights(true)
+                    lightColor = Color.MAGENTA
+                    enableVibration(true)
+                    setShowBadge(true)
+                    setSound(soundUri, audioAttributes)
+                },
+                NotificationChannel(
                     CHANNEL_GENERAL,
                     "General Reminders & Batch Updates",
                     NotificationManager.IMPORTANCE_HIGH

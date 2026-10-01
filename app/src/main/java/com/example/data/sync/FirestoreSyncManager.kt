@@ -81,6 +81,7 @@ class FirestoreSyncManager(private val plannerDao: PlannerDao) {
             plannerDao.getAllPlannerTasksOnce().forEach { pushPlannerTaskInternal(uid, it) }
             plannerDao.getAllScheduleOverridesOnce().forEach { pushScheduleOverrideInternal(uid, it) }
             plannerDao.getAllAttendanceRecordsOnce().forEach { pushAttendanceRecordInternal(uid, it) }
+            plannerDao.getAllCompletedTopicsOnce().forEach { pushCompletedTopicInternal(uid, it) }
         } catch (e: Exception) {
             Log.e("FirestoreSyncManager", "Error in bulk push", e)
             _lastError.value = e.localizedMessage
@@ -336,6 +337,35 @@ class FirestoreSyncManager(private val plannerDao: PlannerDao) {
                     }
                 }
             listeners.add(attendanceListener)
+
+            // 9. Completed Syllabus Topics
+            val completedTopicsListener = db.collection("users").document(uid).collection("completed_syllabus_topics")
+                .addSnapshotListener { snapshots, e ->
+                    if (e != null) {
+                        _lastError.value = e.localizedMessage
+                        return@addSnapshotListener
+                    }
+                    if (snapshots != null) {
+                        scope.launch {
+                            for (change in snapshots.documentChanges) {
+                                val doc = change.document
+                                val fId = doc.id
+                                val map = doc.data
+                                when (change.type) {
+                                    DocumentChange.Type.ADDED, DocumentChange.Type.MODIFIED -> {
+                                        val local = plannerDao.getCompletedTopicByFirestoreId(fId)
+                                        val item = mapToCompletedTopic(map, fId, local?.id)
+                                        plannerDao.insertCompletedTopic(item)
+                                    }
+                                    DocumentChange.Type.REMOVED -> {
+                                        plannerDao.deleteCompletedTopicByFirestoreId(fId)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            listeners.add(completedTopicsListener)
         }
     }
 
@@ -614,7 +644,42 @@ class FirestoreSyncManager(private val plannerDao: PlannerDao) {
         }
     }
 
-    private fun mapToTimetableClass(map: Map<String, Any?>, firestoreId: String, localId: Int?): TimetableClass {
+    suspend fun pushCompletedTopic(item: CompletedSyllabusTopic) {
+        val uid = activeUid ?: com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: return
+        scope.launch {
+            try {
+                pushCompletedTopicInternal(uid, item)
+            } catch (e: Exception) {
+                Log.e("FirestoreSyncManager", "Error pushing completed topic", e)
+            }
+        }
+    }
+    private suspend fun pushCompletedTopicInternal(uid: String, item: CompletedSyllabusTopic) {
+        val map = mapOf(
+            "courseCode" to item.courseCode,
+            "subject" to item.subject,
+            "topicTitle" to item.topicTitle,
+            "academicYear" to item.academicYear,
+            "completionDate" to item.completionDate,
+            "teacherName" to item.teacherName,
+            "notes" to item.notes
+        )
+        db.collection("users").document(uid).collection("completed_syllabus_topics").document(item.firestoreId).set(map).await()
+    }
+
+    fun deleteCompletedTopic(firestoreId: String) {
+        val uid = activeUid ?: com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: return
+        scope.launch {
+            try {
+                db.collection("users").document(uid).collection("completed_syllabus_topics").document(firestoreId).delete().await()
+            } catch (e: Exception) {
+                Log.e("FirestoreSyncManager", "Error deleting completed topic", e)
+            }
+        }
+    }
+
+    companion object {
+        fun mapToTimetableClass(map: Map<String, Any?>, firestoreId: String, localId: Int?): TimetableClass {
         return TimetableClass(
             id = localId ?: 0,
             courseCode = map["courseCode"] as? String ?: "",
@@ -630,112 +695,128 @@ class FirestoreSyncManager(private val plannerDao: PlannerDao) {
         )
     }
 
-    private fun mapToAssignment(map: Map<String, Any?>, firestoreId: String, localId: Int?): Assignment {
-        return Assignment(
-            id = localId ?: 0,
-            courseCode = map["courseCode"] as? String ?: "",
-            subject = map["subject"] as? String ?: "",
-            title = map["title"] as? String ?: "",
-            dueDate = (map["dueDate"] as? Long) ?: 0L,
-            priority = map["priority"] as? String ?: "Medium",
-            status = map["status"] as? String ?: "Pending",
-            type = map["type"] as? String ?: "Assignment",
-            notes = map["notes"] as? String,
-            firestoreId = firestoreId
-        )
-    }
+        fun mapToAssignment(map: Map<String, Any?>, firestoreId: String, localId: Int?): Assignment {
+            return Assignment(
+                id = localId ?: 0,
+                courseCode = map["courseCode"] as? String ?: "",
+                subject = map["subject"] as? String ?: "",
+                title = map["title"] as? String ?: "",
+                dueDate = (map["dueDate"] as? Long) ?: 0L,
+                priority = map["priority"] as? String ?: "Medium",
+                status = map["status"] as? String ?: "Pending",
+                type = map["type"] as? String ?: "Assignment",
+                notes = map["notes"] as? String,
+                firestoreId = firestoreId
+            )
+        }
 
-    private fun mapToAssessment(map: Map<String, Any?>, firestoreId: String, localId: Int?): Assessment {
-        return Assessment(
-            id = localId ?: 0,
-            courseCode = map["courseCode"] as? String ?: "",
-            subject = map["subject"] as? String ?: "",
-            title = map["title"] as? String ?: "",
-            date = (map["date"] as? Long) ?: 0L,
-            type = map["type"] as? String ?: "Class Test",
-            status = map["status"] as? String ?: "Upcoming",
-            syllabus = map["syllabus"] as? String,
-            firestoreId = firestoreId
-        )
-    }
+        fun mapToAssessment(map: Map<String, Any?>, firestoreId: String, localId: Int?): Assessment {
+            return Assessment(
+                id = localId ?: 0,
+                courseCode = map["courseCode"] as? String ?: "",
+                subject = map["subject"] as? String ?: "",
+                title = map["title"] as? String ?: "",
+                date = (map["date"] as? Long) ?: 0L,
+                type = map["type"] as? String ?: "Class Test",
+                status = map["status"] as? String ?: "Upcoming",
+                syllabus = map["syllabus"] as? String,
+                firestoreId = firestoreId
+            )
+        }
 
-    private fun mapToStudyTask(map: Map<String, Any?>, firestoreId: String, localId: Int?): StudyTask {
-        return StudyTask(
-            id = localId ?: 0,
-            courseCode = map["courseCode"] as? String ?: "",
-            subject = map["subject"] as? String ?: "",
-            title = map["title"] as? String ?: "",
-            dueDate = (map["dueDate"] as? Long) ?: 0L,
-            priority = map["priority"] as? String ?: "Medium",
-            progress = (map["progress"] as? Long)?.toInt() ?: 0,
-            targetMinutes = (map["targetMinutes"] as? Long)?.toInt() ?: 30,
-            notes = map["notes"] as? String,
-            firestoreId = firestoreId
-        )
-    }
+        fun mapToStudyTask(map: Map<String, Any?>, firestoreId: String, localId: Int?): StudyTask {
+            return StudyTask(
+                id = localId ?: 0,
+                courseCode = map["courseCode"] as? String ?: "",
+                subject = map["subject"] as? String ?: "",
+                title = map["title"] as? String ?: "",
+                dueDate = (map["dueDate"] as? Long) ?: 0L,
+                priority = map["priority"] as? String ?: "Medium",
+                progress = (map["progress"] as? Long)?.toInt() ?: 0,
+                targetMinutes = (map["targetMinutes"] as? Long)?.toInt() ?: 30,
+                notes = map["notes"] as? String,
+                firestoreId = firestoreId
+            )
+        }
 
-    private fun mapToExam(map: Map<String, Any?>, firestoreId: String, localId: Int?): Exam {
-        return Exam(
-            id = localId ?: 0,
-            courseCode = map["courseCode"] as? String ?: "",
-            subject = map["subject"] as? String ?: "",
-            title = map["title"] as? String ?: "",
-            date = (map["date"] as? Long) ?: 0L,
-            time = map["time"] as? String,
-            room = map["room"] as? String,
-            syllabus = map["syllabus"] as? String,
-            status = map["status"] as? String ?: "Upcoming",
-            firestoreId = firestoreId
-        )
-    }
+        fun mapToExam(map: Map<String, Any?>, firestoreId: String, localId: Int?): Exam {
+            return Exam(
+                id = localId ?: 0,
+                courseCode = map["courseCode"] as? String ?: "",
+                subject = map["subject"] as? String ?: "",
+                title = map["title"] as? String ?: "",
+                date = (map["date"] as? Long) ?: 0L,
+                time = map["time"] as? String,
+                room = map["room"] as? String,
+                syllabus = map["syllabus"] as? String,
+                status = map["status"] as? String ?: "Upcoming",
+                firestoreId = firestoreId
+            )
+        }
 
-    private fun mapToPlannerTask(map: Map<String, Any?>, firestoreId: String, localId: Int?): PlannerTask {
-        return PlannerTask(
-            id = localId ?: 0,
-            courseCode = map["courseCode"] as? String ?: "",
-            title = map["title"] as? String ?: "",
-            date = (map["date"] as? Long) ?: 0L,
-            isCompleted = map["isCompleted"] as? Boolean ?: false,
-            category = map["category"] as? String ?: "General",
-            firestoreId = firestoreId
-        )
-    }
+        fun mapToPlannerTask(map: Map<String, Any?>, firestoreId: String, localId: Int?): PlannerTask {
+            return PlannerTask(
+                id = localId ?: 0,
+                courseCode = map["courseCode"] as? String ?: "",
+                title = map["title"] as? String ?: "",
+                date = (map["date"] as? Long) ?: 0L,
+                isCompleted = map["isCompleted"] as? Boolean ?: false,
+                category = map["category"] as? String ?: "General",
+                firestoreId = firestoreId
+            )
+        }
 
-    private fun mapToScheduleOverride(map: Map<String, Any?>, firestoreId: String, localId: Int?): ScheduleOverride {
-        return ScheduleOverride(
-            id = localId ?: 0,
-            courseCode = map["courseCode"] as? String ?: "",
-            dateString = map["dateString"] as? String ?: "",
-            timetableClassId = (map["timetableClassId"] as? Long)?.toInt(),
-            originalPeriodNumber = (map["originalPeriodNumber"] as? Long)?.toInt(),
-            subject = map["subject"] as? String ?: "",
-            startTime = map["startTime"] as? String ?: "",
-            endTime = map["endTime"] as? String ?: "",
-            room = map["room"] as? String,
-            teacherName = map["teacherName"] as? String,
-            isCancelled = map["isCancelled"] as? Boolean ?: false,
-            colorHex = map["colorHex"] as? String ?: "#EF4444",
-            firestoreId = firestoreId
-        )
-    }
+        fun mapToScheduleOverride(map: Map<String, Any?>, firestoreId: String, localId: Int?): ScheduleOverride {
+            return ScheduleOverride(
+                id = localId ?: 0,
+                courseCode = map["courseCode"] as? String ?: "",
+                dateString = map["dateString"] as? String ?: "",
+                timetableClassId = (map["timetableClassId"] as? Long)?.toInt(),
+                originalPeriodNumber = (map["originalPeriodNumber"] as? Long)?.toInt(),
+                subject = map["subject"] as? String ?: "",
+                startTime = map["startTime"] as? String ?: "",
+                endTime = map["endTime"] as? String ?: "",
+                room = map["room"] as? String,
+                teacherName = map["teacherName"] as? String,
+                isCancelled = map["isCancelled"] as? Boolean ?: false,
+                colorHex = map["colorHex"] as? String ?: "#EF4444",
+                firestoreId = firestoreId
+            )
+        }
 
-    private fun mapToAttendanceRecord(map: Map<String, Any?>, firestoreId: String, localId: Int?): AttendanceRecord {
-        val isPresent = map["isPresent"] as? Boolean ?: false
-        val status = map["status"] as? String ?: (if (isPresent) "PRESENT" else "ABSENT")
-        val timestamp = (map["recordedTimestamp"] as? Number)?.toLong() ?: System.currentTimeMillis()
-        return AttendanceRecord(
-            id = localId ?: 0,
-            dateString = map["dateString"] as? String ?: "",
-            subject = map["subject"] as? String ?: "",
-            isPresent = isPresent,
-            classTime = map["classTime"] as? String,
-            firestoreId = firestoreId,
-            status = status,
-            startTime = map["startTime"] as? String,
-            endTime = map["endTime"] as? String,
-            note = map["note"] as? String,
-            reason = map["reason"] as? String,
-            recordedTimestamp = timestamp
-        )
+        fun mapToAttendanceRecord(map: Map<String, Any?>, firestoreId: String, localId: Int?): AttendanceRecord {
+            val isPresent = map["isPresent"] as? Boolean ?: false
+            val status = map["status"] as? String ?: (if (isPresent) "PRESENT" else "ABSENT")
+            val timestamp = (map["recordedTimestamp"] as? Number)?.toLong() ?: System.currentTimeMillis()
+            return AttendanceRecord(
+                id = localId ?: 0,
+                dateString = map["dateString"] as? String ?: "",
+                subject = map["subject"] as? String ?: "",
+                isPresent = isPresent,
+                classTime = map["classTime"] as? String,
+                firestoreId = firestoreId,
+                status = status,
+                startTime = map["startTime"] as? String,
+                endTime = map["endTime"] as? String,
+                note = map["note"] as? String,
+                reason = map["reason"] as? String,
+                recordedTimestamp = timestamp
+            )
+        }
+
+        fun mapToCompletedTopic(map: Map<String, Any?>, firestoreId: String, localId: Int?): CompletedSyllabusTopic {
+            val dateVal = (map["completionDate"] as? Number)?.toLong() ?: System.currentTimeMillis()
+            return CompletedSyllabusTopic(
+                id = localId ?: 0,
+                courseCode = map["courseCode"] as? String ?: "",
+                subject = map["subject"] as? String ?: "",
+                topicTitle = map["topicTitle"] as? String ?: "",
+                academicYear = map["academicYear"] as? String ?: "",
+                completionDate = dateVal,
+                teacherName = map["teacherName"] as? String,
+                notes = map["notes"] as? String,
+                firestoreId = firestoreId
+            )
+        }
     }
 }

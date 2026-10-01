@@ -282,6 +282,27 @@ interface PlannerDao {
 
     @Query("DELETE FROM completed_syllabus_topics WHERE firestoreId = :firestoreId")
     suspend fun deleteCompletedTopicByFirestoreId(firestoreId: String)
+
+    @Query("SELECT * FROM completed_syllabus_topics WHERE firestoreId = :firestoreId LIMIT 1")
+    suspend fun getCompletedTopicByFirestoreId(firestoreId: String): CompletedSyllabusTopic?
+
+    @Query("SELECT * FROM completed_syllabus_topics")
+    suspend fun getAllCompletedTopicsOnce(): List<CompletedSyllabusTopic>
+
+    @Query("SELECT * FROM assignments WHERE courseCode = :courseCode COLLATE NOCASE AND subject = :subject COLLATE NOCASE AND title = :title COLLATE NOCASE LIMIT 1")
+    suspend fun findMatchingAssignmentExact(courseCode: String, subject: String, title: String): Assignment?
+
+    @Query("SELECT * FROM assessments WHERE courseCode = :courseCode COLLATE NOCASE AND subject = :subject COLLATE NOCASE AND title = :title COLLATE NOCASE LIMIT 1")
+    suspend fun findMatchingAssessmentExact(courseCode: String, subject: String, title: String): Assessment?
+
+    @Query("SELECT * FROM completed_syllabus_topics WHERE courseCode = :courseCode COLLATE NOCASE AND subject = :subject COLLATE NOCASE AND topicTitle = :topicTitle COLLATE NOCASE LIMIT 1")
+    suspend fun findMatchingCompletedTopic(courseCode: String, subject: String, topicTitle: String): CompletedSyllabusTopic?
+
+    @Query("SELECT * FROM timetable_classes WHERE courseCode = :courseCode COLLATE NOCASE AND dayOfWeek = :dayOfWeek AND periodNumber = :periodNumber LIMIT 1")
+    suspend fun findMatchingTimetableClassByPeriod(courseCode: String, dayOfWeek: Int, periodNumber: Int): TimetableClass?
+
+    @Query("SELECT * FROM timetable_classes WHERE courseCode = :courseCode COLLATE NOCASE AND dayOfWeek = :dayOfWeek AND subject = :subject COLLATE NOCASE AND startTime = :startTime LIMIT 1")
+    suspend fun findMatchingTimetableClassByTime(courseCode: String, dayOfWeek: Int, subject: String, startTime: String): TimetableClass?
 }
 
 @Database(
@@ -302,10 +323,33 @@ interface PlannerDao {
         DailySubjectRevision::class,
         CompletedSyllabusTopic::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class PlannerDatabase : RoomDatabase() {
     abstract fun plannerDao(): PlannerDao
+
+    companion object {
+        val MIGRATION_9_10 = object : androidx.room.migration.Migration(9, 10) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                try {
+                    db.execSQL("ALTER TABLE timetable_classes ADD COLUMN authorName TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE timetable_classes ADD COLUMN authorUid TEXT NOT NULL DEFAULT ''")
+                } catch (e: Exception) { }
+                try {
+                    db.execSQL("ALTER TABLE assignments ADD COLUMN authorName TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE assignments ADD COLUMN authorUid TEXT NOT NULL DEFAULT ''")
+                } catch (e: Exception) { }
+                try {
+                    db.execSQL("ALTER TABLE assessments ADD COLUMN authorName TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE assessments ADD COLUMN authorUid TEXT NOT NULL DEFAULT ''")
+                } catch (e: Exception) { }
+                try {
+                    db.execSQL("ALTER TABLE completed_syllabus_topics ADD COLUMN authorName TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE completed_syllabus_topics ADD COLUMN authorUid TEXT NOT NULL DEFAULT ''")
+                } catch (e: Exception) { }
+            }
+        }
+    }
 }
 

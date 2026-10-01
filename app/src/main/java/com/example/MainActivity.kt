@@ -32,6 +32,7 @@ import com.example.data.repository.PlannerRepository
 import com.example.network.AppUpdateResult
 import com.example.ui.components.OptionalUpdateDialog
 import com.example.ui.components.ForceUpdateScreen
+import com.example.ui.components.DuplicateContributionDialog
 import com.example.ui.screens.*
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.PlannerViewModel
@@ -65,7 +66,10 @@ class MainActivity : ComponentActivity() {
             applicationContext,
             PlannerDatabase::class.java,
             "acuity_planner_db"
-        ).fallbackToDestructiveMigration().build()
+        )
+        .addMigrations(PlannerDatabase.MIGRATION_9_10)
+        .fallbackToDestructiveMigration()
+        .build()
 
         repository = PlannerRepository(database.plannerDao())
 
@@ -82,6 +86,7 @@ class MainActivity : ComponentActivity() {
                 val isUpdateDialogDismissed by viewModel.isUpdateDialogDismissed.collectAsStateWithLifecycle()
                 val downloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
                 val downloadState by viewModel.updateDownloadState.collectAsStateWithLifecycle()
+                val duplicateDialogInfo by viewModel.duplicateContributionDialog.collectAsStateWithLifecycle()
 
                 Box(modifier = Modifier.fillMaxSize()) {
                     Surface(
@@ -93,6 +98,14 @@ class MainActivity : ComponentActivity() {
                         } else {
                             MainAppLayout(viewModel = viewModel, currentScreen = currentScreen)
                         }
+                    }
+
+                    // Duplicate Item Dialog with Student Contribution
+                    duplicateDialogInfo?.let { info ->
+                        DuplicateContributionDialog(
+                            info = info,
+                            onDismiss = { viewModel.dismissDuplicateDialog() }
+                        )
                     }
 
                     // Handle In-App Update System Overlays and Dialogs
@@ -167,6 +180,7 @@ fun MainAppLayout(
                     Screen.Dashboard -> DashboardScreen(viewModel = viewModel)
                     Screen.Timetable -> TimetableScreen(viewModel = viewModel)
                     Screen.Planner -> PlannerScreen(viewModel = viewModel)
+                    Screen.Finished -> FinishedScreen(viewModel = viewModel)
                     Screen.Calendar -> CalendarScreen(viewModel = viewModel)
                     Screen.AIChat -> AIChatScreen(viewModel = viewModel)
                     Screen.Settings -> SettingsScreen(viewModel = viewModel)
@@ -205,7 +219,7 @@ fun BottomNavigationBar(
             label = {
                 Text(
                     text = "Home",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
                     maxLines = 1,
                     softWrap = false,
                     overflow = TextOverflow.Ellipsis
@@ -227,7 +241,7 @@ fun BottomNavigationBar(
             label = {
                 Text(
                     text = "Classes",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
                     maxLines = 1,
                     softWrap = false,
                     overflow = TextOverflow.Ellipsis
@@ -249,7 +263,7 @@ fun BottomNavigationBar(
             label = {
                 Text(
                     text = "Planner",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
                     maxLines = 1,
                     softWrap = false,
                     overflow = TextOverflow.Ellipsis
@@ -258,7 +272,32 @@ fun BottomNavigationBar(
             modifier = Modifier.testTag("nav_planner")
         )
 
-        // Tab 4: Calendar
+        // Tab 4: Finished / Completed Syllabus
+        NavigationBarItem(
+            selected = currentScreen == Screen.Finished,
+            onClick = { onNavigate(Screen.Finished) },
+            icon = {
+                Icon(
+                    imageVector = if (currentScreen == Screen.Finished) Icons.Default.CheckCircle else Icons.Outlined.CheckCircle,
+                    contentDescription = "Finished Syllabus"
+                )
+            },
+            label = {
+                Text(
+                    text = "Finished",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 10.5.sp,
+                        fontWeight = if (currentScreen == Screen.Finished) FontWeight.Bold else FontWeight.Normal
+                    ),
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
+            modifier = Modifier.testTag("nav_finished")
+        )
+
+        // Tab 5: Calendar
         NavigationBarItem(
             selected = currentScreen == Screen.Calendar,
             onClick = { onNavigate(Screen.Calendar) },
@@ -271,7 +310,7 @@ fun BottomNavigationBar(
             label = {
                 Text(
                     text = "Calendar",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
                     maxLines = 1,
                     softWrap = false,
                     overflow = TextOverflow.Ellipsis
@@ -280,7 +319,7 @@ fun BottomNavigationBar(
             modifier = Modifier.testTag("nav_calendar")
         )
 
-        // Tab 5: AI Notice Parser
+        // Tab 6: AI Notice Parser
         NavigationBarItem(
             selected = currentScreen == Screen.AIChat,
             onClick = { onNavigate(Screen.AIChat) },
@@ -293,7 +332,7 @@ fun BottomNavigationBar(
             label = {
                 Text(
                     text = "AI",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
                     maxLines = 1,
                     softWrap = false,
                     overflow = TextOverflow.Ellipsis
