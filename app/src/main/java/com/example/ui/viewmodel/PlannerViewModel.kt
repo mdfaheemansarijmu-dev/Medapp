@@ -432,6 +432,10 @@ class PlannerViewModel(
             if (GeminiParserService.isValidApiKey(key)) key else null
         }
 
+        viewModelScope.launch {
+            repository.deduplicateCompletedTopics()
+        }
+
         // Safe Firebase initialization check without forcing unconfigured FCM registration
         viewModelScope.launch {
             try {
@@ -828,7 +832,7 @@ class PlannerViewModel(
         viewModelScope.launch {
             if (!forceSave) {
                 val batchMatch = batchSyncManager.checkDuplicateAssignment(subject, title)
-                val localMatch = repository.findMatchingAssignmentExact(course.code, subject.trim(), title.trim())
+                val localMatch = repository.findMatchingSimilarAssignment(course.code, subject.trim(), title.trim())
 
                 if (batchMatch != null || localMatch != null) {
                     val author = when {
@@ -840,11 +844,12 @@ class PlannerViewModel(
                         else -> "Your Classmate"
                     }
                     val timestamp = batchMatch?.timestamp ?: localMatch?.dueDate ?: System.currentTimeMillis()
+                    val matchedTitle = batchMatch?.title ?: localMatch?.title ?: title.trim()
 
                     _duplicateContributionDialog.value = DuplicateContributionInfo(
                         itemType = "Assignment",
                         subject = subject.trim(),
-                        title = title.trim(),
+                        title = matchedTitle,
                         authorName = author,
                         submissionTimestamp = timestamp,
                         batchName = _studentBatch.value.ifBlank { "Batch" },
@@ -963,7 +968,7 @@ class PlannerViewModel(
         viewModelScope.launch {
             if (!forceSave) {
                 val batchMatch = batchSyncManager.checkDuplicateAssessment(subject, title)
-                val localMatch = repository.findMatchingAssessmentExact(course.code, subject.trim(), title.trim())
+                val localMatch = repository.findMatchingSimilarAssessment(course.code, subject.trim(), title.trim())
 
                 if (batchMatch != null || localMatch != null) {
                     val author = when {
@@ -974,11 +979,12 @@ class PlannerViewModel(
                         else -> "Your Classmate"
                     }
                     val timestamp = batchMatch?.timestamp ?: localMatch?.date ?: System.currentTimeMillis()
+                    val matchedTitle = batchMatch?.title ?: localMatch?.title ?: title.trim()
 
                     _duplicateContributionDialog.value = DuplicateContributionInfo(
                         itemType = "Assessment",
                         subject = subject.trim(),
-                        title = title.trim(),
+                        title = matchedTitle,
                         authorName = author,
                         submissionTimestamp = timestamp,
                         batchName = _studentBatch.value.ifBlank { "Batch" },
@@ -1145,7 +1151,7 @@ class PlannerViewModel(
         viewModelScope.launch {
             if (!forceSave) {
                 val batchMatch = batchSyncManager.checkDuplicateCompletedTopic(subject, topicTitle)
-                val localMatch = repository.findMatchingCompletedTopic(course.code, subject.trim(), topicTitle.trim())
+                val localMatch = repository.findMatchingSimilarCompletedTopic(course.code, subject.trim(), topicTitle.trim())
 
                 if (batchMatch != null || localMatch != null) {
                     val author = when {
@@ -1158,15 +1164,20 @@ class PlannerViewModel(
                         else -> "Your Classmate"
                     }
                     val timestamp = batchMatch?.completionDate ?: localMatch?.completionDate ?: System.currentTimeMillis()
+                    val matchedTitle = batchMatch?.topicTitle ?: localMatch?.topicTitle ?: topicTitle.trim()
 
                     _duplicateContributionDialog.value = DuplicateContributionInfo(
                         itemType = "Chapter",
                         subject = subject.trim(),
-                        title = topicTitle.trim(),
+                        title = matchedTitle,
                         authorName = author,
                         submissionTimestamp = timestamp,
                         batchName = _studentBatch.value.ifBlank { "Batch" },
-                        extraDetails = "Syllabus Year: $effectiveYear",
+                        extraDetails = if (!matchedTitle.equals(topicTitle.trim(), ignoreCase = true)) {
+                            "Already recorded as '$matchedTitle' in $effectiveYear"
+                        } else {
+                            "Syllabus Year: $effectiveYear"
+                        },
                         onConfirmSaveAnyway = {
                             addCompletedTopic(subject, topicTitle, academicYear, teacherName, notes, shareWithBatch, forceSave = true)
                         }
@@ -3369,14 +3380,32 @@ class PlannerViewModel(
             try {
                 val topicsSnapshot = db.collection("users").document(uid).collection("completed_syllabus_topics").get().await()
                 for (doc in topicsSnapshot) {
-                    try {
-                        val t = doc.toObject(CompletedSyllabusTopic::class.java)
-                        if (t != null) repository.addCompletedTopic(t)
+                    val firestoreId = doc.id
+                    val data = doc.data
+                    val courseCode = (data["courseCode"] as? String) ?: ""
+                    val subject = (data["subject"] as? String) ?: ""
+                    val topicTitle = (data["topicTitle"] as? String) ?: ""
+
+                    // Check if already present locally by firestoreId or matching topic
+                    val existing = repository.getCompletedTopicByFirestoreId(firestoreId)
+                        ?: repository.findMatchingSimilarCompletedTopic(courseCode, subject, topicTitle)
+
+                    val parsed = try {
+                        doc.toObject(CompletedSyllabusTopic::class.java)
                     } catch (e: Exception) {
-                        val t = com.example.data.sync.FirestoreSyncManager.mapToCompletedTopic(doc.data, doc.id, null)
-                        repository.addCompletedTopic(t)
+                        com.example.data.sync.FirestoreSyncManager.mapToCompletedTopic(data, firestoreId, existing?.id)
+                    }
+
+                    if (parsed != null) {
+                        val topicToSave = parsed.copy(
+                            id = existing?.id ?: 0,
+                            firestoreId = firestoreId,
+                            authorName = if (parsed.authorName.isNotBlank()) parsed.authorName else (data["authorName"] as? String ?: "")
+                        )
+                        repository.addCompletedTopicLocally(topicToSave)
                     }
                 }
+                repository.deduplicateCompletedTopics()
             } catch (e: Exception) {
                 Log.w("FirestoreSync", "Error restoring completed topics: ${e.message}")
             }
@@ -3754,6 +3783,58 @@ class PlannerViewModel(
                 val sharedPrefs = context.getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
                 sharedPrefs.edit()
                     .putString("student_dp_url", localPath)
+                    .putString("student_dp_base64", base64Data)
+                    .apply()
+
+                syncDataToFirebase()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun updateProfilePictureFromBitmap(bitmap: android.graphics.Bitmap) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val context = getApplication<Application>()
+                val width = bitmap.width
+                val height = bitmap.height
+                val size = if (width < height) width else height
+                val x = (width - size) / 2
+                val y = (height - size) / 2
+                val croppedBitmap = android.graphics.Bitmap.createBitmap(bitmap, x, y, size, size)
+
+                val file = java.io.File(context.filesDir, "custom_profile_picture.jpg")
+                val outputStream = java.io.FileOutputStream(file)
+                croppedBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, outputStream)
+                outputStream.flush()
+                outputStream.close()
+
+                val bOut = java.io.ByteArrayOutputStream()
+                val scaled = if (size > 240) {
+                    android.graphics.Bitmap.createScaledBitmap(croppedBitmap, 240, 240, true)
+                } else croppedBitmap
+                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, bOut)
+                val base64Data = "data:image/jpeg;base64," + android.util.Base64.encodeToString(bOut.toByteArray(), android.util.Base64.NO_WRAP)
+                if (scaled != croppedBitmap) {
+                    scaled.recycle()
+                }
+
+                if (bitmap != croppedBitmap) {
+                    bitmap.recycle()
+                }
+                croppedBitmap.recycle()
+
+                val localPath = "file://" + file.absolutePath
+                withContext(Dispatchers.Main) {
+                    _studentDpUrl.value = localPath
+                    _studentDpPreset.value = ""
+                }
+
+                val sharedPrefs = context.getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+                sharedPrefs.edit()
+                    .putString("student_dp_url", localPath)
+                    .putString("student_dp_preset", "")
                     .putString("student_dp_base64", base64Data)
                     .apply()
 

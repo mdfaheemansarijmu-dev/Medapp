@@ -301,6 +301,15 @@ interface PlannerDao {
     @Query("SELECT * FROM completed_syllabus_topics WHERE courseCode = :courseCode COLLATE NOCASE AND subject = :subject COLLATE NOCASE AND topicTitle = :topicTitle COLLATE NOCASE LIMIT 1")
     suspend fun findMatchingCompletedTopic(courseCode: String, subject: String, topicTitle: String): CompletedSyllabusTopic?
 
+    @Query("SELECT * FROM assignments WHERE courseCode = :courseCode COLLATE NOCASE AND subject = :subject COLLATE NOCASE")
+    suspend fun getAssignmentsForSubject(courseCode: String, subject: String): List<Assignment>
+
+    @Query("SELECT * FROM assessments WHERE courseCode = :courseCode COLLATE NOCASE AND subject = :subject COLLATE NOCASE")
+    suspend fun getAssessmentsForSubject(courseCode: String, subject: String): List<Assessment>
+
+    @Query("SELECT * FROM completed_syllabus_topics WHERE courseCode = :courseCode COLLATE NOCASE AND subject = :subject COLLATE NOCASE")
+    suspend fun getCompletedTopicsForSubject(courseCode: String, subject: String): List<CompletedSyllabusTopic>
+
     @Query("SELECT * FROM timetable_classes WHERE courseCode = :courseCode COLLATE NOCASE AND dayOfWeek = :dayOfWeek AND periodNumber = :periodNumber LIMIT 1")
     suspend fun findMatchingTimetableClassByPeriod(courseCode: String, dayOfWeek: Int, periodNumber: Int): TimetableClass?
 

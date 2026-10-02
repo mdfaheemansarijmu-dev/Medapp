@@ -768,6 +768,37 @@ fun CompletedTopicRow(
                         )
                     }
                 }
+                val authorText = when {
+                    topic.authorName.isNotBlank() && topic.authorName != "Classmate" -> topic.authorName
+                    topic.notes?.contains("Recorded by ") == true -> topic.notes.substringAfter("Recorded by ").substringBefore(")").trim()
+                    topic.notes?.contains("Completed with batch (by ") == true -> topic.notes.substringAfter("Completed with batch (by ").substringBefore(")").trim()
+                    topic.authorName.isNotBlank() -> topic.authorName
+                    else -> "Classmate"
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(top = 3.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(11.dp)
+                        )
+                        Text(
+                            text = "Submitted by $authorText",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
                 topic.notes?.let { note ->
                     if (note.isNotBlank()) {
                         Text(
@@ -1188,6 +1219,37 @@ fun CompletedAssignmentCard(
                 }
             }
 
+            val asgAuthor = when {
+                assignment.authorName.isNotBlank() && assignment.authorName != "Classmate" -> assignment.authorName
+                assignment.notes?.contains("Shared by ") == true -> assignment.notes.substringAfter("Shared by ").substringBefore(")").trim()
+                assignment.authorName.isNotBlank() -> assignment.authorName
+                else -> "Classmate"
+            }
+
+            Surface(
+                shape = RoundedCornerShape(4.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                modifier = Modifier.padding(top = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(11.dp)
+                    )
+                    Text(
+                        text = "Submitted by $asgAuthor",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
             if (!assignment.notes.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
@@ -1322,6 +1384,36 @@ fun CompletedAssessmentCard(
                         text = "• ${assessment.type}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            val assAuthor = when {
+                assessment.authorName.isNotBlank() && assessment.authorName != "Classmate" -> assessment.authorName
+                assessment.authorName.isNotBlank() -> assessment.authorName
+                else -> "Classmate"
+            }
+
+            Surface(
+                shape = RoundedCornerShape(4.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                modifier = Modifier.padding(top = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(11.dp)
+                    )
+                    Text(
+                        text = "Submitted by $assAuthor",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }

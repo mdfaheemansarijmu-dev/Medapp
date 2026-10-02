@@ -618,6 +618,68 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
         return plannerDao.findMatchingCompletedTopic(courseCode, subject, topicTitle)
     }
 
+    suspend fun findMatchingSimilarCompletedTopic(courseCode: String, subject: String, topicTitle: String): CompletedSyllabusTopic? {
+        val exact = plannerDao.findMatchingCompletedTopic(courseCode, subject, topicTitle)
+        if (exact != null) return exact
+
+        val topicsInSubject = plannerDao.getCompletedTopicsForSubject(courseCode, subject)
+        return topicsInSubject.firstOrNull {
+            com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, topicTitle)
+        }
+    }
+
+    suspend fun findMatchingSimilarAssignment(courseCode: String, subject: String, title: String): Assignment? {
+        val exact = plannerDao.findMatchingAssignmentExact(courseCode, subject, title)
+        if (exact != null) return exact
+
+        val list = plannerDao.getAssignmentsForSubject(courseCode, subject)
+        return list.firstOrNull {
+            com.example.util.ChapterSimilarityHelper.isSimilar(it.title, title)
+        }
+    }
+
+    suspend fun findMatchingSimilarAssessment(courseCode: String, subject: String, title: String): Assessment? {
+        val exact = plannerDao.findMatchingAssessmentExact(courseCode, subject, title)
+        if (exact != null) return exact
+
+        val list = plannerDao.getAssessmentsForSubject(courseCode, subject)
+        return list.firstOrNull {
+            com.example.util.ChapterSimilarityHelper.isSimilar(it.title, title)
+        }
+    }
+
+    suspend fun deduplicateCompletedTopics() {
+        val all = plannerDao.getAllCompletedTopicsOnce()
+        if (all.size <= 1) return
+
+        val grouped = all.groupBy { it.courseCode.trim().uppercase() + ":::" + it.subject.trim().lowercase() }
+        val toDeleteIds = mutableSetOf<Int>()
+
+        for ((_, topics) in grouped) {
+            val uniqueTopics = mutableListOf<CompletedSyllabusTopic>()
+            for (topic in topics) {
+                val match = uniqueTopics.firstOrNull { existing ->
+                    existing.firestoreId == topic.firestoreId ||
+                    existing.topicTitle.trim().equals(topic.topicTitle.trim(), ignoreCase = true) ||
+                    com.example.util.ChapterSimilarityHelper.isSimilar(existing.topicTitle, topic.topicTitle)
+                }
+                if (match == null) {
+                    uniqueTopics.add(topic)
+                } else {
+                    // It's a duplicate of an already tracked chapter! Mark for deletion
+                    toDeleteIds.add(topic.id)
+                }
+            }
+        }
+
+        for (id in toDeleteIds) {
+            plannerDao.deleteCompletedTopicById(id)
+        }
+        if (toDeleteIds.isNotEmpty()) {
+            android.util.Log.d("PlannerRepository", "Cleaned up ${toDeleteIds.size} duplicate completed chapters")
+        }
+    }
+
     suspend fun findMatchingAssignmentExact(courseCode: String, subject: String, title: String): Assignment? {
         return plannerDao.findMatchingAssignmentExact(courseCode, subject, title)
     }

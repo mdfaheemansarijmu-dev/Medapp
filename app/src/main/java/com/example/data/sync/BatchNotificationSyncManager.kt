@@ -577,7 +577,7 @@ class BatchNotificationSyncManager(
                                     DocumentChange.Type.MODIFIED -> {
                                         val topic = parseBatchCompletedTopic(change.document) ?: continue
                                         val localExisting = repository.getCompletedTopicByFirestoreId(topic.firestoreId)
-                                            ?: repository.findMatchingCompletedTopic(topic.courseCode, topic.subject, topic.topicTitle)
+                                            ?: repository.findMatchingSimilarCompletedTopic(topic.courseCode, topic.subject, topic.topicTitle)
 
                                         if (localExisting == null) {
                                             val newTopic = CompletedSyllabusTopic(
@@ -1310,7 +1310,8 @@ class BatchNotificationSyncManager(
         val tTrim = title.trim()
         return _sharedAssignments.value.firstOrNull {
             it.subject.trim().equals(sTrim, ignoreCase = true) &&
-            it.title.trim().equals(tTrim, ignoreCase = true)
+            (it.title.trim().equals(tTrim, ignoreCase = true) ||
+             com.example.util.ChapterSimilarityHelper.isSimilar(it.title, tTrim))
         }
     }
 
@@ -1319,7 +1320,8 @@ class BatchNotificationSyncManager(
         val tTrim = title.trim()
         return _sharedAssessments.value.firstOrNull {
             it.subject.trim().equals(sTrim, ignoreCase = true) &&
-            it.title.trim().equals(tTrim, ignoreCase = true)
+            (it.title.trim().equals(tTrim, ignoreCase = true) ||
+             com.example.util.ChapterSimilarityHelper.isSimilar(it.title, tTrim))
         }
     }
 
@@ -1328,7 +1330,8 @@ class BatchNotificationSyncManager(
         val tTrim = topicTitle.trim()
         return _sharedCompletedTopics.value.firstOrNull {
             it.subject.trim().equals(sTrim, ignoreCase = true) &&
-            it.topicTitle.trim().equals(tTrim, ignoreCase = true)
+            (it.topicTitle.trim().equals(tTrim, ignoreCase = true) ||
+             com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim))
         }
     }
 

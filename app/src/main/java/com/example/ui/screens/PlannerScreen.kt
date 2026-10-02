@@ -465,7 +465,14 @@ fun AssignmentCardRow(
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.primary
                 )
-                if (asg.notes?.contains("Shared by") == true) {
+                val asgAuthor = when {
+                    asg.authorName.isNotBlank() && asg.authorName != "Classmate" -> asg.authorName
+                    asg.notes?.contains("Shared by ") == true -> asg.notes.substringAfter("Shared by ").substringBefore(")").trim()
+                    asg.authorName.isNotBlank() -> asg.authorName
+                    asg.notes?.contains("Shared by") == true -> "Classmate"
+                    else -> null
+                }
+                if (asgAuthor != null) {
                     Surface(
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
                         shape = RoundedCornerShape(6.dp),
@@ -476,14 +483,14 @@ fun AssignmentCardRow(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Groups,
+                                imageVector = Icons.Default.Person,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(12.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "Batch Shared",
+                                text = "Submitted by $asgAuthor",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                                 color = MaterialTheme.colorScheme.primary
                             )
@@ -660,7 +667,12 @@ fun AssessmentCardRow(
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.primary
                 )
-                if (exam.firestoreId.isNotBlank()) {
+                if (exam.firestoreId.isNotBlank() || exam.authorName.isNotBlank()) {
+                    val examAuthor = when {
+                        exam.authorName.isNotBlank() && exam.authorName != "Classmate" -> exam.authorName
+                        exam.authorName.isNotBlank() -> exam.authorName
+                        else -> "Classmate"
+                    }
                     Surface(
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
                         shape = RoundedCornerShape(6.dp),
@@ -671,14 +683,14 @@ fun AssessmentCardRow(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Groups,
+                                imageVector = Icons.Default.Person,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(12.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "Batch Shared",
+                                text = "Submitted by $examAuthor",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                                 color = MaterialTheme.colorScheme.primary
                             )

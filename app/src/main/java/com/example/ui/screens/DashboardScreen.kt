@@ -1,8 +1,10 @@
 package com.example.ui.screens
 
+import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -66,20 +68,27 @@ fun DashboardScreen(
     var showPhotoSourceChooser by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
-    val tempUri = remember {
-        val tempFile = java.io.File(context.cacheDir, "temp_profile_capture_dashboard.jpg")
-        androidx.core.content.FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.provider",
-            tempFile
-        )
-    }
 
     val cameraLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicture()
-    ) { success ->
-        if (success) {
-            viewModel.updateProfilePictureFromUri(tempUri)
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        if (bitmap != null) {
+            viewModel.updateProfilePictureFromBitmap(bitmap)
+            Toast.makeText(context, "Profile picture updated!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            try {
+                cameraLauncher.launch(null)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Unable to open camera: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "Camera permission is needed to take a profile picture.", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -104,7 +113,20 @@ fun DashboardScreen(
             onDismiss = { showPhotoSourceChooser = false },
             onCameraSelect = {
                 showPhotoSourceChooser = false
-                cameraLauncher.launch(tempUri)
+                val hasPermission = ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.CAMERA
+                ) == PackageManager.PERMISSION_GRANTED
+
+                if (hasPermission) {
+                    try {
+                        cameraLauncher.launch(null)
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Unable to open camera: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                }
             },
             onGallerySelect = {
                 showPhotoSourceChooser = false
