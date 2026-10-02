@@ -4,17 +4,69 @@ object ChapterSimilarityHelper {
 
     private val STOP_WORDS = setOf(
         "the", "of", "and", "in", "for", "ch", "chapter", "part", "unit", "section",
-        "study", "general", "introduction", "to", "on", "system", "module", "lecture"
+        "study", "general", "introduction", "to", "on", "system", "module", "lecture",
+        "dr", "prof", "notes", "drug", "remedy", "materia", "medica", "portion", "portions", "topic", "topics"
     )
 
     private val REMEDY_SUFFIXES = setOf(
-        "nigricans", "nigrum", "nig", "album", "alba", "alb", "officinale", "officinalis",
+        "nigricans", "nigrum", "nigra", "nig", "album", "alba", "alb", "officinale", "officinalis",
         "communis", "vulgaris", "purpurea", "dioica", "sativa", "annua", "perennis",
         "napellus", "clavatum", "vomica", "toxicodendron", "tox", "foetida", "maritima",
         "metallicum", "met", "carbonica", "carb", "phosphorica", "phos", "muriatica", "mur",
         "sulphurica", "sulph", "sulf", "arsenicosa", "nitrica", "nit", "iodatum", "iod",
-        "bichromicum", "bich", "bromatum", "crudum", "crud", "oxydatum", "aceticum"
+        "bichromicum", "bich", "bromatum", "crudum", "crud", "oxydatum", "aceticum", "pratensis",
+        "occidentalis", "radicans", "arvensis", "major", "minor"
     )
+
+    private val SYNONYMS = mapOf(
+        "cvs" to "cardiovascular",
+        "cns" to "central nervous",
+        "git" to "gastrointestinal",
+        "rs" to "respiratory",
+        "fmt" to "forensic",
+        "psm" to "community medicine",
+        "obg" to "obstetrics",
+        "ent" to "otorhinolaryngology",
+        "aconite" to "aconitum",
+        "arsenic" to "arsenicum",
+        "silica" to "silicea",
+        "sulfur" to "sulphur"
+    )
+
+    fun normalizeSubjectCore(sub: String): String {
+        var s = sub.trim().lowercase()
+        val removePrefixes = listOf(
+            "homoeopathic ", "homeopathic ", "ayurvedic ", "human ", "general ",
+            "systemic ", "principles of ", "introduction to ", "clinical "
+        )
+        for (pref in removePrefixes) {
+            if (s.startsWith(pref)) s = s.removePrefix(pref).trim()
+        }
+        val removeSuffixes = listOf(
+            " and homoeopathic philosophy", " & homoeopathic philosophy",
+            " & homoeopathic materia medica", " and homoeopathic materia medica",
+            " & toxicology", " and toxicology", " and philosophy"
+        )
+        for (suf in removeSuffixes) {
+            if (s.endsWith(suf)) s = s.removeSuffix(suf).trim()
+        }
+        return s.replace("&", "and").replace(Regex("\\s+"), " ").trim()
+    }
+
+    fun isSameOrSimilarSubject(s1: String, s2: String): Boolean {
+        val sub1 = s1.trim().lowercase()
+        val sub2 = s2.trim().lowercase()
+        if (sub1.isEmpty() || sub2.isEmpty()) return true
+        if (sub1 == sub2) return true
+        if (sub1.contains(sub2) || sub2.contains(sub1)) return true
+
+        val core1 = normalizeSubjectCore(sub1)
+        val core2 = normalizeSubjectCore(sub2)
+        if (core1 == core2) return true
+        if (core1.contains(core2) || core2.contains(core1)) return true
+
+        return false
+    }
 
     /**
      * Collapses duplicate consecutive letters (e.g. "pulsatilla" -> "pulsatila", "cannabis" -> "canabis")
@@ -39,6 +91,7 @@ object ChapterSimilarityHelper {
     fun tokenize(title: String): List<String> {
         return title.split(Regex("[^a-zA-Z0-9]+"))
             .map { it.trim().lowercase() }
+            .map { SYNONYMS[it] ?: it }
             .filter { it.isNotBlank() && it !in STOP_WORDS }
     }
 
@@ -103,8 +156,8 @@ object ChapterSimilarityHelper {
             if (r1 == r2) return true
             // Edit distance <= 1 for typos (e.g. "pulsatila" vs "pulsatilla" -> distance 0 after cleanRoot)
             if (levenshteinDistance(r1, r2) <= 1) return true
-            // Common prefix match of length >= 5 (e.g. "aconit" in "aconite" and "aconitum")
-            if (r1.length >= 5 && r2.length >= 5 && (r1.startsWith(r2.take(5)) || r2.startsWith(r1.take(5)))) {
+            // Common prefix match of length >= 4 (e.g. "pulsat" in "pulsatila" and "pulsatilla", "aconit" in "aconite" and "aconitum")
+            if ((r1.startsWith(r2) || r2.startsWith(r1)) || (r1.length >= 4 && r2.length >= 4 && r1.take(4) == r2.take(4))) {
                 return true
             }
         }
@@ -118,7 +171,9 @@ object ChapterSimilarityHelper {
             val base1 = nonSuffix1.first()
             val base2 = nonSuffix2.first()
             if (base1.length >= 4 && base2.length >= 4) {
-                if (base1 == base2 || levenshteinDistance(base1, base2) <= 1) {
+                if (base1 == base2 || levenshteinDistance(base1, base2) <= 1 ||
+                    base1.startsWith(base2) || base2.startsWith(base1) ||
+                    (base1.length >= 5 && base2.length >= 5 && base1.take(5) == base2.take(5))) {
                     return true
                 }
             }

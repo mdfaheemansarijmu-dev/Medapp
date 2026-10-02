@@ -353,7 +353,11 @@ class FirestoreSyncManager(private val plannerDao: PlannerDao) {
                                 val map = doc.data
                                 when (change.type) {
                                     DocumentChange.Type.ADDED, DocumentChange.Type.MODIFIED -> {
+                                        val courseCode = map["courseCode"] as? String ?: ""
+                                        val subject = map["subject"] as? String ?: ""
+                                        val topicTitle = map["topicTitle"] as? String ?: ""
                                         val local = plannerDao.getCompletedTopicByFirestoreId(fId)
+                                            ?: plannerDao.findMatchingCompletedTopic(courseCode, subject, topicTitle)
                                         val item = mapToCompletedTopic(map, fId, local?.id)
                                         plannerDao.insertCompletedTopic(item)
                                     }

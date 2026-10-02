@@ -107,7 +107,18 @@ fun SettingsScreen(
 
     val context = LocalContext.current
 
-    val cameraLauncher = rememberLauncherForActivityResult(
+    var tempCameraUri by remember { mutableStateOf<android.net.Uri?>(null) }
+
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success && tempCameraUri != null) {
+            viewModel.updateProfilePictureFromUri(tempCameraUri!!)
+            Toast.makeText(context, "Profile picture updated!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val cameraPreviewLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bitmap ->
         if (bitmap != null) {
@@ -116,15 +127,31 @@ fun SettingsScreen(
         }
     }
 
+    fun launchCameraSafe() {
+        try {
+            val cacheFolder = java.io.File(context.cacheDir, "camera_photos").apply { mkdirs() }
+            val photoFile = java.io.File(cacheFolder, "profile_pic_${System.currentTimeMillis()}.jpg")
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.provider",
+                photoFile
+            )
+            tempCameraUri = uri
+            takePictureLauncher.launch(uri)
+        } catch (e: Exception) {
+            try {
+                cameraPreviewLauncher.launch(null)
+            } catch (e2: Exception) {
+                Toast.makeText(context, "Unable to open camera: ${e2.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            try {
-                cameraLauncher.launch(null)
-            } catch (e: Exception) {
-                Toast.makeText(context, "Unable to open camera: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
+            launchCameraSafe()
         } else {
             Toast.makeText(context, "Camera permission is needed to take a profile picture.", Toast.LENGTH_SHORT).show()
         }
@@ -167,11 +194,7 @@ fun SettingsScreen(
                 ) == PackageManager.PERMISSION_GRANTED
 
                 if (hasPermission) {
-                    try {
-                        cameraLauncher.launch(null)
-                    } catch (e: Exception) {
-                        Toast.makeText(context, "Unable to open camera: ${e.message}", Toast.LENGTH_SHORT).show()
-                    }
+                    launchCameraSafe()
                 } else {
                     cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
                 }

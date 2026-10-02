@@ -565,8 +565,22 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
         plannerDao.getCompletedTopicsForYear(courseCode, academicYear)
 
     suspend fun addCompletedTopic(topic: CompletedSyllabusTopic): Long {
+        val existing = (if (topic.firestoreId.isNotBlank()) plannerDao.getCompletedTopicByFirestoreId(topic.firestoreId) else null)
+            ?: findMatchingSimilarCompletedTopic(topic.courseCode, topic.subject, topic.topicTitle)
+        if (existing != null) {
+            val updated = existing.copy(
+                firestoreId = if (existing.firestoreId.isBlank() && topic.firestoreId.isNotBlank()) topic.firestoreId else existing.firestoreId,
+                authorName = if ((existing.authorName.isBlank() || existing.authorName == "Classmate") && topic.authorName.isNotBlank() && topic.authorName != "Classmate") topic.authorName else existing.authorName,
+                authorUid = if (existing.authorUid.isBlank() && topic.authorUid.isNotBlank()) topic.authorUid else existing.authorUid,
+                teacherName = existing.teacherName ?: topic.teacherName,
+                notes = existing.notes ?: topic.notes
+            )
+            plannerDao.updateCompletedTopic(updated)
+            syncManager.pushCompletedTopic(updated)
+            return existing.id.toLong()
+        }
         val id = plannerDao.insertCompletedTopic(topic)
-        syncManager.pushCompletedTopic(topic)
+        syncManager.pushCompletedTopic(topic.copy(id = id.toInt()))
         return id
     }
 
@@ -588,6 +602,19 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
     }
 
     suspend fun addCompletedTopicLocally(topic: CompletedSyllabusTopic): Long {
+        val existing = (if (topic.firestoreId.isNotBlank()) plannerDao.getCompletedTopicByFirestoreId(topic.firestoreId) else null)
+            ?: findMatchingSimilarCompletedTopic(topic.courseCode, topic.subject, topic.topicTitle)
+        if (existing != null) {
+            val updated = existing.copy(
+                firestoreId = if (existing.firestoreId.isBlank() && topic.firestoreId.isNotBlank()) topic.firestoreId else existing.firestoreId,
+                authorName = if ((existing.authorName.isBlank() || existing.authorName == "Classmate") && topic.authorName.isNotBlank() && topic.authorName != "Classmate") topic.authorName else existing.authorName,
+                authorUid = if (existing.authorUid.isBlank() && topic.authorUid.isNotBlank()) topic.authorUid else existing.authorUid,
+                teacherName = existing.teacherName ?: topic.teacherName,
+                notes = existing.notes ?: topic.notes
+            )
+            plannerDao.updateCompletedTopic(updated)
+            return existing.id.toLong()
+        }
         return plannerDao.insertCompletedTopic(topic)
     }
 
@@ -615,36 +642,72 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
     }
 
     suspend fun findMatchingCompletedTopic(courseCode: String, subject: String, topicTitle: String): CompletedSyllabusTopic? {
-        return plannerDao.findMatchingCompletedTopic(courseCode, subject, topicTitle)
+        return findMatchingSimilarCompletedTopic(courseCode, subject, topicTitle)
     }
 
     suspend fun findMatchingSimilarCompletedTopic(courseCode: String, subject: String, topicTitle: String): CompletedSyllabusTopic? {
-        val exact = plannerDao.findMatchingCompletedTopic(courseCode, subject, topicTitle)
+        val all = plannerDao.getAllCompletedTopicsOnce()
+        val sTrim = subject.trim()
+        val tTrim = topicTitle.trim()
+
+        // 1. Exact match by subject and title
+        val exact = all.firstOrNull {
+            it.subject.trim().equals(sTrim, ignoreCase = true) &&
+            it.topicTitle.trim().equals(tTrim, ignoreCase = true)
+        }
         if (exact != null) return exact
 
-        val topicsInSubject = plannerDao.getCompletedTopicsForSubject(courseCode, subject)
-        return topicsInSubject.firstOrNull {
-            com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, topicTitle)
+        // 2. Similar title in same/similar subject
+        val sameSubjectSimilar = all.firstOrNull {
+            com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(it.subject, sTrim) &&
+            com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim)
+        }
+        if (sameSubjectSimilar != null) return sameSubjectSimilar
+
+        // 3. Similar title in same course
+        val sameCourseSimilar = all.firstOrNull {
+            (courseCode.isBlank() || it.courseCode.trim().equals(courseCode.trim(), ignoreCase = true)) &&
+            com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim)
+        }
+        if (sameCourseSimilar != null) return sameCourseSimilar
+
+        // 4. Any completed topic with matching chapter name across database
+        return all.firstOrNull {
+            com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim)
         }
     }
 
     suspend fun findMatchingSimilarAssignment(courseCode: String, subject: String, title: String): Assignment? {
-        val exact = plannerDao.findMatchingAssignmentExact(courseCode, subject, title)
+        val all = plannerDao.getAllAssignmentsOnce()
+        val sTrim = subject.trim()
+        val tTrim = title.trim()
+
+        val exact = all.firstOrNull {
+            it.subject.trim().equals(sTrim, ignoreCase = true) &&
+            it.title.trim().equals(tTrim, ignoreCase = true)
+        }
         if (exact != null) return exact
 
-        val list = plannerDao.getAssignmentsForSubject(courseCode, subject)
-        return list.firstOrNull {
-            com.example.util.ChapterSimilarityHelper.isSimilar(it.title, title)
+        return all.firstOrNull {
+            com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(it.subject, sTrim) &&
+            com.example.util.ChapterSimilarityHelper.isSimilar(it.title, tTrim)
         }
     }
 
     suspend fun findMatchingSimilarAssessment(courseCode: String, subject: String, title: String): Assessment? {
-        val exact = plannerDao.findMatchingAssessmentExact(courseCode, subject, title)
+        val all = plannerDao.getAllAssessmentsOnce()
+        val sTrim = subject.trim()
+        val tTrim = title.trim()
+
+        val exact = all.firstOrNull {
+            it.subject.trim().equals(sTrim, ignoreCase = true) &&
+            it.title.trim().equals(tTrim, ignoreCase = true)
+        }
         if (exact != null) return exact
 
-        val list = plannerDao.getAssessmentsForSubject(courseCode, subject)
-        return list.firstOrNull {
-            com.example.util.ChapterSimilarityHelper.isSimilar(it.title, title)
+        return all.firstOrNull {
+            com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(it.subject, sTrim) &&
+            com.example.util.ChapterSimilarityHelper.isSimilar(it.title, tTrim)
         }
     }
 
@@ -652,23 +715,35 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
         val all = plannerDao.getAllCompletedTopicsOnce()
         if (all.size <= 1) return
 
-        val grouped = all.groupBy { it.courseCode.trim().uppercase() + ":::" + it.subject.trim().lowercase() }
+        val uniqueTopics = mutableListOf<CompletedSyllabusTopic>()
         val toDeleteIds = mutableSetOf<Int>()
 
-        for ((_, topics) in grouped) {
-            val uniqueTopics = mutableListOf<CompletedSyllabusTopic>()
-            for (topic in topics) {
-                val match = uniqueTopics.firstOrNull { existing ->
-                    existing.firestoreId == topic.firestoreId ||
-                    existing.topicTitle.trim().equals(topic.topicTitle.trim(), ignoreCase = true) ||
-                    com.example.util.ChapterSimilarityHelper.isSimilar(existing.topicTitle, topic.topicTitle)
+        for (topic in all) {
+            val match = uniqueTopics.firstOrNull { existing ->
+                (existing.firestoreId.isNotBlank() && existing.firestoreId == topic.firestoreId) ||
+                (com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(existing.subject, topic.subject) &&
+                 (existing.topicTitle.trim().equals(topic.topicTitle.trim(), ignoreCase = true) ||
+                  com.example.util.ChapterSimilarityHelper.isSimilar(existing.topicTitle, topic.topicTitle))) ||
+                com.example.util.ChapterSimilarityHelper.isSimilar(existing.topicTitle, topic.topicTitle)
+            }
+
+            if (match == null) {
+                uniqueTopics.add(topic)
+            } else {
+                // If the new duplicate has a better/non-blank author name, update the retained one
+                if ((match.authorName.isBlank() || match.authorName == "Classmate") &&
+                    topic.authorName.isNotBlank() && topic.authorName != "Classmate") {
+                    val updated = match.copy(
+                        authorName = topic.authorName,
+                        authorUid = topic.authorUid,
+                        teacherName = match.teacherName ?: topic.teacherName,
+                        notes = match.notes ?: topic.notes
+                    )
+                    plannerDao.updateCompletedTopic(updated)
+                    uniqueTopics.remove(match)
+                    uniqueTopics.add(updated)
                 }
-                if (match == null) {
-                    uniqueTopics.add(topic)
-                } else {
-                    // It's a duplicate of an already tracked chapter! Mark for deletion
-                    toDeleteIds.add(topic.id)
-                }
+                toDeleteIds.add(topic.id)
             }
         }
 
@@ -677,6 +752,66 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
         }
         if (toDeleteIds.isNotEmpty()) {
             android.util.Log.d("PlannerRepository", "Cleaned up ${toDeleteIds.size} duplicate completed chapters")
+        }
+    }
+
+    suspend fun deduplicateAssignments() {
+        val all = plannerDao.getAllAssignmentsOnce()
+        if (all.size <= 1) return
+
+        val unique = mutableListOf<Assignment>()
+        val toDeleteIds = mutableSetOf<Int>()
+
+        for (asg in all) {
+            val match = unique.firstOrNull { existing ->
+                (existing.firestoreId.isNotBlank() && existing.firestoreId == asg.firestoreId) ||
+                (existing.subject.trim().equals(asg.subject.trim(), ignoreCase = true) &&
+                 existing.title.trim().equals(asg.title.trim(), ignoreCase = true))
+            }
+            if (match == null) {
+                unique.add(asg)
+            } else {
+                if ((match.authorName.isBlank() || match.authorName == "Classmate") &&
+                    asg.authorName.isNotBlank() && asg.authorName != "Classmate") {
+                    val updated = match.copy(authorName = asg.authorName, authorUid = asg.authorUid)
+                    plannerDao.insertAssignment(updated)
+                }
+                toDeleteIds.add(asg.id)
+            }
+        }
+
+        for (id in toDeleteIds) {
+            plannerDao.deleteAssignmentById(id)
+        }
+    }
+
+    suspend fun deduplicateAssessments() {
+        val all = plannerDao.getAllAssessmentsOnce()
+        if (all.size <= 1) return
+
+        val unique = mutableListOf<Assessment>()
+        val toDeleteIds = mutableSetOf<Int>()
+
+        for (ass in all) {
+            val match = unique.firstOrNull { existing ->
+                (existing.firestoreId.isNotBlank() && existing.firestoreId == ass.firestoreId) ||
+                (existing.subject.trim().equals(ass.subject.trim(), ignoreCase = true) &&
+                 existing.title.trim().equals(ass.title.trim(), ignoreCase = true))
+            }
+            if (match == null) {
+                unique.add(ass)
+            } else {
+                if ((match.authorName.isBlank() || match.authorName == "Classmate") &&
+                    ass.authorName.isNotBlank() && ass.authorName != "Classmate") {
+                    val updated = match.copy(authorName = ass.authorName, authorUid = ass.authorUid)
+                    plannerDao.insertAssessment(updated)
+                }
+                toDeleteIds.add(ass.id)
+            }
+        }
+
+        for (id in toDeleteIds) {
+            plannerDao.deleteAssessmentById(id)
         }
     }
 

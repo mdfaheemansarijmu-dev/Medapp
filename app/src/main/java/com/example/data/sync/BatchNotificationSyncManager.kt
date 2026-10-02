@@ -133,6 +133,7 @@ class BatchNotificationSyncManager(
 
     private val db = FirebaseFirestore.getInstance()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val appStartTime = System.currentTimeMillis()
     private val locallyPostedFirestoreIds = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
     private val locallyPostedNoticeIds = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
 
@@ -213,6 +214,12 @@ class BatchNotificationSyncManager(
 
     private val _syncStatus = MutableStateFlow("Idle")
     val syncStatus: StateFlow<String> = _syncStatus.asStateFlow()
+
+    @Volatile private var isFirstNoticeSnapshot = true
+    @Volatile private var isFirstAssignmentSnapshot = true
+    @Volatile private var isFirstAssessmentSnapshot = true
+    @Volatile private var isFirstCompletedTopicsSnapshot = true
+    @Volatile private var isFirstTimetableSnapshot = true
 
     init {
         try {
@@ -319,8 +326,10 @@ class BatchNotificationSyncManager(
                             .sortedByDescending { it.timestamp }
                         _sharedNotices.value = notices
 
+                        val isInitialNotice = isFirstNoticeSnapshot
+                        isFirstNoticeSnapshot = false
                         scope.launch {
-                            processIncomingNotices(notices, currentUserId, snapshots.metadata.hasPendingWrites())
+                            processIncomingNotices(notices, currentUserId, snapshots.metadata.hasPendingWrites() || isInitialNotice)
                         }
                     }
                 }
@@ -351,6 +360,9 @@ class BatchNotificationSyncManager(
                         _sharedAssignments.value = asgs
 
                         scope.launch {
+                            val isInitial = isFirstAssignmentSnapshot
+                            isFirstAssignmentSnapshot = false
+
                             for (change in snapshots.documentChanges) {
                                 when (change.type) {
                                     DocumentChange.Type.ADDED,
@@ -378,8 +390,9 @@ class BatchNotificationSyncManager(
 
                                             val isLocallyPosted = locallyPostedFirestoreIds.contains(asg.firestoreId) ||
                                                     (asg.authorUid.isNotBlank() && asg.authorUid == currentUserId)
+                                            val isRecentLiveEvent = asg.timestamp > (appStartTime + 5_000L)
 
-                                            if (!isLocallyPosted) {
+                                            if (!isLocallyPosted && !isInitial && isRecentLiveEvent) {
                                                 repository.addNotification(
                                                     InAppNotification(
                                                         title = "New Assignment: ${asg.subject}",
@@ -419,6 +432,14 @@ class BatchNotificationSyncManager(
                                                 } catch (e: Exception) {
                                                     Log.w(TAG, "Failed scheduling reminder alarm for shared assignment", e)
                                                 }
+                                            }
+                                        } else {
+                                            if ((localExisting.authorName.isBlank() || localExisting.authorName == "Classmate") &&
+                                                asg.authorName.isNotBlank() && asg.authorName != "Classmate") {
+                                                repository.addAssignmentLocally(localExisting.copy(
+                                                    authorName = asg.authorName,
+                                                    authorUid = asg.authorUid
+                                                ))
                                             }
                                         }
                                     }
@@ -463,6 +484,9 @@ class BatchNotificationSyncManager(
                         _sharedAssessments.value = asms
 
                         scope.launch {
+                            val isInitial = isFirstAssessmentSnapshot
+                            isFirstAssessmentSnapshot = false
+
                             for (change in snapshots.documentChanges) {
                                 when (change.type) {
                                     DocumentChange.Type.ADDED,
@@ -489,8 +513,9 @@ class BatchNotificationSyncManager(
 
                                             val isLocallyPosted = locallyPostedFirestoreIds.contains(asm.firestoreId) ||
                                                     (asm.authorUid.isNotBlank() && asm.authorUid == currentUserId)
+                                            val isRecentLiveEvent = asm.timestamp > (appStartTime + 5_000L)
 
-                                            if (!isLocallyPosted) {
+                                            if (!isLocallyPosted && !isInitial && isRecentLiveEvent) {
                                                 repository.addNotification(
                                                     InAppNotification(
                                                         title = "New Assessment: ${asm.subject}",
@@ -521,15 +546,23 @@ class BatchNotificationSyncManager(
                                                         context = application,
                                                         type = "assessment",
                                                         itemId = "asm_$insertedId",
-                                                        title = "Upcoming Assessment Reminder",
+                                                        title = "Upcoming Assessment Alert",
                                                         message = "Assessment '${asm.title}' for ${asm.subject} is scheduled soon!",
                                                         targetTime = asm.date,
                                                         subject = asm.subject,
-                                                        minutesBefore = 30
+                                                        minutesBefore = 24 * 60
                                                     )
                                                 } catch (e: Exception) {
                                                     Log.w(TAG, "Failed scheduling reminder alarm for shared assessment", e)
                                                 }
+                                            }
+                                        } else {
+                                            if ((localExisting.authorName.isBlank() || localExisting.authorName == "Classmate") &&
+                                                asm.authorName.isNotBlank() && asm.authorName != "Classmate") {
+                                                repository.addAssessmentLocally(localExisting.copy(
+                                                    authorName = asm.authorName,
+                                                    authorUid = asm.authorUid
+                                                ))
                                             }
                                         }
                                     }
@@ -571,6 +604,9 @@ class BatchNotificationSyncManager(
                         _sharedCompletedTopics.value = topics
 
                         scope.launch {
+                            val isInitial = isFirstCompletedTopicsSnapshot
+                            isFirstCompletedTopicsSnapshot = false
+
                             for (change in snapshots.documentChanges) {
                                 when (change.type) {
                                     DocumentChange.Type.ADDED,
@@ -599,7 +635,9 @@ class BatchNotificationSyncManager(
                                             val isLocallyPosted = locallyPostedFirestoreIds.contains(topic.firestoreId) ||
                                                     (topic.authorUid.isNotBlank() && topic.authorUid == currentUserId)
 
-                                            if (!isLocallyPosted) {
+                                            // NEVER alert for all completed chapters upon opening the app
+                                            val isRecentLiveEvent = topic.timestamp > (appStartTime + 5_000L)
+                                            if (!isLocallyPosted && !isInitial && isRecentLiveEvent) {
                                                 repository.addNotification(
                                                     InAppNotification(
                                                         title = "Chapter Completed: ${topic.subject}",
@@ -624,6 +662,17 @@ class BatchNotificationSyncManager(
                                                     Log.e(TAG, "Notification show error", e)
                                                 }
                                             }
+                                        } else {
+                                            // Preserve and record contributor name if missing
+                                            if ((localExisting.authorName.isBlank() || localExisting.authorName == "Classmate") &&
+                                                topic.authorName.isNotBlank() && topic.authorName != "Classmate") {
+                                                repository.updateCompletedTopic(localExisting.copy(
+                                                    authorName = topic.authorName,
+                                                    authorUid = topic.authorUid,
+                                                    teacherName = localExisting.teacherName ?: topic.teacherName,
+                                                    notes = localExisting.notes ?: topic.notes
+                                                ))
+                                            }
                                         }
                                     }
                                     DocumentChange.Type.REMOVED -> {
@@ -632,6 +681,8 @@ class BatchNotificationSyncManager(
                                     }
                                 }
                             }
+                            // Clean up duplicates immediately after processing
+                            repository.deduplicateCompletedTopics()
                         }
                     }
                 }
@@ -659,6 +710,9 @@ class BatchNotificationSyncManager(
                         _sharedTimetableClasses.value = classes
 
                         scope.launch {
+                            val isInitial = isFirstTimetableSnapshot
+                            isFirstTimetableSnapshot = false
+
                             for (change in snapshots.documentChanges) {
                                 when (change.type) {
                                     DocumentChange.Type.ADDED,
@@ -688,7 +742,7 @@ class BatchNotificationSyncManager(
                                         val isLocallyPosted = locallyPostedFirestoreIds.contains(cls.firestoreId) ||
                                                 (cls.authorUid.isNotBlank() && cls.authorUid == currentUserId)
 
-                                        if (!isLocallyPosted && localExisting == null) {
+                                        if (!isLocallyPosted && localExisting == null && !isInitial) {
                                             repository.addNotification(
                                                 InAppNotification(
                                                     title = "Timetable Updated: ${cls.subject}",
@@ -767,6 +821,11 @@ class BatchNotificationSyncManager(
         lastAssessmentError = null
         lastCompletedTopicsError = null
         lastTimetableError = null
+        isFirstNoticeSnapshot = true
+        isFirstAssignmentSnapshot = true
+        isFirstAssessmentSnapshot = true
+        isFirstCompletedTopicsSnapshot = true
+        isFirstTimetableSnapshot = true
         _isListening.value = false
         _syncStatus.value = "Stopped"
     }
@@ -894,8 +953,9 @@ class BatchNotificationSyncManager(
 
             val isAuthor = locallyPostedNoticeIds.contains(notice.id) ||
                     (notice.authorUid.isNotBlank() && notice.authorUid == currentUserId)
+            val isRecentLiveEvent = notice.timestamp > (appStartTime + 5_000L)
 
-            if (!alreadyAlerted) {
+            if (!alreadyAlerted && isRecentLiveEvent && !hasPendingWrites) {
                 val alertType = when (notice.category) {
                     "shared_assignment" -> "assignment"
                     "exam_alert" -> "exam"
@@ -1328,10 +1388,48 @@ class BatchNotificationSyncManager(
     fun checkDuplicateCompletedTopic(subject: String, topicTitle: String): SharedBatchCompletedTopic? {
         val sTrim = subject.trim()
         val tTrim = topicTitle.trim()
-        return _sharedCompletedTopics.value.firstOrNull {
-            it.subject.trim().equals(sTrim, ignoreCase = true) &&
+        val sameSubjectMatch = _sharedCompletedTopics.value.firstOrNull {
+            com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(it.subject, sTrim) &&
             (it.topicTitle.trim().equals(tTrim, ignoreCase = true) ||
              com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim))
+        }
+        if (sameSubjectMatch != null) return sameSubjectMatch
+
+        return _sharedCompletedTopics.value.firstOrNull {
+            it.topicTitle.trim().equals(tTrim, ignoreCase = true) ||
+            com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim)
+        }
+    }
+
+    suspend fun checkDuplicateCompletedTopicRemote(
+        college: String,
+        course: String,
+        admissionYear: Int,
+        batch: String,
+        subject: String,
+        topicTitle: String,
+        customBatchCode: String? = null
+    ): SharedBatchCompletedTopic? {
+        val localMem = checkDuplicateCompletedTopic(subject, topicTitle)
+        if (localMem != null) return localMem
+
+        return try {
+            val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
+            val sTrim = subject.trim()
+            val tTrim = topicTitle.trim()
+            val snap = db.collection("shared_batches").document(key).collection("completed_chapters").limit(100).get().await()
+            val topics = snap.documents.mapNotNull { parseBatchCompletedTopic(it) }
+            topics.firstOrNull {
+                (com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(it.subject, sTrim) ||
+                 it.courseCode.equals(course, ignoreCase = true)) &&
+                (it.topicTitle.trim().equals(tTrim, ignoreCase = true) ||
+                 com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim))
+            } ?: topics.firstOrNull {
+                it.topicTitle.trim().equals(tTrim, ignoreCase = true) ||
+                com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim)
+            }
+        } catch (e: Exception) {
+            null
         }
     }
 

@@ -652,7 +652,11 @@ fun WelcomeScreen(
                         },
                         onTakePhoto = {
                             parseErrorType = TimetableParseErrorType.NONE
-                            cameraLauncher.launch(null)
+                            try {
+                                cameraLauncher.launch(null)
+                            } catch (e: Exception) {
+                                parseErrorType = TimetableParseErrorType.UNCLEAR_IMAGE
+                            }
                         },
                         onChooseScreenshot = {
                             parseErrorType = TimetableParseErrorType.NONE

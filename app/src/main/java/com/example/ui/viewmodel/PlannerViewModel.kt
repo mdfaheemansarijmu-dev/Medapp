@@ -110,10 +110,43 @@ class PlannerViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private fun deduplicateTopicsInMemory(list: List<CompletedSyllabusTopic>): List<CompletedSyllabusTopic> {
+        val unique = mutableListOf<CompletedSyllabusTopic>()
+        for (topic in list) {
+            val existing = unique.firstOrNull { u ->
+                (u.firestoreId.isNotBlank() && u.firestoreId == topic.firestoreId) ||
+                (com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(u.subject, topic.subject) &&
+                 (u.topicTitle.trim().equals(topic.topicTitle.trim(), ignoreCase = true) ||
+                  com.example.util.ChapterSimilarityHelper.isSimilar(u.topicTitle, topic.topicTitle))) ||
+                com.example.util.ChapterSimilarityHelper.isSimilar(u.topicTitle, topic.topicTitle)
+            }
+            if (existing == null) {
+                unique.add(topic)
+            } else {
+                if ((existing.authorName.isBlank() || existing.authorName == "Classmate") &&
+                    topic.authorName.isNotBlank() && topic.authorName != "Classmate") {
+                    val idx = unique.indexOf(existing)
+                    if (idx != -1) {
+                        unique[idx] = existing.copy(
+                            authorName = topic.authorName,
+                            authorUid = topic.authorUid,
+                            teacherName = existing.teacherName ?: topic.teacherName,
+                            notes = existing.notes ?: topic.notes
+                        )
+                    }
+                }
+            }
+        }
+        return unique
+    }
+
     val completedSyllabusTopics: StateFlow<List<CompletedSyllabusTopic>> = selectedCourse
         .flatMapLatest { course ->
             if (course != null) repository.getCompletedTopicsForCourse(course.code)
             else flowOf(emptyList())
+        }
+        .map { list ->
+            deduplicateTopicsInMemory(list)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -1150,7 +1183,15 @@ class PlannerViewModel(
 
         viewModelScope.launch {
             if (!forceSave) {
-                val batchMatch = batchSyncManager.checkDuplicateCompletedTopic(subject, topicTitle)
+                val batchMatch = batchSyncManager.checkDuplicateCompletedTopicRemote(
+                    college = _studentCollege.value,
+                    course = course.code,
+                    admissionYear = _studentAdmissionYear.value,
+                    batch = _studentBatch.value,
+                    subject = subject.trim(),
+                    topicTitle = topicTitle.trim(),
+                    customBatchCode = _customBatchCode.value
+                )
                 val localMatch = repository.findMatchingSimilarCompletedTopic(course.code, subject.trim(), topicTitle.trim())
 
                 if (batchMatch != null || localMatch != null) {
@@ -1159,6 +1200,7 @@ class PlannerViewModel(
                         localMatch != null && localMatch.authorName.isNotBlank() && localMatch.authorName != "Classmate" -> localMatch.authorName
                         localMatch?.notes?.contains("Recorded by ") == true -> localMatch.notes.substringAfter("Recorded by ").substringBefore(")").trim()
                         localMatch?.notes?.contains("Completed with batch (by ") == true -> localMatch.notes.substringAfter("Completed with batch (by ").substringBefore(")").trim()
+                        batchMatch?.notes?.contains("Recorded by ") == true -> batchMatch.notes.substringAfter("Recorded by ").substringBefore(")").trim()
                         batchMatch?.authorName?.isNotBlank() == true -> batchMatch.authorName
                         localMatch?.authorName?.isNotBlank() == true -> localMatch.authorName
                         else -> "Your Classmate"
@@ -1979,7 +2021,7 @@ class PlannerViewModel(
         }
     }
 
-    private suspend fun addNotificationWithDuplicateCheck(notification: InAppNotification) {
+    private suspend fun addNotificationWithDuplicateCheck(notification: InAppNotification, pushToSystemTray: Boolean = false) {
         val existing = repository.getNotifications().first()
         val alreadyExists = existing.any { 
             it.title == notification.title && 
@@ -1988,8 +2030,8 @@ class PlannerViewModel(
         }
         if (!alreadyExists) {
             repository.addNotification(notification)
-            // Push to Android system notification tray immediately
-            if (_areNotificationsEnabled.value) {
+            // Push to Android system notification tray only if explicitly requested for live alerts
+            if (_areNotificationsEnabled.value && pushToSystemTray) {
                 try {
                     val rawId = notification.title.hashCode() xor notification.message.hashCode() xor notification.type.hashCode()
                     val notificationId = if (rawId == Int.MIN_VALUE) 0 else java.lang.Math.abs(rawId) % 100000
@@ -3400,9 +3442,13 @@ class PlannerViewModel(
                         val topicToSave = parsed.copy(
                             id = existing?.id ?: 0,
                             firestoreId = firestoreId,
-                            authorName = if (parsed.authorName.isNotBlank()) parsed.authorName else (data["authorName"] as? String ?: "")
+                            authorName = if (parsed.authorName.isNotBlank() && parsed.authorName != "Classmate") parsed.authorName else (data["authorName"] as? String ?: existing?.authorName ?: "")
                         )
-                        repository.addCompletedTopicLocally(topicToSave)
+                        if (existing != null) {
+                            repository.updateCompletedTopic(topicToSave)
+                        } else {
+                            repository.addCompletedTopicLocally(topicToSave)
+                        }
                     }
                 }
                 repository.deduplicateCompletedTopics()
@@ -3416,12 +3462,27 @@ class PlannerViewModel(
                 for (doc in assignmentsSnapshot) {
                     try {
                         val a = doc.toObject(Assignment::class.java)
-                        if (a != null) repository.addAssignmentLocally(a)
+                        if (a != null) {
+                            val existing = repository.getAssignmentByFirestoreId(doc.id)
+                                ?: repository.findMatchingSimilarAssignment(a.courseCode, a.subject, a.title)
+                            val toSave = a.copy(
+                                id = existing?.id ?: 0,
+                                firestoreId = doc.id,
+                                authorName = if (a.authorName.isNotBlank() && a.authorName != "Classmate") a.authorName else (existing?.authorName ?: a.authorName)
+                            )
+                            if (existing != null) {
+                                repository.addAssignmentLocally(toSave)
+                            } else {
+                                repository.addAssignmentLocally(toSave)
+                            }
+                        }
                     } catch (e: Exception) {
-                        val a = com.example.data.sync.FirestoreSyncManager.mapToAssignment(doc.data, doc.id, null)
+                        val existing = repository.getAssignmentByFirestoreId(doc.id)
+                        val a = com.example.data.sync.FirestoreSyncManager.mapToAssignment(doc.data, doc.id, existing?.id)
                         repository.addAssignmentLocally(a)
                     }
                 }
+                repository.deduplicateAssignments()
             } catch (e: Exception) {
                 Log.w("FirestoreSync", "Error restoring assignments: ${e.message}")
             }
@@ -3432,12 +3493,27 @@ class PlannerViewModel(
                 for (doc in assessmentsSnapshot) {
                     try {
                         val ass = doc.toObject(Assessment::class.java)
-                        if (ass != null) repository.addAssessmentLocally(ass)
+                        if (ass != null) {
+                            val existing = repository.getAssessmentByFirestoreId(doc.id)
+                                ?: repository.findMatchingSimilarAssessment(ass.courseCode, ass.subject, ass.title)
+                            val toSave = ass.copy(
+                                id = existing?.id ?: 0,
+                                firestoreId = doc.id,
+                                authorName = if (ass.authorName.isNotBlank() && ass.authorName != "Classmate") ass.authorName else (existing?.authorName ?: ass.authorName)
+                            )
+                            if (existing != null) {
+                                repository.addAssessmentLocally(toSave)
+                            } else {
+                                repository.addAssessmentLocally(toSave)
+                            }
+                        }
                     } catch (e: Exception) {
-                        val ass = com.example.data.sync.FirestoreSyncManager.mapToAssessment(doc.data, doc.id, null)
+                        val existing = repository.getAssessmentByFirestoreId(doc.id)
+                        val ass = com.example.data.sync.FirestoreSyncManager.mapToAssessment(doc.data, doc.id, existing?.id)
                         repository.addAssessmentLocally(ass)
                     }
                 }
+                repository.deduplicateAssessments()
             } catch (e: Exception) {
                 Log.w("FirestoreSync", "Error restoring assessments: ${e.message}")
             }
@@ -3745,14 +3821,28 @@ class PlannerViewModel(
                 val inputStream = contentResolver.openInputStream(uri) ?: return@launch
 
                 val options = android.graphics.BitmapFactory.Options()
-                val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream, null, options) ?: return@launch
+                val rawBitmap = android.graphics.BitmapFactory.decodeStream(inputStream, null, options) ?: return@launch
+                val bitmap = try {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+                        rawBitmap.config == android.graphics.Bitmap.Config.HARDWARE) {
+                        rawBitmap.copy(android.graphics.Bitmap.Config.ARGB_8888, false) ?: rawBitmap
+                    } else rawBitmap
+                } catch (e: Exception) {
+                    rawBitmap
+                }
 
-                val width = bitmap.width
-                val height = bitmap.height
-                val size = if (width < height) width else height
-                val x = (width - size) / 2
-                val y = (height - size) / 2
-                val croppedBitmap = android.graphics.Bitmap.createBitmap(bitmap, x, y, size, size)
+                val width = bitmap.width.coerceAtLeast(1)
+                val height = bitmap.height.coerceAtLeast(1)
+                val size = minOf(width, height)
+                val x = ((width - size) / 2).coerceAtLeast(0)
+                val y = ((height - size) / 2).coerceAtLeast(0)
+                val croppedBitmap = try {
+                    if (size > 0 && x + size <= width && y + size <= height) {
+                        android.graphics.Bitmap.createBitmap(bitmap, x, y, size, size)
+                    } else bitmap
+                } catch (e: Exception) {
+                    bitmap
+                }
 
                 val file = java.io.File(context.filesDir, "custom_profile_picture.jpg")
                 val outputStream = java.io.FileOutputStream(file)
@@ -3766,14 +3856,6 @@ class PlannerViewModel(
                 } else croppedBitmap
                 scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, bOut)
                 val base64Data = "data:image/jpeg;base64," + android.util.Base64.encodeToString(bOut.toByteArray(), android.util.Base64.NO_WRAP)
-                if (scaled != croppedBitmap) {
-                    scaled.recycle()
-                }
-
-                if (bitmap != croppedBitmap) {
-                    bitmap.recycle()
-                }
-                croppedBitmap.recycle()
 
                 val localPath = "file://" + file.absolutePath
                 withContext(Dispatchers.Main) {
@@ -3788,7 +3870,7 @@ class PlannerViewModel(
 
                 syncDataToFirebase()
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("PlannerViewModel", "Error saving profile picture from uri: ${e.message}", e)
             }
         }
     }
@@ -3797,12 +3879,27 @@ class PlannerViewModel(
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
-                val width = bitmap.width
-                val height = bitmap.height
-                val size = if (width < height) width else height
-                val x = (width - size) / 2
-                val y = (height - size) / 2
-                val croppedBitmap = android.graphics.Bitmap.createBitmap(bitmap, x, y, size, size)
+                val safeBitmap = try {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+                        bitmap.config == android.graphics.Bitmap.Config.HARDWARE) {
+                        bitmap.copy(android.graphics.Bitmap.Config.ARGB_8888, false) ?: bitmap
+                    } else bitmap
+                } catch (e: Exception) {
+                    bitmap
+                }
+
+                val width = safeBitmap.width.coerceAtLeast(1)
+                val height = safeBitmap.height.coerceAtLeast(1)
+                val size = minOf(width, height)
+                val x = ((width - size) / 2).coerceAtLeast(0)
+                val y = ((height - size) / 2).coerceAtLeast(0)
+                val croppedBitmap = try {
+                    if (size > 0 && x + size <= width && y + size <= height) {
+                        android.graphics.Bitmap.createBitmap(safeBitmap, x, y, size, size)
+                    } else safeBitmap
+                } catch (e: Exception) {
+                    safeBitmap
+                }
 
                 val file = java.io.File(context.filesDir, "custom_profile_picture.jpg")
                 val outputStream = java.io.FileOutputStream(file)
@@ -3816,14 +3913,6 @@ class PlannerViewModel(
                 } else croppedBitmap
                 scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, bOut)
                 val base64Data = "data:image/jpeg;base64," + android.util.Base64.encodeToString(bOut.toByteArray(), android.util.Base64.NO_WRAP)
-                if (scaled != croppedBitmap) {
-                    scaled.recycle()
-                }
-
-                if (bitmap != croppedBitmap) {
-                    bitmap.recycle()
-                }
-                croppedBitmap.recycle()
 
                 val localPath = "file://" + file.absolutePath
                 withContext(Dispatchers.Main) {
@@ -3837,10 +3926,8 @@ class PlannerViewModel(
                     .putString("student_dp_preset", "")
                     .putString("student_dp_base64", base64Data)
                     .apply()
-
-                syncDataToFirebase()
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("PlannerViewModel", "Error saving profile picture from bitmap: ${e.message}", e)
             }
         }
     }

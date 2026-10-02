@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -319,7 +320,7 @@ fun SyllabusFinishedSubList(
                 }
             }
 
-            items(subjectsForYear) { subject ->
+            items(subjectsForYear, key = { "subj_${it.shortName}_${it.name}" }) { subject ->
                 val subjectKey = subject.name.trim().lowercase()
                 val completedForSubject = topicsBySubject[subjectKey] ?: emptyList()
                 var isExpanded by remember { mutableStateOf(false) }
@@ -355,7 +356,14 @@ fun SyllabusFinishedSubList(
                         modifier = Modifier.padding(top = 8.dp)
                     )
                 }
-                items(otherTopics) { topic ->
+                itemsIndexed(
+                    items = otherTopics,
+                    key = { index, topic ->
+                        if (topic.id > 0) "other_id_${topic.id}"
+                        else if (topic.firestoreId.isNotBlank()) "other_fs_${topic.firestoreId}_$index"
+                        else "other_idx_$index"
+                    }
+                ) { _, topic ->
                     CompletedTopicRow(
                         topic = topic,
                         onDelete = { topicToDelete = topic }
@@ -414,7 +422,14 @@ fun SyllabusFinishedSubList(
                     }
                 }
             } else {
-                items(completedAssignments, key = { it.firestoreId }) { asg ->
+                itemsIndexed(
+                    items = completedAssignments,
+                    key = { index, asg ->
+                        if (asg.id > 0) "asg_id_${asg.id}"
+                        else if (asg.firestoreId.isNotBlank()) "asg_fs_${asg.firestoreId}_$index"
+                        else "asg_idx_$index"
+                    }
+                ) { _, asg ->
                     CompletedAssignmentCard(
                         assignment = asg,
                         onToggle = { viewModel.toggleAssignment(it) },
@@ -474,7 +489,14 @@ fun SyllabusFinishedSubList(
                     }
                 }
             } else {
-                items(completedAssessments, key = { it.firestoreId }) { ass ->
+                itemsIndexed(
+                    items = completedAssessments,
+                    key = { index, ass ->
+                        if (ass.id > 0) "ass_id_${ass.id}"
+                        else if (ass.firestoreId.isNotBlank()) "ass_fs_${ass.firestoreId}_$index"
+                        else "ass_idx_$index"
+                    }
+                ) { _, ass ->
                     CompletedAssessmentCard(
                         assessment = ass,
                         onToggle = { viewModel.toggleAssessment(it) },
