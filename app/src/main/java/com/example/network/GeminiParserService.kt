@@ -1199,6 +1199,13 @@ class GeminiParserService {
         if (lower.length < 3) return true
         if (lower in listOf("time", "days", "day", "date", "period", "routine", "timetable", "schedule", "class", "semester", "year", "session")) return true
         if (lower.matches(Regex("^[0-9\\s:.-]+$"))) return true
+        if (lower.startsWith("note:") || lower.startsWith("note -") || lower.startsWith("note ") || 
+            lower.startsWith("notice:") || lower.startsWith("notice -") || lower.startsWith("nb:") || 
+            lower.startsWith("important:") || lower.startsWith("w.e.f") || lower.startsWith("wef") || 
+            lower.contains("postings will be from") || lower.contains("classes will be from") ||
+            lower.contains("clinical postings will be")) {
+            return true
+        }
         return false
     }
 

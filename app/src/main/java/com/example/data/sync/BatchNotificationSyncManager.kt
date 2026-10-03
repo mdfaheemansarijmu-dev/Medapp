@@ -132,16 +132,17 @@ class BatchNotificationSyncManager(
             }
             val rawBatch = batch.trim().lowercase()
             val cleanBatch = when {
-                rawBatch == "a" || rawBatch == "batch a" || rawBatch == "batch_a" || rawBatch == "batch-a" -> "batch_a"
-                rawBatch == "b" || rawBatch == "batch b" || rawBatch == "batch_b" || rawBatch == "batch-b" -> "batch_b"
-                rawBatch == "c" || rawBatch == "batch c" || rawBatch == "batch_c" || rawBatch == "batch-c" -> "batch_c"
-                rawBatch == "d" || rawBatch == "batch d" || rawBatch == "batch_d" || rawBatch == "batch-d" -> "batch_d"
+                rawBatch == "a" || rawBatch == "batch a" || rawBatch == "batch_a" || rawBatch == "batch-a" || rawBatch == "1" || rawBatch == "batch 1" || rawBatch == "batch_1" -> "batch_a"
+                rawBatch == "b" || rawBatch == "batch b" || rawBatch == "batch_b" || rawBatch == "batch-b" || rawBatch == "2" || rawBatch == "batch 2" || rawBatch == "batch_2" -> "batch_b"
+                rawBatch == "c" || rawBatch == "batch c" || rawBatch == "batch_c" || rawBatch == "batch-c" || rawBatch == "3" || rawBatch == "batch 3" || rawBatch == "batch_3" -> "batch_c"
+                rawBatch == "d" || rawBatch == "batch d" || rawBatch == "batch_d" || rawBatch == "batch-d" || rawBatch == "4" || rawBatch == "batch 4" || rawBatch == "batch_4" -> "batch_d"
+                rawBatch == "all" || rawBatch == "whole" || rawBatch == "entire" || rawBatch == "general" || rawBatch == "full" || rawBatch.contains("all") || rawBatch.contains("whole") || rawBatch.contains("full") -> "all"
                 else -> rawBatch.replace(Regex("[^a-z0-9]+"), "_").trim('_').take(16)
             }
             val effectiveCollege = if (cleanCollege.isBlank()) "medical_college" else cleanCollege
             val effectiveCourse = if (cleanCourse.isBlank()) "mbbs" else cleanCourse
             val effectiveBatch = if (cleanBatch.isBlank()) "batch_a" else cleanBatch
-            val effectiveYear = if (admissionYear > 1900) admissionYear else 2024
+            val effectiveYear = if (admissionYear in 1990..2100) admissionYear else 2024
             return "${effectiveCollege}_${effectiveCourse}_${effectiveYear}_${effectiveBatch}"
         }
     }
@@ -728,13 +729,25 @@ class BatchNotificationSyncManager(
                             val isInitial = isFirstTimetableSnapshot
                             isFirstTimetableSnapshot = false
 
+                            if (classes.isNotEmpty()) {
+                                val batchFirestoreIds = classes.map { it.firestoreId }.toSet()
+                                val localClasses = repository.getAllTimetableClassesOnce().filter {
+                                    it.courseCode.equals(course, ignoreCase = true)
+                                }
+                                for (localCls in localClasses) {
+                                    if (localCls.firestoreId.isNotBlank() && !batchFirestoreIds.contains(localCls.firestoreId)) {
+                                        repository.deleteClass(localCls.id)
+                                    }
+                                }
+                            }
+
                             for (change in snapshots.documentChanges) {
                                 when (change.type) {
                                     DocumentChange.Type.ADDED,
                                     DocumentChange.Type.MODIFIED -> {
                                         val cls = parseBatchTimetableClass(change.document) ?: continue
                                         val localExisting = repository.getTimetableClassByFirestoreId(cls.firestoreId)
-                                            ?: repository.findMatchingTimetableClass(cls.courseCode, cls.dayOfWeek, cls.periodNumber)
+                                            ?: if (cls.periodNumber > 0) repository.findMatchingTimetableClass(cls.courseCode, cls.dayOfWeek, cls.periodNumber) else null
 
                                         val updatedClass = TimetableClass(
                                             id = localExisting?.id ?: 0,
@@ -775,6 +788,7 @@ class BatchNotificationSyncManager(
                                     }
                                 }
                             }
+                            repository.deduplicateTimetableClasses()
                         }
                     }
                 }
@@ -1771,19 +1785,19 @@ class BatchNotificationSyncManager(
             _sharedTimetableClasses.value = batchClasses
 
             if (batchClasses.isNotEmpty()) {
+                val batchFirestoreIds = batchClasses.map { it.firestoreId }.toSet()
                 val localClasses = repository.getAllTimetableClassesOnce().filter {
                     it.courseCode.equals(course, ignoreCase = true)
                 }
-                val isOnlyDefaultLocally = localClasses.all { 
-                    it.authorUid.isBlank() || it.authorName.isBlank() || it.authorName == "Classmate" 
-                }
-                if (isOnlyDefaultLocally && localClasses.isNotEmpty()) {
-                    repository.clearTimetable(course)
+                for (localCls in localClasses) {
+                    if (localCls.firestoreId.isNotBlank() && !batchFirestoreIds.contains(localCls.firestoreId)) {
+                        repository.deleteClass(localCls.id)
+                    }
                 }
 
                 for (cls in batchClasses) {
                     val localExisting = repository.getTimetableClassByFirestoreId(cls.firestoreId)
-                        ?: repository.findMatchingTimetableClass(cls.courseCode, cls.dayOfWeek, cls.periodNumber)
+                        ?: if (cls.periodNumber > 0) repository.findMatchingTimetableClass(cls.courseCode, cls.dayOfWeek, cls.periodNumber) else null
 
                     val updatedClass = TimetableClass(
                         id = localExisting?.id ?: 0,
@@ -1803,6 +1817,7 @@ class BatchNotificationSyncManager(
                     repository.addClassLocally(updatedClass)
                     importedCount++
                 }
+                repository.deduplicateTimetableClasses()
             }
 
             // 5. Fetch notices

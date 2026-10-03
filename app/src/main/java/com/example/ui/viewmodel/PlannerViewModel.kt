@@ -81,7 +81,25 @@ class PlannerViewModel(
         .flatMapLatest { course ->
             if (course != null) {
                 repository.getTimetable(course.code).map { list ->
-                    list.distinctBy { "${it.dayOfWeek}_${it.periodNumber}_${it.subject}_${it.startTime}_${it.endTime}" }
+                    val cleanList = list.filter {
+                        val sub = it.subject.trim().lowercase()
+                        !sub.startsWith("note:") && !sub.startsWith("notice:") && !sub.contains("postings will be from") && !sub.contains("classes will be from") && sub.length >= 2
+                    }
+                    val unique = mutableListOf<TimetableClass>()
+                    for (cls in cleanList) {
+                        val isDup = unique.any { u ->
+                            u.dayOfWeek == cls.dayOfWeek && (
+                                (u.firestoreId.isNotBlank() && u.firestoreId == cls.firestoreId) ||
+                                (u.periodNumber > 0 && u.periodNumber == cls.periodNumber) ||
+                                (u.startTime.isNotBlank() && u.startTime.equals(cls.startTime, ignoreCase = true) && u.endTime.equals(cls.endTime, ignoreCase = true)) ||
+                                (u.startTime.isNotBlank() && u.startTime.equals(cls.startTime, ignoreCase = true) && u.subject.trim().equals(cls.subject.trim(), ignoreCase = true))
+                            )
+                        }
+                        if (!isDup) {
+                            unique.add(cls)
+                        }
+                    }
+                    unique
                 }
             } else {
                 flowOf(emptyList())
@@ -591,17 +609,20 @@ class PlannerViewModel(
                 _studentBatch,
                 _customBatchCode
             ) { col, crs, admYr, btch, customCode ->
-                listOf(col, crs?.code ?: "MBBS", admYr.toString(), btch, customCode)
-            }.collectLatest { list ->
+                listOf(col, crs?.code ?: "MBBS", admYr.toString(), btch, customCode ?: "")
+            }.distinctUntilChanged()
+            .debounce(400)
+            .collectLatest { list ->
                 val col = list[0]
                 val crs = list[1]
                 val admYr = list[2].toIntOrNull() ?: 2024
                 val btch = list[3]
-                val customCode = list[4]
+                val customCode = list[4].ifBlank { null }
                 batchSyncManager.startListeningToBatch(col, crs, admYr, btch, customCode)
                 if (col.isNotBlank() && crs.isNotBlank() && btch.isNotBlank()) {
                     try {
                         batchSyncManager.fetchAndSyncBatchNow(col, crs, admYr, btch, customCode)
+                        repository.deduplicateTimetableClasses()
                     } catch (e: Exception) {
                         Log.w("PlannerViewModel", "Auto batch sync on param change: ${e.message}")
                     }
@@ -1448,31 +1469,13 @@ class PlannerViewModel(
         return withContext(Dispatchers.IO) {
             try {
                 val response = geminiService.parseDocument(textInput, imageBytes, mimeType, "", _selectedGeminiModel.value)
-                var result = response.extracted_timetable
+                val result = response.extracted_timetable
 
-                // If only 1 day was detected or fewer than 6 classes were parsed
-                // (e.g. from an OCR snapshot where only a partial snippet was visible or columns were partially occluded),
-                // merge or complete with the full official curriculum schedule for this medical course
-                // so a new user ALWAYS gets a full 7-day schedule with all periods rather than an empty 1-class timetable!
-                val distinctDays = result.map { it.day_of_week }.distinct().size
-                if (result.isEmpty() || result.size < 6 || distinctDays <= 1) {
-                    val defaultRoutine = repository.getDefaultParsedTimetableForCourse(course.code)
-                    if (result.isEmpty()) {
-                        result = defaultRoutine
-                    } else {
-                        val merged = defaultRoutine.toMutableList()
-                        for (detected in result) {
-                            val idx = merged.indexOfFirst { it.day_of_week == detected.day_of_week && it.period_number == detected.period_number }
-                            if (idx >= 0) {
-                                merged[idx] = detected
-                            } else {
-                                merged.add(detected)
-                            }
-                        }
-                        result = merged.sortedWith(compareBy({ it.day_of_week }, { it.period_number }))
-                    }
+                if (result.isEmpty()) {
+                    repository.getDefaultParsedTimetableForCourse(course.code)
+                } else {
+                    result.sortedWith(compareBy({ it.day_of_week }, { it.period_number }))
                 }
-                result
             } catch (e: Exception) {
                 Log.e("PlannerVM", "Failed to parse document with Gemini", e)
                 repository.getDefaultParsedTimetableForCourse(course.code)
@@ -3151,11 +3154,15 @@ class PlannerViewModel(
         }
     }
 
+    private var syncJob: kotlinx.coroutines.Job? = null
+
     fun syncDataToFirebase() {
         val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: return
         val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
         
-        viewModelScope.launch(Dispatchers.IO) {
+        syncJob?.cancel()
+        syncJob = viewModelScope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(350) // Debounce rapid sync requests
             try {
                 val emailVal = _studentEmail.value.ifBlank { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email ?: "" }
                 val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
@@ -3215,79 +3222,37 @@ class PlannerViewModel(
                 db.collection("users").document(uid).collection("settings").document("info")
                     .set(settings)
 
-                // 3. Timetable Classes backup
-                val classes = timetable.value
-                classes.forEach { classItem ->
-                    db.collection("users").document(uid).collection("timetable_classes").document(classItem.firestoreId)
-                        .set(classItem)
-                    db.collection("users").document(uid).collection("timetable").document(classItem.id.toString())
-                        .set(classItem)
+                // 3. Batch write collections atomically and efficiently
+                val batchWriter = db.batch()
+                val userRef = db.collection("users").document(uid)
+
+                timetable.value.take(60).forEach { classItem ->
+                    batchWriter.set(userRef.collection("timetable_classes").document(classItem.firestoreId), classItem)
+                }
+                allAttendanceRecords.value.take(150).forEach { rec ->
+                    batchWriter.set(userRef.collection("attendance_records").document(rec.firestoreId), rec)
+                }
+                completedSyllabusTopics.value.take(150).forEach { topic ->
+                    batchWriter.set(userRef.collection("completed_syllabus_topics").document(topic.firestoreId), topic)
+                }
+                assignments.value.take(60).forEach { asg ->
+                    batchWriter.set(userRef.collection("assignments").document(asg.firestoreId), asg)
+                }
+                assessments.value.take(60).forEach { ass ->
+                    batchWriter.set(userRef.collection("assessments").document(ass.firestoreId), ass)
+                }
+                studyTasks.value.take(40).forEach { task ->
+                    batchWriter.set(userRef.collection("study_tasks").document(task.firestoreId), task)
+                }
+                exams.value.take(30).forEach { ex ->
+                    batchWriter.set(userRef.collection("exams").document(ex.firestoreId), ex)
+                }
+                plannerTasks.value.take(40).forEach { task ->
+                    batchWriter.set(userRef.collection("planner_tasks").document(task.firestoreId), task)
                 }
 
-                // 4. Attendance Records backup (attended classes with date, time, subject, status)
-                val attendance = allAttendanceRecords.value
-                attendance.forEach { rec ->
-                    db.collection("users").document(uid).collection("attendance_records").document(rec.firestoreId)
-                        .set(rec)
-                    db.collection("users").document(uid).collection("attendance").document(rec.id.toString())
-                        .set(rec)
-                }
-
-                // 5. Completed Syllabus Topics backup (completed chapters with date, faculty, notes)
-                val topics = completedSyllabusTopics.value
-                topics.forEach { topic ->
-                    db.collection("users").document(uid).collection("completed_syllabus_topics").document(topic.firestoreId)
-                        .set(topic)
-                }
-
-                // 6. Assignments backup (written assignments with date, priority, notes)
-                val assignmentsList = assignments.value
-                assignmentsList.forEach { asg ->
-                    db.collection("users").document(uid).collection("assignments").document(asg.firestoreId)
-                        .set(asg)
-                }
-
-                // 7. Assessments backup (written assessments with date, type, syllabus)
-                val assessmentsList = assessments.value
-                assessmentsList.forEach { ass ->
-                    db.collection("users").document(uid).collection("assessments").document(ass.firestoreId)
-                        .set(ass)
-                }
-
-                // 8. Daily Revisions & Study Tasks backup
-                val revisions = allRevisions.value
-                revisions.forEach { rev ->
-                    db.collection("users").document(uid).collection("revisions").document(rev.id.toString())
-                        .set(rev)
-                }
-                val studyList = studyTasks.value
-                studyList.forEach { task ->
-                    db.collection("users").document(uid).collection("study_tasks").document(task.firestoreId)
-                        .set(task)
-                }
-
-                // 9. Exams backup
-                val examsList = exams.value
-                examsList.forEach { ex ->
-                    db.collection("users").document(uid).collection("exams").document(ex.firestoreId)
-                        .set(ex)
-                }
-
-                // 10. Planner Tasks backup
-                val plannerList = plannerTasks.value
-                plannerList.forEach { task ->
-                    db.collection("users").document(uid).collection("planner_tasks").document(task.firestoreId)
-                        .set(task)
-                }
-
-                // 11. Chat history backup
-                val chatList = chatMessages.value
-                chatList.forEach { chat ->
-                    db.collection("users").document(uid).collection("chat_history").document(chat.id.toString())
-                        .set(chat)
-                }
-
-                Log.d("FirestoreSync", "All user data successfully backed up to Firestore under UID: $uid")
+                batchWriter.commit().await()
+                Log.d("FirestoreSync", "All user data successfully backed up via WriteBatch for UID: $uid")
             } catch (e: Exception) {
                 Log.e("FirestoreSync", "Failed to backup user data to Firestore: ${e.message}", e)
             }

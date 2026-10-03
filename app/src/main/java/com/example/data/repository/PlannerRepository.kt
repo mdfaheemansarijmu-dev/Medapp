@@ -619,7 +619,26 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
     }
 
     suspend fun addClassLocally(classItem: TimetableClass) {
-        plannerDao.insertClass(classItem)
+        val existing = if (classItem.firestoreId.isNotBlank()) {
+            plannerDao.getTimetableClassByFirestoreId(classItem.firestoreId)
+        } else {
+            null
+        } ?: if (classItem.periodNumber > 0) {
+            plannerDao.findMatchingTimetableClassByPeriod(classItem.courseCode, classItem.dayOfWeek, classItem.periodNumber)
+        } else {
+            null
+        } ?: if (classItem.startTime.isNotBlank()) {
+            plannerDao.findMatchingTimetableClassByTime(classItem.courseCode, classItem.dayOfWeek, classItem.subject, classItem.startTime)
+        } else {
+            null
+        }
+
+        val itemToInsert = if (existing != null) {
+            classItem.copy(id = existing.id)
+        } else {
+            classItem
+        }
+        plannerDao.insertClass(itemToInsert)
     }
 
     suspend fun getTimetableClassByFirestoreId(firestoreId: String): TimetableClass? {
@@ -798,6 +817,51 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
 
         for (id in toDeleteIds) {
             plannerDao.deleteAssessmentById(id)
+        }
+    }
+
+    suspend fun deduplicateTimetableClasses() {
+        val all = plannerDao.getAllTimetableClassesOnce()
+        if (all.isEmpty()) return
+
+        val toDeleteIds = mutableSetOf<Int>()
+        val unique = mutableListOf<TimetableClass>()
+
+        for (cls in all) {
+            val sub = cls.subject.trim().lowercase()
+            // Clean noise lines like "Note: Clinical postings will be from..."
+            if (sub.startsWith("note:") || sub.startsWith("notice:") || sub.contains("postings will be from") || sub.contains("classes will be from") || sub.length < 2) {
+                toDeleteIds.add(cls.id)
+                continue
+            }
+
+            val dup = unique.firstOrNull { u ->
+                u.courseCode.equals(cls.courseCode, ignoreCase = true) &&
+                u.dayOfWeek == cls.dayOfWeek && (
+                    (u.firestoreId.isNotBlank() && u.firestoreId == cls.firestoreId) ||
+                    (u.periodNumber > 0 && u.periodNumber == cls.periodNumber) ||
+                    (u.startTime.isNotBlank() && u.startTime.equals(cls.startTime, ignoreCase = true) && u.endTime.equals(cls.endTime, ignoreCase = true)) ||
+                    (u.startTime.isNotBlank() && u.startTime.equals(cls.startTime, ignoreCase = true) && u.subject.trim().equals(cls.subject.trim(), ignoreCase = true))
+                )
+            }
+
+            if (dup == null) {
+                unique.add(cls)
+            } else {
+                // If the new one has author attribution and the kept one does not, update the retained one
+                if ((dup.authorName.isBlank() || dup.authorName == "Classmate") && cls.authorName.isNotBlank() && cls.authorName != "Classmate") {
+                    val updated = dup.copy(authorName = cls.authorName, authorUid = cls.authorUid, firestoreId = cls.firestoreId)
+                    plannerDao.insertClass(updated)
+                }
+                toDeleteIds.add(cls.id)
+            }
+        }
+
+        for (id in toDeleteIds) {
+            plannerDao.deleteClassById(id)
+        }
+        if (toDeleteIds.isNotEmpty()) {
+            android.util.Log.d("PlannerRepository", "Cleaned up ${toDeleteIds.size} duplicate timetable classes")
         }
     }
 
