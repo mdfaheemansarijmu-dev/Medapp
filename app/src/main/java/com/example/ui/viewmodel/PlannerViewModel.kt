@@ -117,8 +117,7 @@ class PlannerViewModel(
                 (u.firestoreId.isNotBlank() && u.firestoreId == topic.firestoreId) ||
                 (com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(u.subject, topic.subject) &&
                  (u.topicTitle.trim().equals(topic.topicTitle.trim(), ignoreCase = true) ||
-                  com.example.util.ChapterSimilarityHelper.isSimilar(u.topicTitle, topic.topicTitle))) ||
-                com.example.util.ChapterSimilarityHelper.isSimilar(u.topicTitle, topic.topicTitle)
+                  com.example.util.ChapterSimilarityHelper.isSimilar(u.topicTitle, topic.topicTitle, u.subject, topic.subject)))
             }
             if (existing == null) {
                 unique.add(topic)
@@ -600,6 +599,13 @@ class PlannerViewModel(
                 val btch = list[3]
                 val customCode = list[4]
                 batchSyncManager.startListeningToBatch(col, crs, admYr, btch, customCode)
+                if (col.isNotBlank() && crs.isNotBlank() && btch.isNotBlank()) {
+                    try {
+                        batchSyncManager.fetchAndSyncBatchNow(col, crs, admYr, btch, customCode)
+                    } catch (e: Exception) {
+                        Log.w("PlannerViewModel", "Auto batch sync on param change: ${e.message}")
+                    }
+                }
             }
         }
 
@@ -1493,6 +1499,21 @@ class PlannerViewModel(
 
         // Automatically sync fresh user profile and timetable to Firebase Cloud
         syncDataToFirebase()
+
+        // Immediately connect to shared batch channel and fetch all batch chapters, assignments, assessments
+        val col = _studentCollege.value
+        val crs = course.code
+        val admYr = _studentAdmissionYear.value
+        val btch = _studentBatch.value
+        val customCode = _customBatchCode.value
+        batchSyncManager.startListeningToBatch(col, crs, admYr, btch, customCode)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                batchSyncManager.fetchAndSyncBatchNow(col, crs, admYr, btch, customCode)
+            } catch (e: Exception) {
+                Log.w("PlannerViewModel", "Initial batch sync failed: ${e.message}")
+            }
+        }
     }
 
     fun isOnboardingCompleted(): Boolean {
@@ -2487,6 +2508,21 @@ class PlannerViewModel(
                     repository.startCloudSync(uid)
                     restoreDataFromFirebaseInternal(uid, email)
                     repository.populateDefaultTimetableIfEmpty(courseObj.code)
+                    
+                    // Immediately fetch and import all existing shared batch assignments, assessments, finished chapters
+                    val col = _studentCollege.value
+                    val crs = _selectedCourse.value?.code ?: courseObj.code
+                    val admYr = _studentAdmissionYear.value
+                    val btch = _studentBatch.value
+                    val customCode = _customBatchCode.value
+                    if (col.isNotBlank() && crs.isNotBlank() && btch.isNotBlank()) {
+                        try {
+                            batchSyncManager.fetchAndSyncBatchNow(col, crs, admYr, btch, customCode)
+                        } catch (e: Exception) {
+                            Log.w("PlannerViewModel", "Post-login batch sync: ${e.message}")
+                        }
+                    }
+
                     withContext(Dispatchers.Main) {
                         scheduleTimetableClassNotifications()
                         generateSmartNotifications()
@@ -2956,6 +2992,15 @@ class PlannerViewModel(
                 _isProfileCompleted.value = true
                 _authState.value = AuthState.AUTHENTICATED_PROFILE_COMPLETE
                 _currentScreen.value = Screen.Dashboard
+            }
+
+            // Immediately start listening and fetch shared batch records for the updated batch
+            val courseCodeVal = _selectedCourse.value?.code ?: course
+            batchSyncManager.startListeningToBatch(college, courseCodeVal, admissionYear, batch, _customBatchCode.value)
+            try {
+                batchSyncManager.fetchAndSyncBatchNow(college, courseCodeVal, admissionYear, batch, _customBatchCode.value)
+            } catch (e: Exception) {
+                Log.w("PlannerViewModel", "saveUserProfile batch sync: ${e.message}")
             }
 
             // Sync with Firebase Firestore
@@ -3561,6 +3606,20 @@ class PlannerViewModel(
                 }
             } catch (e: Exception) {
                 // ignore
+            }
+
+            // 10. Restore Shared Batch Records (Assignments, Assessments, Finished Chapters for this batch)
+            try {
+                val col = _studentCollege.value
+                val crs = _selectedCourse.value?.code ?: ""
+                val admYr = _studentAdmissionYear.value
+                val btch = _studentBatch.value
+                val customCode = _customBatchCode.value
+                if (col.isNotBlank() && crs.isNotBlank() && btch.isNotBlank()) {
+                    batchSyncManager.fetchAndSyncBatchNow(col, crs, admYr, btch, customCode)
+                }
+            } catch (e: Exception) {
+                Log.w("FirestoreSync", "Error restoring batch records during profile restore: ${e.message}")
             }
 
             return profileFound

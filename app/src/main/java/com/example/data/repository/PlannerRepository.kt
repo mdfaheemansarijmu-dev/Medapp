@@ -657,23 +657,10 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
         }
         if (exact != null) return exact
 
-        // 2. Similar title in same/similar subject
-        val sameSubjectSimilar = all.firstOrNull {
-            com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(it.subject, sTrim) &&
-            com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim)
-        }
-        if (sameSubjectSimilar != null) return sameSubjectSimilar
-
-        // 3. Similar title in same course
-        val sameCourseSimilar = all.firstOrNull {
-            (courseCode.isBlank() || it.courseCode.trim().equals(courseCode.trim(), ignoreCase = true)) &&
-            com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim)
-        }
-        if (sameCourseSimilar != null) return sameCourseSimilar
-
-        // 4. Any completed topic with matching chapter name across database
+        // 2. Similar title strictly in same/similar subject
         return all.firstOrNull {
-            com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim)
+            com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(it.subject, sTrim) &&
+            com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim, it.subject, sTrim)
         }
     }
 
@@ -690,7 +677,7 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
 
         return all.firstOrNull {
             com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(it.subject, sTrim) &&
-            com.example.util.ChapterSimilarityHelper.isSimilar(it.title, tTrim)
+            com.example.util.ChapterSimilarityHelper.isSimilar(it.title, tTrim, it.subject, sTrim)
         }
     }
 
@@ -707,7 +694,7 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
 
         return all.firstOrNull {
             com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(it.subject, sTrim) &&
-            com.example.util.ChapterSimilarityHelper.isSimilar(it.title, tTrim)
+            com.example.util.ChapterSimilarityHelper.isSimilar(it.title, tTrim, it.subject, sTrim)
         }
     }
 
@@ -723,8 +710,7 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
                 (existing.firestoreId.isNotBlank() && existing.firestoreId == topic.firestoreId) ||
                 (com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(existing.subject, topic.subject) &&
                  (existing.topicTitle.trim().equals(topic.topicTitle.trim(), ignoreCase = true) ||
-                  com.example.util.ChapterSimilarityHelper.isSimilar(existing.topicTitle, topic.topicTitle))) ||
-                com.example.util.ChapterSimilarityHelper.isSimilar(existing.topicTitle, topic.topicTitle)
+                  com.example.util.ChapterSimilarityHelper.isSimilar(existing.topicTitle, topic.topicTitle, existing.subject, topic.subject)))
             }
 
             if (match == null) {

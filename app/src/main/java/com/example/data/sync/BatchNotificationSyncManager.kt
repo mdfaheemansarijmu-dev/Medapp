@@ -121,8 +121,23 @@ class BatchNotificationSyncManager(
             } else {
                 college.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(48)
             }
-            val cleanCourse = course.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(16)
-            val cleanBatch = batch.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(16)
+            val cleanCourse = when {
+                course.contains("bhms", ignoreCase = true) -> "bhms"
+                course.contains("mbbs", ignoreCase = true) -> "mbbs"
+                course.contains("bds", ignoreCase = true) -> "bds"
+                course.contains("bams", ignoreCase = true) -> "bams"
+                course.contains("nurs", ignoreCase = true) -> "nursing"
+                course.contains("pharm", ignoreCase = true) -> "pharmacy"
+                else -> course.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(16)
+            }
+            val rawBatch = batch.trim().lowercase()
+            val cleanBatch = when {
+                rawBatch == "a" || rawBatch == "batch a" || rawBatch == "batch_a" || rawBatch == "batch-a" -> "batch_a"
+                rawBatch == "b" || rawBatch == "batch b" || rawBatch == "batch_b" || rawBatch == "batch-b" -> "batch_b"
+                rawBatch == "c" || rawBatch == "batch c" || rawBatch == "batch_c" || rawBatch == "batch-c" -> "batch_c"
+                rawBatch == "d" || rawBatch == "batch d" || rawBatch == "batch_d" || rawBatch == "batch-d" -> "batch_d"
+                else -> rawBatch.replace(Regex("[^a-z0-9]+"), "_").trim('_').take(16)
+            }
             val effectiveCollege = if (cleanCollege.isBlank()) "medical_college" else cleanCollege
             val effectiveCourse = if (cleanCourse.isBlank()) "mbbs" else cleanCourse
             val effectiveBatch = if (cleanBatch.isBlank()) "batch_a" else cleanBatch
@@ -1309,9 +1324,23 @@ class BatchNotificationSyncManager(
         return try {
             val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
             val uid = ensureAuthenticated()
-            val batchWriter = db.batch()
             val timetableCol = db.collection("shared_batches").document(key).collection("timetable")
 
+            // Delete previous timetable classes for this batch to ensure old/orphan periods from past routines do not linger
+            try {
+                val oldSnap = timetableCol.get().await()
+                if (!oldSnap.isEmpty) {
+                    val deleteBatch = db.batch()
+                    for (doc in oldSnap.documents) {
+                        deleteBatch.delete(doc.reference)
+                    }
+                    deleteBatch.commit().await()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Notice clearing previous timetable before posting new: ${e.message}")
+            }
+
+            val batchWriter = db.batch()
             for (cls in classes) {
                 val docRef = timetableCol.document(cls.firestoreId)
                 val data = hashMapOf(
@@ -1371,7 +1400,7 @@ class BatchNotificationSyncManager(
         return _sharedAssignments.value.firstOrNull {
             it.subject.trim().equals(sTrim, ignoreCase = true) &&
             (it.title.trim().equals(tTrim, ignoreCase = true) ||
-             com.example.util.ChapterSimilarityHelper.isSimilar(it.title, tTrim))
+             com.example.util.ChapterSimilarityHelper.isSimilar(it.title, tTrim, it.subject, sTrim))
         }
     }
 
@@ -1381,23 +1410,17 @@ class BatchNotificationSyncManager(
         return _sharedAssessments.value.firstOrNull {
             it.subject.trim().equals(sTrim, ignoreCase = true) &&
             (it.title.trim().equals(tTrim, ignoreCase = true) ||
-             com.example.util.ChapterSimilarityHelper.isSimilar(it.title, tTrim))
+             com.example.util.ChapterSimilarityHelper.isSimilar(it.title, tTrim, it.subject, sTrim))
         }
     }
 
     fun checkDuplicateCompletedTopic(subject: String, topicTitle: String): SharedBatchCompletedTopic? {
         val sTrim = subject.trim()
         val tTrim = topicTitle.trim()
-        val sameSubjectMatch = _sharedCompletedTopics.value.firstOrNull {
+        return _sharedCompletedTopics.value.firstOrNull {
             com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(it.subject, sTrim) &&
             (it.topicTitle.trim().equals(tTrim, ignoreCase = true) ||
-             com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim))
-        }
-        if (sameSubjectMatch != null) return sameSubjectMatch
-
-        return _sharedCompletedTopics.value.firstOrNull {
-            it.topicTitle.trim().equals(tTrim, ignoreCase = true) ||
-            com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim)
+             com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim, it.subject, sTrim))
         }
     }
 
@@ -1417,16 +1440,12 @@ class BatchNotificationSyncManager(
             val key = computeBatchKey(college, course, admissionYear, batch, customBatchCode)
             val sTrim = subject.trim()
             val tTrim = topicTitle.trim()
-            val snap = db.collection("shared_batches").document(key).collection("completed_chapters").limit(100).get().await()
+            val snap = db.collection("shared_batches").document(key).collection("completed_chapters").limit(150).get().await()
             val topics = snap.documents.mapNotNull { parseBatchCompletedTopic(it) }
             topics.firstOrNull {
-                (com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(it.subject, sTrim) ||
-                 it.courseCode.equals(course, ignoreCase = true)) &&
+                com.example.util.ChapterSimilarityHelper.isSameOrSimilarSubject(it.subject, sTrim) &&
                 (it.topicTitle.trim().equals(tTrim, ignoreCase = true) ||
-                 com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim))
-            } ?: topics.firstOrNull {
-                it.topicTitle.trim().equals(tTrim, ignoreCase = true) ||
-                com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim)
+                 com.example.util.ChapterSimilarityHelper.isSimilar(it.topicTitle, tTrim, it.subject, sTrim))
             }
         } catch (e: Exception) {
             null
@@ -1646,12 +1665,14 @@ class BatchNotificationSyncManager(
             val asgSnapshots = db.collection("shared_batches")
                 .document(key)
                 .collection("assignments")
-                .limit(100)
+                .limit(250)
                 .get()
                 .await()
 
-            for (doc in asgSnapshots.documents) {
-                val asg = parseBatchAssignment(doc) ?: continue
+            val parsedAsgs = asgSnapshots.documents.mapNotNull { parseBatchAssignment(it) }
+            _sharedAssignments.value = parsedAsgs
+
+            for (asg in parsedAsgs) {
                 val localExisting = repository.getAssignmentByFirestoreId(asg.firestoreId)
                     ?: repository.findMatchingAssignment(asg.courseCode, asg.subject, asg.title, asg.dueDate)
                 if (localExisting == null) {
@@ -1677,12 +1698,14 @@ class BatchNotificationSyncManager(
             val asmSnapshots = db.collection("shared_batches")
                 .document(key)
                 .collection("assessments")
-                .limit(100)
+                .limit(250)
                 .get()
                 .await()
 
-            for (doc in asmSnapshots.documents) {
-                val asm = parseBatchAssessment(doc) ?: continue
+            val parsedAsms = asmSnapshots.documents.mapNotNull { parseBatchAssessment(it) }
+            _sharedAssessments.value = parsedAsms
+
+            for (asm in parsedAsms) {
                 val localExisting = repository.getAssessmentByFirestoreId(asm.firestoreId)
                     ?: repository.findMatchingAssessment(asm.courseCode, asm.subject, asm.title, asm.date)
                 if (localExisting == null) {
@@ -1707,13 +1730,15 @@ class BatchNotificationSyncManager(
             val topicSnapshots = db.collection("shared_batches")
                 .document(key)
                 .collection("completed_chapters")
-                .limit(100)
+                .limit(250)
                 .get()
                 .await()
 
-            for (doc in topicSnapshots.documents) {
-                val topic = parseBatchCompletedTopic(doc) ?: continue
-                val localExisting = repository.getCompletedTopicByFirestoreId(topic.firestoreId)
+            val parsedTopics = topicSnapshots.documents.mapNotNull { parseBatchCompletedTopic(it) }
+            _sharedCompletedTopics.value = parsedTopics
+
+            for (topic in parsedTopics) {
+                val localExisting = (if (topic.firestoreId.isNotBlank()) repository.getCompletedTopicByFirestoreId(topic.firestoreId) else null)
                     ?: repository.findMatchingCompletedTopic(topic.courseCode, topic.subject, topic.topicTitle)
                 if (localExisting == null) {
                     val newTopic = CompletedSyllabusTopic(
@@ -1742,12 +1767,26 @@ class BatchNotificationSyncManager(
                 .get()
                 .await()
 
-            for (doc in timetableSnapshots.documents) {
-                val cls = parseBatchTimetableClass(doc) ?: continue
-                val localExisting = repository.getTimetableClassByFirestoreId(cls.firestoreId)
-                    ?: repository.findMatchingTimetableClass(cls.courseCode, cls.dayOfWeek, cls.periodNumber)
-                if (localExisting == null) {
-                    val newClass = TimetableClass(
+            val batchClasses = timetableSnapshots.documents.mapNotNull { parseBatchTimetableClass(it) }
+            _sharedTimetableClasses.value = batchClasses
+
+            if (batchClasses.isNotEmpty()) {
+                val localClasses = repository.getAllTimetableClassesOnce().filter {
+                    it.courseCode.equals(course, ignoreCase = true)
+                }
+                val isOnlyDefaultLocally = localClasses.all { 
+                    it.authorUid.isBlank() || it.authorName.isBlank() || it.authorName == "Classmate" 
+                }
+                if (isOnlyDefaultLocally && localClasses.isNotEmpty()) {
+                    repository.clearTimetable(course)
+                }
+
+                for (cls in batchClasses) {
+                    val localExisting = repository.getTimetableClassByFirestoreId(cls.firestoreId)
+                        ?: repository.findMatchingTimetableClass(cls.courseCode, cls.dayOfWeek, cls.periodNumber)
+
+                    val updatedClass = TimetableClass(
+                        id = localExisting?.id ?: 0,
                         courseCode = cls.courseCode.trim().uppercase(),
                         dayOfWeek = cls.dayOfWeek,
                         periodNumber = cls.periodNumber,
@@ -1761,7 +1800,7 @@ class BatchNotificationSyncManager(
                         authorName = cls.authorName,
                         authorUid = cls.authorUid
                     )
-                    repository.addClassLocally(newClass)
+                    repository.addClassLocally(updatedClass)
                     importedCount++
                 }
             }

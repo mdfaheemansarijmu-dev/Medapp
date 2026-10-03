@@ -4,21 +4,120 @@ object ChapterSimilarityHelper {
 
     private val STOP_WORDS = setOf(
         "the", "of", "and", "in", "for", "ch", "chapter", "part", "unit", "section",
-        "study", "general", "introduction", "to", "on", "system", "module", "lecture",
-        "dr", "prof", "notes", "drug", "remedy", "materia", "medica", "portion", "portions", "topic", "topics"
+        "study", "general", "introduction", "intro", "to", "on", "module", "lecture",
+        "dr", "prof", "notes", "drug", "remedy", "portion", "portions", "topic", "topics"
     )
 
-    private val REMEDY_SUFFIXES = setOf(
-        "nigricans", "nigrum", "nigra", "nig", "album", "alba", "alb", "officinale", "officinalis",
-        "communis", "vulgaris", "purpurea", "dioica", "sativa", "annua", "perennis",
-        "napellus", "clavatum", "vomica", "toxicodendron", "tox", "foetida", "maritima",
-        "metallicum", "met", "carbonica", "carb", "phosphorica", "phos", "muriatica", "mur",
-        "sulphurica", "sulph", "sulf", "arsenicosa", "nitrica", "nit", "iodatum", "iod",
-        "bichromicum", "bich", "bromatum", "crudum", "crud", "oxydatum", "aceticum", "pratensis",
-        "occidentalis", "radicans", "arvensis", "major", "minor"
+    // Optional botanical / natural species epithets that students frequently omit or vary
+    // e.g. "Pulsatilla" vs "Pulsatilla Nigricans", "Aconitum" vs "Aconitum Napellus"
+    private val OPTIONAL_SPECIES_EPITHETS = setOf(
+        "nigricans", "nigrum", "nigra", "nig",
+        "album", "alba", "alb",
+        "napellus", "nap",
+        "officinale", "officinalis",
+        "communis", "vulgaris",
+        "purpurea", "dioica", "sativa", "annua", "perennis",
+        "clavatum", "vomica",
+        "foetida", "maritima", "montana", "amara",
+        "pratensis", "occidentalis", "radicans", "arvensis",
+        "major", "minor", "system"
     )
 
-    private val SYNONYMS = mapOf(
+    // Chemical salt radicals & qualifiers that define DISTINCT medicines in a group.
+    // Two remedies sharing a group name (e.g., Calcaria) but having distinct radicals
+    // (Carbonica, Phosphorica, Fluorica) are completely DIFFERENT medicines.
+    private val DISTINCT_SALT_RADICALS = setOf(
+        "carbonica", "phosphorica", "fluorica", "muriatica", "sulphurica",
+        "iodata", "arsenica", "nitrica", "metallicum", "bichromicum",
+        "bromata", "crudum", "solubilis", "corrosivus", "cyanatus",
+        "dulcis", "aceticum", "picrata", "silicata", "caustica",
+        "oxalicum", "salicylicum", "benzoicum", "hydrocyanicum",
+        "flavus", "ruber", "moschata"
+    )
+
+    // Canonical dictionary of abbreviations and common spelling variations
+    private val CANONICAL_WORDS = mapOf(
+        // Salts and Radicals (distinct medicines)
+        "calc" to "calcaria",
+        "calcarea" to "calcaria",
+        "carb" to "carbonica",
+        "carbonic" to "carbonica",
+        "carbonicum" to "carbonica",
+        "phos" to "phosphorica",
+        "phosphoric" to "phosphorica",
+        "phosphoricum" to "phosphorica",
+        "fluor" to "fluorica",
+        "flour" to "fluorica",
+        "flourica" to "fluorica",
+        "fluoric" to "fluorica",
+        "fluoricum" to "fluorica",
+        "flouricum" to "fluorica",
+        "mur" to "muriatica",
+        "muriatic" to "muriatica",
+        "muriaticum" to "muriatica",
+        "sulph" to "sulphurica",
+        "sulf" to "sulphurica",
+        "sulphuric" to "sulphurica",
+        "sulfuric" to "sulphurica",
+        "sulphuricum" to "sulphurica",
+        "sulfuricum" to "sulphurica",
+        "iod" to "iodata",
+        "iodat" to "iodata",
+        "iodatum" to "iodata",
+        "ars" to "arsenica",
+        "arsen" to "arsenica",
+        "arsenicosa" to "arsenica",
+        "arsenicosum" to "arsenica",
+        "nit" to "nitrica",
+        "nitric" to "nitrica",
+        "nitricum" to "nitrica",
+        "met" to "metallicum",
+        "metal" to "metallicum",
+        "bich" to "bichromicum",
+        "bichrom" to "bichromicum",
+        "crud" to "crudum",
+        "sol" to "solubilis",
+        "corr" to "corrosivus",
+        "cyan" to "cyanatus",
+        "acet" to "aceticum",
+        "acetic" to "aceticum",
+        "pic" to "picrata",
+        "picric" to "picrata",
+        "picricum" to "picrata",
+        "silic" to "silicata",
+        "silicata" to "silicata",
+        "flav" to "flavus",
+        "flavum" to "flavus",
+        "rub" to "ruber",
+        "rubrum" to "ruber",
+
+        // Genus / Base remedies
+        "nat" to "natrum",
+        "natr" to "natrum",
+        "kali" to "kali",
+        "kal" to "kali",
+        "mag" to "magnesia",
+        "magn" to "magnesia",
+        "bar" to "baryta",
+        "baryt" to "baryta",
+        "ammon" to "ammonium",
+        "amm" to "ammonium",
+        "ferr" to "ferrum",
+        "merc" to "mercurius",
+        "aur" to "aurum",
+        "arg" to "argentum",
+        "lyc" to "lycopodium",
+        "puls" to "pulsatilla",
+        "acon" to "aconitum",
+        "aconite" to "aconitum",
+        "bell" to "belladonna",
+        "bry" to "bryonia",
+        "rhus" to "rhus",
+        "tox" to "toxicodendron",
+        "silica" to "silicea",
+        "sulfur" to "sulphur",
+
+        // Anatomical & System abbreviations
         "cvs" to "cardiovascular",
         "cns" to "central nervous",
         "git" to "gastrointestinal",
@@ -26,11 +125,7 @@ object ChapterSimilarityHelper {
         "fmt" to "forensic",
         "psm" to "community medicine",
         "obg" to "obstetrics",
-        "ent" to "otorhinolaryngology",
-        "aconite" to "aconitum",
-        "arsenic" to "arsenicum",
-        "silica" to "silicea",
-        "sulfur" to "sulphur"
+        "ent" to "otorhinolaryngology"
     )
 
     fun normalizeSubjectCore(sub: String): String {
@@ -86,119 +181,168 @@ object ChapterSimilarityHelper {
     }
 
     /**
-     * Tokenizes a title into cleaned, significant words.
+     * Canonicalizes an individual token:
+     * - Strips non-alphanumerics
+     * - Maps known synonyms and homoeopathic abbreviations (e.g. "carb" -> "carbonica", "phos" -> "phosphorica", "flour" -> "fluorica")
+     * - Collapses double letters
+     */
+    fun canonicalizeWord(word: String): String {
+        val clean = word.lowercase().trim().replace(Regex("[^a-z0-9]"), "")
+        if (clean.isBlank()) return ""
+        val canonical = CANONICAL_WORDS[clean] ?: clean
+        return canonical
+    }
+
+    /**
+     * Tokenizes a title into canonicalized, significant words.
      */
     fun tokenize(title: String): List<String> {
-        return title.split(Regex("[^a-zA-Z0-9]+"))
+        val rawTokens = title.split(Regex("[^a-zA-Z0-9]+"))
             .map { it.trim().lowercase() }
-            .map { SYNONYMS[it] ?: it }
             .filter { it.isNotBlank() && it !in STOP_WORDS }
+
+        val tokens = mutableListOf<String>()
+        var i = 0
+        while (i < rawTokens.size) {
+            // Check 2-word combinations in synonym map (e.g. "rhus tox" -> "rhus toxicodendron")
+            if (i + 1 < rawTokens.size) {
+                val pair = "${rawTokens[i]} ${rawTokens[i + 1]}"
+                if (CANONICAL_WORDS.containsKey(pair)) {
+                    val mapped = CANONICAL_WORDS[pair]!!
+                    tokens.addAll(mapped.split(" ").map { canonicalizeWord(it) })
+                    i += 2
+                    continue
+                }
+            }
+            val canonical = canonicalizeWord(rawTokens[i])
+            if (canonical.isNotBlank() && canonical !in STOP_WORDS) {
+                // If canonical expanded to multiple words
+                if (canonical.contains(" ")) {
+                    tokens.addAll(canonical.split(" ").map { canonicalizeWord(it) })
+                } else {
+                    tokens.add(canonical)
+                }
+            }
+            i++
+        }
+        return tokens
     }
 
     /**
-     * Extracts the primary core stem of a remedy / chapter title,
-     * stripping secondary species/adjective words if present.
+     * Checks if two individual canonical words are equivalent (exact or clean root or 1-edit typo).
      */
-    fun extractPrimaryStem(title: String): String {
-        val tokens = tokenize(title)
-        if (tokens.isEmpty()) return cleanRoot(title)
-        val firstClean = cleanRoot(tokens.first())
-        return firstClean
+    private fun areWordsEquivalent(w1: String, w2: String): Boolean {
+        if (w1 == w2) return true
+        val c1 = cleanRoot(w1)
+        val c2 = cleanRoot(w2)
+        if (c1 == c2) return true
+        if (c1.length >= 5 && c2.length >= 5 && levenshteinDistance(c1, c2) <= 1) return true
+        return false
     }
 
     /**
-     * Checks if two chapter titles in the same subject represent the same topic.
-     * Examples that match:
-     * - "pulsatila" and "pulsatilla nigricans"
-     * - "pulsatilla nigricans" and "pulsatila nigrum"
-     * - "Cardiovascular" and "Cardiovascular System"
-     * - "Upper Limb" and "Upper Limb - Bones"
-     * - "Aconite" and "Aconitum Napellus"
+     * Intelligent check to determine if two chapter titles represent the EXACT SAME entity (true)
+     * or DIFFERENT entities/chapters (false).
+     *
+     * In homoeopathy and medical sciences:
+     * - "Calcaria Carbonica", "Calcaria Phosphorica", and "Calcaria Fluorica" (or "Calcaria Flour")
+     *   are THREE DIFFERENT MEDICINES with distinct radicals ("carbonica", "phosphorica", "fluorica").
+     *   They are NOT duplicates!
+     * - "Calcaria Carbonica" and "Calc Carb" ARE duplicates (alias/abbreviation).
+     * - "Calcaria Fluorica" and "Calcarea Flour" ARE duplicates (spelling variant / alias).
+     * - "Pulsatilla" and "Pulsatilla Nigricans" ARE duplicates (natural species epithet).
+     * - "Pulsatilla" and "Pulsatila" ARE duplicates (typo).
+     * - "Upper Limb - Bones" and "Upper Limb - Muscles" are DIFFERENT chapters.
+     * - "Assignment 1" and "Assignment 2" are DIFFERENT assignments.
      */
-    fun isSimilar(title1: String, title2: String): Boolean {
+    fun isSimilar(
+        title1: String,
+        title2: String,
+        subject1: String? = null,
+        subject2: String? = null
+    ): Boolean {
+        // 0. If subjects are provided and distinct, they are definitely different
+        if (!subject1.isNullOrBlank() && !subject2.isNullOrBlank()) {
+            if (!isSameOrSimilarSubject(subject1, subject2)) return false
+        }
+
         val t1 = title1.trim().lowercase()
         val t2 = title2.trim().lowercase()
         if (t1.isEmpty() || t2.isEmpty()) return false
         if (t1 == t2) return true
 
-        // 1. Direct clean root check
-        val c1 = cleanRoot(t1)
-        val c2 = cleanRoot(t2)
-        if (c1 == c2) return true
+        // 1. Direct clean root comparison of full string
+        val cr1 = cleanRoot(t1)
+        val cr2 = cleanRoot(t2)
+        if (cr1 == cr2) return true
 
-        // Substring check on collapsed clean roots
-        if (minOf(c1.length, c2.length) >= 4) {
-            if (c1.contains(c2) || c2.contains(c1)) {
-                return true
-            }
-        }
-
-        // 2. Tokenize both titles
+        // 2. Tokenize both titles using canonical vocabulary
         val tokens1 = tokenize(t1)
         val tokens2 = tokenize(t2)
         if (tokens1.isEmpty() || tokens2.isEmpty()) return false
 
-        // Check if one token list is subset of another
-        val set1 = tokens1.map { cleanRoot(it) }.toSet()
-        val set2 = tokens2.map { cleanRoot(it) }.toSet()
-        if (set1.containsAll(set2) || set2.containsAll(set1)) {
-            val shorter = minOf(set1.size, set2.size)
-            if (shorter > 0) return true
+        // Check exact token sequence match
+        if (tokens1 == tokens2) return true
+
+        // Check if concatenated canonical tokens are identical
+        val joined1 = cleanRoot(tokens1.joinToString(""))
+        val joined2 = cleanRoot(tokens2.joinToString(""))
+        if (joined1 == joined2) return true
+
+        // 3. Distinguishing Term & Radical Analysis
+        // Find words in title 1 not present in title 2, and vice versa
+        val diff1 = tokens1.filter { tok1 -> tokens2.none { tok2 -> areWordsEquivalent(tok1, tok2) } }
+        val diff2 = tokens2.filter { tok2 -> tokens1.none { tok1 -> areWordsEquivalent(tok1, tok2) } }
+
+        // Both titles have non-matching terms:
+        // e.g. "Calcaria Carbonica" vs "Calcaria Phosphorica" -> diff1=["carbonica"], diff2=["phosphorica"]
+        // e.g. "Calcaria Carbonica" vs "Calcaria Flour" -> diff1=["carbonica"], diff2=["fluorica"]
+        // e.g. "Upper Limb - Bones" vs "Upper Limb - Muscles" -> diff1=["bones"], diff2=["muscles"]
+        // e.g. "Chapter 1" vs "Chapter 2" -> diff1=["1"], diff2=["2"]
+        if (diff1.isNotEmpty() && diff2.isNotEmpty()) {
+            // These titles have contrasting qualifying terms -> DIFFERENT ENTITIES!
+            return false
         }
 
-        // 3. Primary Root Word matching
-        // In medical/BHMS/MBBS syllabi, the first word is almost always the drug genus or organ/system
-        // e.g. "pulsatilla" vs "pulsatila", "aconitum" vs "aconite", "carbohydrate" vs "carbohydrates"
-        val r1 = cleanRoot(tokens1.first())
-        val r2 = cleanRoot(tokens2.first())
-
-        if (r1.length >= 4 && r2.length >= 4) {
-            if (r1 == r2) return true
-            // Edit distance <= 1 for typos (e.g. "pulsatila" vs "pulsatilla" -> distance 0 after cleanRoot)
-            if (levenshteinDistance(r1, r2) <= 1) return true
-            // Common prefix match of length >= 4 (e.g. "pulsat" in "pulsatila" and "pulsatilla", "aconit" in "aconite" and "aconitum")
-            if ((r1.startsWith(r2) || r2.startsWith(r1)) || (r1.length >= 4 && r2.length >= 4 && r1.take(4) == r2.take(4))) {
-                return true
+        // One title's tokens are a subset of the other's tokens:
+        // e.g. "Pulsatilla" (diff1=[]) vs "Pulsatilla Nigricans" (diff2=["nigricans"])
+        // e.g. "Cardiovascular" (diff1=[]) vs "Cardiovascular System" (diff2=["system"])
+        if (diff1.isEmpty() && diff2.isNotEmpty()) {
+            // The extra words in diff2 must ONLY be recognized optional botanical epithets or generic descriptors
+            val hasContradictoryRadicalOrDigit = diff2.any { extra ->
+                extra in DISTINCT_SALT_RADICALS || extra.any { it.isDigit() }
             }
-        }
-
-        // 4. Secondary species filtering check
-        // e.g. "pulsatilla nigricans" vs "pulsatila nigrum"
-        // If the secondary words are known homoeopathic/botanical species and primary root matches
-        val nonSuffix1 = tokens1.filter { it !in REMEDY_SUFFIXES }.map { cleanRoot(it) }
-        val nonSuffix2 = tokens2.filter { it !in REMEDY_SUFFIXES }.map { cleanRoot(it) }
-        if (nonSuffix1.isNotEmpty() && nonSuffix2.isNotEmpty()) {
-            val base1 = nonSuffix1.first()
-            val base2 = nonSuffix2.first()
-            if (base1.length >= 4 && base2.length >= 4) {
-                if (base1 == base2 || levenshteinDistance(base1, base2) <= 1 ||
-                    base1.startsWith(base2) || base2.startsWith(base1) ||
-                    (base1.length >= 5 && base2.length >= 5 && base1.take(5) == base2.take(5))) {
-                    return true
-                }
+            if (hasContradictoryRadicalOrDigit) {
+                // e.g. "Calcaria" vs "Calcaria Carbonica" - carbonica is a distinct radical, not just a filler
+                return false
             }
-        }
-
-        // 5. Significant word overlap (any token of length >= 5 matches)
-        for (tok1 in tokens1) {
-            val cr1 = cleanRoot(tok1)
-            if (cr1.length >= 5 && cr1 !in REMEDY_SUFFIXES) {
-                for (tok2 in tokens2) {
-                    val cr2 = cleanRoot(tok2)
-                    if (cr2.length >= 5 && cr2 !in REMEDY_SUFFIXES) {
-                        if (cr1 == cr2 || levenshteinDistance(cr1, cr2) <= 1) {
-                            return true
-                        }
-                    }
-                }
+            val allOptional = diff2.all { extra ->
+                extra in OPTIONAL_SPECIES_EPITHETS || cleanRoot(extra) in OPTIONAL_SPECIES_EPITHETS
             }
+            if (allOptional) return true
+            return false
         }
 
-        // 6. Overall Levenshtein similarity on normalized text
-        val maxLen = maxOf(c1.length, c2.length)
+        if (diff2.isEmpty() && diff1.isNotEmpty()) {
+            val hasContradictoryRadicalOrDigit = diff1.any { extra ->
+                extra in DISTINCT_SALT_RADICALS || extra.any { it.isDigit() }
+            }
+            if (hasContradictoryRadicalOrDigit) return false
+            val allOptional = diff1.all { extra ->
+                extra in OPTIONAL_SPECIES_EPITHETS || cleanRoot(extra) in OPTIONAL_SPECIES_EPITHETS
+            }
+            if (allOptional) return true
+            return false
+        }
+
+        // 4. Overall typo distance on normalized joined text (for minor single-letter typos)
+        val maxLen = maxOf(joined1.length, joined2.length)
         if (maxLen >= 6) {
-            val dist = levenshteinDistance(c1, c2)
-            if (dist <= 2 || (dist.toDouble() / maxLen.toDouble()) <= 0.22) {
+            val dist = levenshteinDistance(joined1, joined2)
+            // Edit distance <= 1 for titles >= 6 chars, provided neither has differing digits
+            val digits1 = joined1.filter { it.isDigit() }
+            val digits2 = joined2.filter { it.isDigit() }
+            if (dist <= 1 && digits1 == digits2) {
                 return true
             }
         }

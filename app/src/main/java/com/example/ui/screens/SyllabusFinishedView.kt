@@ -95,26 +95,32 @@ fun SyllabusFinishedSubList(
         }
     }
 
-    // Filter completed assignments
+    // Filter completed / submitted assignments
     val completedAssignments = remember(assignments, searchQuery) {
-        assignments.filter { it.status.equals("Completed", ignoreCase = true) }
-            .filter { asg ->
-                searchQuery.isBlank() ||
-                        asg.title.contains(searchQuery, ignoreCase = true) ||
-                        asg.subject.contains(searchQuery, ignoreCase = true) ||
-                        (asg.notes?.contains(searchQuery, ignoreCase = true) == true)
-            }
+        assignments.filter { 
+            it.status.equals("Completed", ignoreCase = true) || 
+            it.status.equals("Submitted", ignoreCase = true) || 
+            (it.authorName.isNotBlank() && it.authorName != "Classmate") 
+        }.filter { asg ->
+            searchQuery.isBlank() ||
+                    asg.title.contains(searchQuery, ignoreCase = true) ||
+                    asg.subject.contains(searchQuery, ignoreCase = true) ||
+                    (asg.notes?.contains(searchQuery, ignoreCase = true) == true)
+        }
     }
 
-    // Filter completed assessments
+    // Filter completed / submitted assessments
     val completedAssessments = remember(assessments, searchQuery) {
-        assessments.filter { it.status.equals("Completed", ignoreCase = true) }
-            .filter { ass ->
-                searchQuery.isBlank() ||
-                        ass.title.contains(searchQuery, ignoreCase = true) ||
-                        ass.subject.contains(searchQuery, ignoreCase = true) ||
-                        (ass.syllabus?.contains(searchQuery, ignoreCase = true) == true)
-            }
+        assessments.filter { 
+            it.status.equals("Completed", ignoreCase = true) || 
+            it.status.equals("Submitted", ignoreCase = true) || 
+            (it.authorName.isNotBlank() && it.authorName != "Classmate") 
+        }.filter { ass ->
+            searchQuery.isBlank() ||
+                    ass.title.contains(searchQuery, ignoreCase = true) ||
+                    ass.subject.contains(searchQuery, ignoreCase = true) ||
+                    (ass.syllabus?.contains(searchQuery, ignoreCase = true) == true)
+        }
     }
 
     // Group topics by subject

@@ -424,6 +424,13 @@ fun TimetableClassRow(
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
+                if (classItem.authorName.isNotBlank() && classItem.authorName != "Classmate") {
+                    Text(
+                        text = "📅 Scanned by: ${classItem.authorName}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
                 
                 // Show Non-Lecture / Practical / Clinical Badging
                 val lowerSubject = classItem.subject.lowercase()
