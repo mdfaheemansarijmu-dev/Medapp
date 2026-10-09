@@ -282,13 +282,32 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
     fun getAllAttendance(): Flow<List<AttendanceRecord>> = plannerDao.getAllAttendance()
 
     suspend fun saveAttendanceRecord(record: AttendanceRecord) {
-        plannerDao.insertAttendanceRecord(record)
-        syncManager.pushAttendanceRecord(record)
+        val existing = if (record.firestoreId.isNotBlank()) {
+            plannerDao.getAttendanceRecordByFirestoreId(record.firestoreId)
+        } else null ?: if (record.id != 0) {
+            plannerDao.getAttendanceRecordById(record.id)
+        } else {
+            plannerDao.getAllAttendanceRecordsOnce().firstOrNull {
+                it.dateString == record.dateString &&
+                it.subject.equals(record.subject, ignoreCase = true) &&
+                ((!record.startTime.isNullOrBlank() && it.startTime == record.startTime) ||
+                 (!record.classTime.isNullOrBlank() && it.classTime == record.classTime))
+            }
+        }
+        val finalRecord = if (existing != null) {
+            record.copy(
+                id = existing.id,
+                firestoreId = if (record.firestoreId.isNotBlank()) record.firestoreId else existing.firestoreId
+            )
+        } else {
+            record
+        }
+        plannerDao.insertAttendanceRecord(finalRecord)
+        syncManager.pushAttendanceRecord(finalRecord)
     }
 
     suspend fun saveAttendanceRecords(records: List<AttendanceRecord>) {
-        plannerDao.insertAttendanceRecords(records)
-        records.forEach { syncManager.pushAttendanceRecord(it) }
+        records.forEach { saveAttendanceRecord(it) }
     }
 
     suspend fun deleteAttendanceForDate(dateString: String) {
@@ -302,6 +321,10 @@ class PlannerRepository(private val plannerDao: PlannerDao) {
     suspend fun deleteAttendanceRecord(record: AttendanceRecord) {
         plannerDao.deleteAttendanceRecordById(record.id)
         syncManager.deleteAttendanceRecord(record.firestoreId)
+    }
+
+    suspend fun clearAllAttendance() {
+        plannerDao.clearAllAttendance()
     }
 
     // Daily Subject Revisions API

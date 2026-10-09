@@ -328,7 +328,7 @@ class FirestoreSyncManager(private val plannerDao: PlannerDao) {
                                     }
                                     DocumentChange.Type.REMOVED -> {
                                         plannerDao.getAttendanceRecordByFirestoreId(fId)?.let {
-                                            plannerDao.deleteAttendanceForDate(it.dateString)
+                                            plannerDao.deleteAttendanceRecordById(it.id)
                                         }
                                     }
                                 }

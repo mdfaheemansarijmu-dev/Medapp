@@ -175,6 +175,9 @@ interface PlannerDao {
     @Query("DELETE FROM attendance_records WHERE id = :id")
     suspend fun deleteAttendanceRecordById(id: Int)
 
+    @Query("DELETE FROM attendance_records")
+    suspend fun clearAllAttendance()
+
     // Daily Subject Revisions
     @Query("SELECT * FROM daily_subject_revisions WHERE dateString = :dateString")
     fun getRevisionsForDate(dateString: String): Flow<List<DailySubjectRevision>>

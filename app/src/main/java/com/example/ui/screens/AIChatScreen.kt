@@ -427,81 +427,87 @@ fun AIChatScreen(
             // ChatGPT-Style Bottom Input Bar
             Surface(
                 color = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .imePadding()
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.Bottom
-                ) {
-                    // Capsule text container
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                        shape = RoundedCornerShape(24.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val isCompactWidth = maxWidth < 380.dp
+                    Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .padding(end = 6.dp)
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.Bottom
                     ) {
-                        Row(
+                        // Capsule text container
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            shape = RoundedCornerShape(24.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .weight(1f)
+                                .padding(end = 6.dp)
                         ) {
-                            // Plus (+) Attachment Menu Button
-                            IconButton(
-                                onClick = { showAttachmentSheet = true },
+                            Row(
                                 modifier = Modifier
-                                    .size(38.dp)
-                                    .testTag("chat_plus_button")
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
+                                // Plus (+) Attachment Menu Button
+                                IconButton(
+                                    onClick = { showAttachmentSheet = true },
                                     modifier = Modifier
-                                        .size(30.dp)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Add,
-                                        contentDescription = "Attach Files",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp)
-                                    )
+                                        .size(38.dp)
+                                        .testTag("chat_plus_button")
+                                    ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Add,
+                                            contentDescription = "Attach Files",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
                                 }
-                            }
 
-                            // Quick Camera Button
-                            IconButton(
-                                onClick = { cameraLauncher.launch(null) },
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .testTag("chat_camera_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CameraAlt,
-                                    contentDescription = "Take Photo",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
+                                if (!isCompactWidth) {
+                                    // Quick Camera Button (shown on standard/wide screens)
+                                    IconButton(
+                                        onClick = { cameraLauncher.launch(null) },
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .testTag("chat_camera_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CameraAlt,
+                                            contentDescription = "Take Photo",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
 
-                            // Quick Gallery Button
-                            IconButton(
-                                onClick = { galleryPickerLauncher.launch("image/*") },
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .testTag("chat_gallery_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.PhotoLibrary,
-                                    contentDescription = "Pick Image",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
+                                    // Quick Gallery Button (shown on standard/wide screens)
+                                    IconButton(
+                                        onClick = { galleryPickerLauncher.launch("image/*") },
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .testTag("chat_gallery_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.PhotoLibrary,
+                                            contentDescription = "Pick Image",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
 
                             // Text Input Field
                             TextField(
@@ -576,6 +582,7 @@ fun AIChatScreen(
                     }
                 }
             }
+        }
         }
 
         // ChatGPT-Style Attachment Modal Bottom Sheet

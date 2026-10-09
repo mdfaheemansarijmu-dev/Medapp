@@ -2934,6 +2934,11 @@ class PlannerViewModel(
         }
  
         viewModelScope.launch {
+            try {
+                repository.clearAllAttendance()
+            } catch (e: Exception) {
+                Log.w("PlannerViewModel", "Error clearing attendance on sign out: ${e.message}")
+            }
             addNotificationWithDuplicateCheck(
                 InAppNotification(
                     title = "Signed Out",
@@ -3229,7 +3234,9 @@ class PlannerViewModel(
                 timetable.value.take(60).forEach { classItem ->
                     batchWriter.set(userRef.collection("timetable_classes").document(classItem.firestoreId), classItem)
                 }
-                allAttendanceRecords.value.take(150).forEach { rec ->
+                val allAtt = allAttendanceRecords.value
+                val initialBatchAtt = allAtt.take(250)
+                initialBatchAtt.forEach { rec ->
                     batchWriter.set(userRef.collection("attendance_records").document(rec.firestoreId), rec)
                 }
                 completedSyllabusTopics.value.take(150).forEach { topic ->
@@ -3252,6 +3259,15 @@ class PlannerViewModel(
                 }
 
                 batchWriter.commit().await()
+                if (allAtt.size > 250) {
+                    allAtt.drop(250).chunked(400).forEach { chunk ->
+                        val extraBatch = db.batch()
+                        chunk.forEach { rec ->
+                            extraBatch.set(userRef.collection("attendance_records").document(rec.firestoreId), rec)
+                        }
+                        extraBatch.commit().await()
+                    }
+                }
                 Log.d("FirestoreSync", "All user data successfully backed up via WriteBatch for UID: $uid")
             } catch (e: Exception) {
                 Log.e("FirestoreSync", "Failed to backup user data to Firestore: ${e.message}", e)

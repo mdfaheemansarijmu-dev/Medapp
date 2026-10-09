@@ -217,41 +217,58 @@ fun MainAppLayout(
     viewModel: PlannerViewModel,
     currentScreen: Screen
 ) {
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        bottomBar = {
-            BottomNavigationBar(
-                currentScreen = currentScreen,
-                onNavigate = { viewModel.navigateTo(it) }
-            )
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            // Screen router with smooth visual transitions
-            AnimatedContent(
-                targetState = currentScreen,
-                transitionSpec = {
-                    fadeIn() togetherWith fadeOut()
-                },
-                label = "ScreenTransition"
-            ) { targetScreen ->
-                when (targetScreen) {
-                    Screen.Dashboard -> DashboardScreen(viewModel = viewModel)
-                    Screen.Timetable -> TimetableScreen(viewModel = viewModel)
-                    Screen.Planner -> PlannerScreen(viewModel = viewModel)
-                    Screen.Finished -> FinishedScreen(viewModel = viewModel)
-                    Screen.Calendar -> CalendarScreen(viewModel = viewModel)
-                    Screen.AIChat -> AIChatScreen(viewModel = viewModel)
-                    Screen.Settings -> SettingsScreen(viewModel = viewModel)
-                    Screen.Attendance -> AttendanceScreen(
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val isWideScreen = maxWidth >= 600.dp
+        val isCompactWidth = maxWidth < 380.dp
+
+        if (isWideScreen) {
+            // Expanded / Foldable / Tablet / Landscape mode: Side NavigationRail layout
+            Row(modifier = Modifier.fillMaxSize()) {
+                AppNavigationRail(
+                    currentScreen = currentScreen,
+                    onNavigate = { viewModel.navigateTo(it) }
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    ScreenRouter(
+                        currentScreen = currentScreen,
                         viewModel = viewModel,
-                        onBack = { viewModel.navigateTo(Screen.Dashboard) }
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .widthIn(max = 840.dp)
                     )
-                    else -> DashboardScreen(viewModel = viewModel)
+                }
+            }
+        } else {
+            // Standard / Compact Mobile Portrait mode: Bottom NavigationBar layout
+            Scaffold(
+                modifier = Modifier.fillMaxSize(),
+                contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
+                bottomBar = {
+                    BottomNavigationBar(
+                        currentScreen = currentScreen,
+                        isCompact = isCompactWidth,
+                        onNavigate = { viewModel.navigateTo(it) }
+                    )
+                }
+            ) { innerPadding ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = innerPadding.calculateBottomPadding()),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    ScreenRouter(
+                        currentScreen = currentScreen,
+                        viewModel = viewModel,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .widthIn(max = 600.dp)
+                    )
                 }
             }
         }
@@ -259,8 +276,40 @@ fun MainAppLayout(
 }
 
 @Composable
+fun ScreenRouter(
+    currentScreen: Screen,
+    viewModel: PlannerViewModel,
+    modifier: Modifier = Modifier
+) {
+    AnimatedContent(
+        targetState = currentScreen,
+        transitionSpec = {
+            fadeIn() togetherWith fadeOut()
+        },
+        label = "ScreenTransition",
+        modifier = modifier
+    ) { targetScreen ->
+        when (targetScreen) {
+            Screen.Dashboard -> DashboardScreen(viewModel = viewModel)
+            Screen.Timetable -> TimetableScreen(viewModel = viewModel)
+            Screen.Planner -> PlannerScreen(viewModel = viewModel)
+            Screen.Finished -> FinishedScreen(viewModel = viewModel)
+            Screen.Calendar -> CalendarScreen(viewModel = viewModel)
+            Screen.AIChat -> AIChatScreen(viewModel = viewModel)
+            Screen.Settings -> SettingsScreen(viewModel = viewModel)
+            Screen.Attendance -> AttendanceScreen(
+                viewModel = viewModel,
+                onBack = { viewModel.navigateTo(Screen.Dashboard) }
+            )
+            else -> DashboardScreen(viewModel = viewModel)
+        }
+    }
+}
+
+@Composable
 fun BottomNavigationBar(
     currentScreen: Screen,
+    isCompact: Boolean = false,
     onNavigate: (Screen) -> Unit
 ) {
     NavigationBar(
@@ -269,141 +318,115 @@ fun BottomNavigationBar(
             .testTag("bottom_nav_bar"),
         tonalElevation = 8.dp
     ) {
-        // Tab 1: Home
-        NavigationBarItem(
-            selected = currentScreen == Screen.Dashboard,
-            onClick = { onNavigate(Screen.Dashboard) },
-            icon = {
-                Icon(
-                    imageVector = if (currentScreen == Screen.Dashboard) Icons.Default.Home else Icons.Outlined.Home,
-                    contentDescription = "Dashboard"
-                )
-            },
-            label = {
-                Text(
-                    text = "Home",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            modifier = Modifier.testTag("nav_dashboard")
+        val navItems = listOf(
+            Triple(Screen.Dashboard, "Home", Pair(Icons.Default.Home, Icons.Outlined.Home)),
+            Triple(Screen.Timetable, "Classes", Pair(Icons.Default.School, Icons.Outlined.School)),
+            Triple(Screen.Planner, "Planner", Pair(Icons.Default.Assignment, Icons.Outlined.Assignment)),
+            Triple(Screen.Finished, "Finished", Pair(Icons.Default.CheckCircle, Icons.Outlined.CheckCircle)),
+            Triple(Screen.Calendar, "Calendar", Pair(Icons.Default.CalendarToday, Icons.Outlined.CalendarToday)),
+            Triple(Screen.AIChat, "AI", Pair(Icons.Default.AutoAwesome, Icons.Outlined.AutoAwesome))
         )
 
-        // Tab 2: Classes
-        NavigationBarItem(
-            selected = currentScreen == Screen.Timetable,
-            onClick = { onNavigate(Screen.Timetable) },
-            icon = {
-                Icon(
-                    imageVector = if (currentScreen == Screen.Timetable) Icons.Default.School else Icons.Outlined.School,
-                    contentDescription = "Timetable"
-                )
-            },
-            label = {
-                Text(
-                    text = "Classes",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            modifier = Modifier.testTag("nav_timetable")
+        navItems.forEach { (screen, label, icons) ->
+            val isSelected = currentScreen == screen
+            val tag = when (screen) {
+                Screen.Dashboard -> "nav_dashboard"
+                Screen.Timetable -> "nav_timetable"
+                Screen.Planner -> "nav_planner"
+                Screen.Finished -> "nav_finished"
+                Screen.Calendar -> "nav_calendar"
+                Screen.AIChat -> "nav_ai"
+                else -> "nav_${label.lowercase()}"
+            }
+
+            NavigationBarItem(
+                selected = isSelected,
+                onClick = { onNavigate(screen) },
+                icon = {
+                    Icon(
+                        imageVector = if (isSelected) icons.first else icons.second,
+                        contentDescription = label
+                    )
+                },
+                label = {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = if (isCompact) 9.sp else 10.5.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                        ),
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                alwaysShowLabel = !isCompact || isSelected,
+                modifier = Modifier.testTag(tag)
+            )
+        }
+    }
+}
+
+@Composable
+fun AppNavigationRail(
+    currentScreen: Screen,
+    onNavigate: (Screen) -> Unit
+) {
+    NavigationRail(
+        modifier = Modifier
+            .fillMaxHeight()
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .testTag("app_nav_rail"),
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        val navItems = listOf(
+            Triple(Screen.Dashboard, "Home", Pair(Icons.Default.Home, Icons.Outlined.Home)),
+            Triple(Screen.Timetable, "Classes", Pair(Icons.Default.School, Icons.Outlined.School)),
+            Triple(Screen.Planner, "Planner", Pair(Icons.Default.Assignment, Icons.Outlined.Assignment)),
+            Triple(Screen.Finished, "Finished", Pair(Icons.Default.CheckCircle, Icons.Outlined.CheckCircle)),
+            Triple(Screen.Calendar, "Calendar", Pair(Icons.Default.CalendarToday, Icons.Outlined.CalendarToday)),
+            Triple(Screen.AIChat, "AI", Pair(Icons.Default.AutoAwesome, Icons.Outlined.AutoAwesome))
         )
 
-        // Tab 3: Planner
-        NavigationBarItem(
-            selected = currentScreen == Screen.Planner,
-            onClick = { onNavigate(Screen.Planner) },
-            icon = {
-                Icon(
-                    imageVector = if (currentScreen == Screen.Planner) Icons.Default.Assignment else Icons.Outlined.Assignment,
-                    contentDescription = "Curriculum Planner"
-                )
-            },
-            label = {
-                Text(
-                    text = "Planner",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            modifier = Modifier.testTag("nav_planner")
-        )
+        Spacer(modifier = Modifier.weight(1f))
 
-        // Tab 4: Finished / Completed Syllabus
-        NavigationBarItem(
-            selected = currentScreen == Screen.Finished,
-            onClick = { onNavigate(Screen.Finished) },
-            icon = {
-                Icon(
-                    imageVector = if (currentScreen == Screen.Finished) Icons.Default.CheckCircle else Icons.Outlined.CheckCircle,
-                    contentDescription = "Finished Syllabus"
-                )
-            },
-            label = {
-                Text(
-                    text = "Finished",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontSize = 10.5.sp,
-                        fontWeight = if (currentScreen == Screen.Finished) FontWeight.Bold else FontWeight.Normal
-                    ),
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            modifier = Modifier.testTag("nav_finished")
-        )
+        navItems.forEach { (screen, label, icons) ->
+            val isSelected = currentScreen == screen
+            val tag = when (screen) {
+                Screen.Dashboard -> "nav_dashboard"
+                Screen.Timetable -> "nav_timetable"
+                Screen.Planner -> "nav_planner"
+                Screen.Finished -> "nav_finished"
+                Screen.Calendar -> "nav_calendar"
+                Screen.AIChat -> "nav_ai"
+                else -> "nav_${label.lowercase()}"
+            }
 
-        // Tab 5: Calendar
-        NavigationBarItem(
-            selected = currentScreen == Screen.Calendar,
-            onClick = { onNavigate(Screen.Calendar) },
-            icon = {
-                Icon(
-                    imageVector = if (currentScreen == Screen.Calendar) Icons.Default.CalendarToday else Icons.Outlined.CalendarToday,
-                    contentDescription = "Calendar"
-                )
-            },
-            label = {
-                Text(
-                    text = "Calendar",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            modifier = Modifier.testTag("nav_calendar")
-        )
+            NavigationRailItem(
+                selected = isSelected,
+                onClick = { onNavigate(screen) },
+                icon = {
+                    Icon(
+                        imageVector = if (isSelected) icons.first else icons.second,
+                        contentDescription = label
+                    )
+                },
+                label = {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                modifier = Modifier
+                    .padding(vertical = 4.dp)
+                    .testTag(tag)
+            )
+        }
 
-        // Tab 6: AI Notice Parser
-        NavigationBarItem(
-            selected = currentScreen == Screen.AIChat,
-            onClick = { onNavigate(Screen.AIChat) },
-            icon = {
-                Icon(
-                    imageVector = if (currentScreen == Screen.AIChat) Icons.Default.AutoAwesome else Icons.Outlined.AutoAwesome,
-                    contentDescription = "AI Assistant"
-                )
-            },
-            label = {
-                Text(
-                    text = "AI",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            modifier = Modifier.testTag("nav_ai")
-        )
-
+        Spacer(modifier = Modifier.weight(1f))
     }
 }
 
