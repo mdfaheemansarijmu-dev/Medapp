@@ -715,11 +715,6 @@ fun ModernSubjectFinishedCard(
 
     val totalStandardTopics = subject.suggestedTopics.size.coerceAtLeast(1)
     val completedCount = completedTopics.size
-    val progress = remember(completedCount, totalStandardTopics) {
-        if (totalStandardTopics > 0) {
-            (completedCount.toFloat() / totalStandardTopics.toFloat()).coerceIn(0f, 1f)
-        } else 0f
-    }
 
     val chevronRotation by animateFloatAsState(
         targetValue = if (isExpanded) 180f else 0f,
@@ -810,20 +805,10 @@ fun ModernSubjectFinishedCard(
                     }
                 }
 
-                // Circular Progress Indicator with fraction (e.g. 7/12)
-                CircularProgressFractionBadge(
-                    completed = completedCount,
-                    total = totalStandardTopics,
-                    progress = progress,
-                    accentColor = if (completedCount > 0) Color(0xFF10B981) else accentColor
-                )
-
-                Spacer(modifier = Modifier.width(8.dp))
-
                 // Chevron icon
                 IconButton(
                     onClick = onToggleExpand,
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,
@@ -996,56 +981,6 @@ fun ModernSubjectFinishedCard(
     }
 }
 
-/**
- * Clean circular progress ring with centered fraction (e.g. 7/12)
- */
-@Composable
-fun CircularProgressFractionBadge(
-    completed: Int,
-    total: Int,
-    progress: Float,
-    accentColor: Color
-) {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier.size(44.dp)
-    ) {
-        val trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
-        Canvas(modifier = Modifier.size(40.dp)) {
-            val strokeWidth = 3.5.dp.toPx()
-            // Track
-            drawArc(
-                color = trackColor,
-                startAngle = -90f,
-                sweepAngle = 360f,
-                useCenter = false,
-                style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
-            )
-            // Progress
-            if (progress > 0f) {
-                drawArc(
-                    color = accentColor,
-                    startAngle = -90f,
-                    sweepAngle = 360f * progress,
-                    useCenter = false,
-                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
-                )
-            }
-        }
-
-        // Fraction text in center
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = "$completed/$total",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 10.sp
-                ),
-                color = if (completed > 0) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
 
 /**
  * Clean, modern completed topic row inside subject card.
