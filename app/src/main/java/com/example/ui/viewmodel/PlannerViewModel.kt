@@ -454,6 +454,9 @@ class PlannerViewModel(
     private val aiActionController by lazy { AIAppActionController(repository, getApplication()) }
     val tendonVoiceManager = TendonVoiceManager(getApplication())
 
+    private val _isTendonEnabled = MutableStateFlow(true)
+    val isTendonEnabled: StateFlow<Boolean> = _isTendonEnabled.asStateFlow()
+
     private val _isTendonVisible = MutableStateFlow(false)
     val isTendonVisible: StateFlow<Boolean> = _isTendonVisible.asStateFlow()
 
@@ -461,9 +464,19 @@ class PlannerViewModel(
     val tendonLastUserSpeech: StateFlow<String> = _tendonLastUserSpeech.asStateFlow()
 
     private val _tendonLastReply = MutableStateFlow(
-        "Hello! I am Tendon, your medical AI robot. You can talk to me to schedule assessments, classes, or assignments on any date, mark attendance, or ask about your schedule!"
+        "Hello! I am Tendon, your medical AI robot. You can ask me about today's running assignments, assessments, classes, or schedule events by voice!"
     )
     val tendonLastReply: StateFlow<String> = _tendonLastReply.asStateFlow()
+
+    fun setTendonEnabled(enabled: Boolean) {
+        _isTendonEnabled.value = enabled
+        tendonVoiceManager.setVoiceReplyEnabled(enabled)
+        if (!enabled) {
+            closeTendonRobot()
+        }
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("med_planner_prefs", Application.MODE_PRIVATE)
+        sharedPrefs.edit().putBoolean("is_tendon_enabled", enabled).apply()
+    }
 
     fun openTendonRobot() {
         _isTendonVisible.value = true
@@ -515,6 +528,19 @@ class PlannerViewModel(
 
         viewModelScope.launch {
             repository.deduplicateCompletedTopics()
+            // Clean up any generic assessments that were scheduled by mistake without a real subject
+            try {
+                val allAsms = repository.getAllAssessmentsOnce()
+                for (asm in allAsms) {
+                    if (asm.subject.equals("Medical Sciences", ignoreCase = true) ||
+                        asm.syllabus.equals("Prepared via MedPulse AI", ignoreCase = true)
+                    ) {
+                        repository.deleteAssessment(asm.id)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("PlannerVM", "Cleanup check skipped: ${e.message}")
+            }
         }
 
         // Safe Firebase initialization check without forcing unconfigured FCM registration
@@ -535,6 +561,9 @@ class PlannerViewModel(
         }
         _isDarkTheme.value = sharedPrefs.getBoolean("is_dark_theme", false)
         _areNotificationsEnabled.value = sharedPrefs.getBoolean("are_notifications_enabled", true)
+        val tendonSaved = sharedPrefs.getBoolean("is_tendon_enabled", true)
+        _isTendonEnabled.value = tendonSaved
+        tendonVoiceManager.setVoiceReplyEnabled(tendonSaved)
         _attendanceTarget.value = sharedPrefs.getInt("attendance_target_percentage", 75)
         val savedModelId = sharedPrefs.getString("selected_gemini_model_id", GeminiModelOption.DEFAULT.modelId) ?: GeminiModelOption.DEFAULT.modelId
         _selectedGeminiModel.value = GeminiModelOption.fromModelId(savedModelId)
@@ -1407,9 +1436,32 @@ class PlannerViewModel(
                         repository.addChatMessage(
                             ChatMessage(sender = "ai", message = actionResult.feedbackMessage)
                         )
-                        tendonVoiceManager.speak(actionResult.feedbackMessage)
+                        if (_isTendonEnabled.value) {
+                            tendonVoiceManager.speak(actionResult.feedbackMessage)
+                        }
                         _isParsingMessage.value = false
                         syncDataToFirebase()
+                        return@launch
+                    }
+
+                    // Guard against casual or mistaken short sentences being parsed into fake notices/assessments
+                    val nonBlankLines = textInput.lines().count { it.isNotBlank() }
+                    val hasNumberedPoints = (textInput.contains("1.") || textInput.contains("1)")) &&
+                            (textInput.contains("2.") || textInput.contains("2)"))
+                    val hasExplicitDate = AcademicDateParser.parse(textInput).hasExplicitDate
+                    if (nonBlankLines < 2 && !hasNumberedPoints && !hasExplicitDate) {
+                        val safeReply = "I didn't detect a specific date or command in that message, so nothing was scheduled.\n\n" +
+                                "You can ask me:\n" +
+                                "• *\"What is today's running assignment?\"*\n" +
+                                "• *\"What assessments do I have?\"*\n" +
+                                "• *\"What classes do I have today?\"*\n\n" +
+                                "Or schedule with an exact date: *\"We have Anatomy assessment on 24th October at 10 AM\"*."
+                        _tendonLastReply.value = safeReply
+                        repository.addChatMessage(ChatMessage(sender = "ai", message = safeReply))
+                        if (_isTendonEnabled.value) {
+                            tendonVoiceManager.speak(safeReply)
+                        }
+                        _isParsingMessage.value = false
                         return@launch
                     }
                 }

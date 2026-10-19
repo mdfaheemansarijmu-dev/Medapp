@@ -631,18 +631,18 @@ fun TendonRobotModal(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 val voicePresets = listOf(
-                    "🎙️ \"We have Anatomy assessment on 24th October at 10 AM\"" to
-                            "We have Anatomy assessment on 24th October at 10:00 AM",
-                    "🎙️ \"We have 3 upcoming assessments\"" to
-                            "Upcoming Internal Assessments:\n1. Anatomy - 24/10/2026 at 10:00 AM (Upper Limb)\n2. Physiology - 28/10/2026 at 11:30 AM (Nerve Muscle)\n3. Biochemistry - 02/11/2026 at 02:00 PM (Metabolism)",
+                    "🎙️ \"What is today's running assignment?\"" to
+                            "What is today's running assignment?",
+                    "🎙️ \"What assessments do I have?\"" to
+                            "What assessments do I have?",
+                    "🗑️ \"Undo last mistaken assessment\"" to
+                            "Delete assessment scheduled by mistake",
                     "🎙️ \"What classes do I have today?\"" to
                             "What classes do I have today?",
+                    "🎙️ \"We have Anatomy assessment on 24th October at 10 AM\"" to
+                            "We have Anatomy assessment on 24th October at 10:00 AM",
                     "🎙️ \"Mark me present for all classes today\"" to
-                            "Mark me present for all classes today",
-                    "🎙️ \"When are my upcoming exams?\"" to
-                            "When are my upcoming exams?",
-                    "🎙️ \"We have Clinical Posting tomorrow at 9 AM\"" to
-                            "We have Clinical Posting tomorrow at 09:00 AM"
+                            "Mark me present for all classes today"
                 )
 
                 Row(

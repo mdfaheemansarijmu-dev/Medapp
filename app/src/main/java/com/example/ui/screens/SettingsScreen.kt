@@ -1359,6 +1359,58 @@ fun SettingsScreen(
                 }
             }
 
+            Spacer(modifier = Modifier.height(12.dp))
+
+            val isTendonEnabled by viewModel.isTendonEnabled.collectAsStateWithLifecycle()
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF4F46E5).copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SmartToy,
+                            contentDescription = null,
+                            tint = Color(0xFF4F46E5),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(14.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Tendon Voice Robot",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (isTendonEnabled) "Floating voice robot & spoken replies enabled" else "Tendon floating button & voice replies turned off",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Switch(
+                        checked = isTendonEnabled,
+                        onCheckedChange = { viewModel.setTendonEnabled(it) },
+                        modifier = Modifier.testTag("tendon_toggle_switch")
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(20.dp))
 
             // Notifications & Alerts Group

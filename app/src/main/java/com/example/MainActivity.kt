@@ -220,6 +220,7 @@ fun MainAppLayout(
     currentScreen: Screen
 ) {
     val isTendonVisible by viewModel.isTendonVisible.collectAsStateWithLifecycle()
+    val isTendonEnabled by viewModel.isTendonEnabled.collectAsStateWithLifecycle()
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isWideScreen = maxWidth >= 600.dp
@@ -246,7 +247,7 @@ fun MainAppLayout(
                             .widthIn(max = 840.dp)
                     )
 
-                    if (currentScreen != Screen.AIChat) {
+                    if (isTendonEnabled && currentScreen != Screen.AIChat) {
                         TendonFloatingButton(
                             viewModel = viewModel,
                             modifier = Modifier
@@ -284,7 +285,7 @@ fun MainAppLayout(
                             .widthIn(max = 600.dp)
                     )
 
-                    if (currentScreen != Screen.AIChat) {
+                    if (isTendonEnabled && currentScreen != Screen.AIChat) {
                         TendonFloatingButton(
                             viewModel = viewModel,
                             modifier = Modifier
