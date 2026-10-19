@@ -28,6 +28,8 @@ import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.GenerativeBackend
 
+import com.example.util.AcademicDateParser
+
 @JsonClass(generateAdapter = true)
 data class InlineData(
     val mimeType: String,
@@ -86,9 +88,9 @@ object RetrofitClient {
         .build()
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(25, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
         .addInterceptor { chain ->
             val request = chain.request()
             Log.d("RetrofitClient", "Request: ${request.url}")
@@ -251,10 +253,15 @@ class GeminiParserService {
                - Add each item to "extracted_items" with category = "Assignment"
                - Keep "extracted_timetable" = []
 
-            4. ASSESSMENTS, TESTS & EXAMS:
-               If the input contains internal assessments, class tests, vivas, exams, quizzes, or evaluations:
+            4. ASSESSMENTS, TESTS & EXAMS (CRITICAL FOR MULTI-ASSESSMENT NOTICES):
+               If the input contains internal assessments, class tests, vivas, exams, quizzes, or evaluations (e.g. a WhatsApp message listing 3 upcoming assessments for Anatomy, Physiology, Biochemistry on different dates):
                - Set document_type = "Assessment Notice"
-               - Add each item to "extracted_items" with category = "Assessment"
+               - You MUST extract EVERY SINGLE ASSESSMENT SEPARATELY into "extracted_items". NEVER combine them into a single item!
+               - Set category = "Assessment"
+               - Set "due_date_description" to the exact parsed date and time (e.g. "2026-10-24 10:00 AM", "28/10/2026 11:30 AM", "02/11/2026 02:00 PM", or "24th Oct 2026 10:00 AM"). DO NOT omit the date or year!
+               - Extract "subject" = the specific subject (e.g. "Anatomy", "Physiology", "Biochemistry")
+               - Extract "title" = descriptive title (e.g. "Anatomy Assessment", "Physiology Test")
+               - Extract "details" = syllabus topics mentioned (e.g. "Upper Limb & General Anatomy")
                - Keep "extracted_timetable" = []
 
             5. SCHEDULE ADJUSTMENTS & TEMPORARY OVERRIDES:
@@ -295,8 +302,9 @@ class GeminiParserService {
             SCHEMA FIELD DEFINITIONS:
             - If "document_type" is "Weekly Timetable", populate "extracted_timetable" where each item has:
               { "day_of_week": <1 to 7>, "period_number": <1, 2, ...>, "start_time": "<hh:mm AM/PM>", "end_time": "<hh:mm AM/PM>", "subject": "<Subject Name>", "teacher_name": "<Teacher or null>", "room": "<Room or null>", "is_practical": <true/false>, "is_lunch_break": <true/false> }
-            - If "document_type" is "Assessment Notice" or "Assignment Notice" or "Schedule Override" or "Holiday Notice", populate "extracted_items" where each item has:
-              { "category": "<Assessment|Assignment|Holiday|Class Cancellation|Room Change|Teacher Change|Schedule Change>", "subject": "<Subject Name>", "title": "<Clear Descriptive Title>", "due_date_description": "<Date / Time / Deadline>", "priority": "<High|Medium|Low>", "details": "<Brief Description>" }
+            - If "document_type" is "Assessment Notice" or "Assignment Notice" or "Schedule Override" or "Holiday Notice", populate "extracted_items" where each individual item has:
+              { "category": "<Assessment|Assignment|Holiday|Class Cancellation|Room Change|Teacher Change|Schedule Change>", "subject": "<Subject Name>", "title": "<Clear Descriptive Title>", "due_date_description": "<Exact Date and Time, e.g. 2026-10-24 10:00 AM>", "priority": "<High|Medium|Low>", "details": "<Syllabus or Description>" }
+            - If the input contains multiple items (e.g. 3 assessments on different dates), "extracted_items" MUST contain 3 separate items, each with its own subject, date, and title!
             - If the input does NOT contain timetable classes, "extracted_timetable" MUST be [] (empty array).
             - If the input does NOT contain notices or assignments, "extracted_items" MUST be [] (empty array).
         """.trimIndent()
@@ -318,7 +326,7 @@ class GeminiParserService {
                 maxOutputTokens = 8192
             ),
             systemInstruction = GeminiContent(
-                parts = listOf(GeminiPart(text = "You are a professional medical and college student assistant. Extract all weekly schedule classes across all days in structured JSON."))
+                parts = listOf(GeminiPart(text = "You are an expert medical academic assistant. Extract all weekly schedule classes across all days, or every individual assessment, assignment, and notice with its exact date and time in structured JSON."))
             )
         )
 
@@ -330,8 +338,8 @@ class GeminiParserService {
             jsonText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
         } catch (e: Exception) {
             Log.e("GeminiParser", "$targetModel call failed: ${e.message}. Trying backup model...", e)
-            val fallbackModel = if (targetModel != "gemini-2.5-flash") {
-                "gemini-2.5-flash"
+            val fallbackModel = if (targetModel != GeminiModelOption.FLASH_35.modelId) {
+                GeminiModelOption.FLASH_35.modelId
             } else {
                 GeminiModelOption.FLASH_LITE.modelId
             }
@@ -456,43 +464,61 @@ class GeminiParserService {
             }
         }
 
-        // 3. WhatsApp Announcement & Notice Parsing (Assessments, Assignments, Overrides, Holidays)
-        val whatsappRegex = Regex("^\\[?\\d{1,2}[/\\.-]\\d{1,2}(?:[/\\.-]\\d{2,4})?,?\\s*\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:[ap]\\.?m\\.?)?\\]?\\s*(?:-\\s*)?(?:[^:\\n]{1,50}:)?\\s*", RegexOption.IGNORE_CASE)
+        // 3. High-Precision WhatsApp Announcement & Notice Parsing (Assessments, Assignments, Overrides, Holidays)
+        val whatsappRegex = Regex("(?i)^\\[?\\d{1,2}[/\\.-]\\d{1,2}(?:[/\\.-]\\d{2,4})?,?\\s*\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:[ap]\\.?m\\.?)?\\]?\\s*(?:-\\s*)?(?:[^:\\n]{1,50}:)?\\s*")
 
-        val rawLines = input.lines().flatMap { line ->
+        // Split multi-announcements separated by newlines, bullets, or numbered points: "1. ...", "1) ...", "[1] ...", "• ..."
+        val rawChunks = mutableListOf<String>()
+        for (line in input.lines()) {
             val trimmed = line.trim()
-            if (trimmed.isBlank()) emptyList()
-            else {
-                // Split multi-announcements separated by bullets or numbered points like "1. ... 2. ...",
-                // BUT strictly avoid splitting decimal numbers/times like "2.30 to 3.30"!
-                trimmed.split(Regex("(?<=\\s)(?=[0-9]{1,2}\\.\\s+[A-Za-z])|[;•]")).map { it.trim() }
-            }
-        }.filter { it.length >= 4 }
+            if (trimmed.isBlank()) continue
+            // Split points in same line like "1. Anatomy ... 2. Physiology ... 3. Biochemistry ..."
+            val subPoints = trimmed.split(Regex("(?<=\\s)(?=[0-9]{1,2}[.)\\]\\-]\\s+[A-Za-z])|(?<=\\s)(?=[•*▪]\\s+[A-Za-z])|[;]"))
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+            rawChunks.addAll(subPoints)
+        }
 
         val items = mutableListOf<ParsedItem>()
         var detectedOverride = false
         var overrideDate: String? = null
+        var activeContextCategory: String? = null
 
-        val linesToProcess = if (rawLines.isNotEmpty()) rawLines else listOf(input.trim())
+        // Detect if the overall document has a global header intent (e.g. "Upcoming Internal Assessments", "Exam Routine")
+        val lowerInput = input.lowercase(Locale.US)
+        if (lowerInput.contains("internal assessment") || lowerInput.contains("upcoming assessment") || lowerInput.contains("assessment notice") || lowerInput.contains("exam schedule") || lowerInput.contains("test schedule") || lowerInput.contains("viva schedule")) {
+            activeContextCategory = "Assessment"
+        } else if (lowerInput.contains("assignment notice") || lowerInput.contains("homework submission") || lowerInput.contains("record book submission")) {
+            activeContextCategory = "Assignment"
+        }
 
-        for (line in linesToProcess) {
+        for (chunk in rawChunks) {
             // Strip WhatsApp sender and timestamp headers
-            var clean = whatsappRegex.replace(line, "").trim()
-            clean = clean.replace(Regex("^[0-9]+\\.\\s*"), "").replace(Regex("^[-*•]\\s*"), "").trim()
+            var clean = whatsappRegex.replace(chunk, "").trim()
+            clean = clean.replace(Regex("^[0-9]{1,2}[.)\\]\\-]\\s*"), "").replace(Regex("^[-*•▪]\\s*"), "").trim()
 
             // If clean line is too short or is a noise fragment like "30 to" or numbers, ignore
-            if (clean.length < 4 || clean.matches(Regex("^[0-9\\s\\.\\:to\\-]+$", RegexOption.IGNORE_CASE))) {
+            if (clean.length < 3 || clean.matches(Regex("^[0-9\\s\\.\\:to\\-]+$", RegexOption.IGNORE_CASE))) {
                 continue
             }
-            val lower = clean.lowercase()
+            val lower = clean.lowercase(Locale.US)
 
-            // Skip pure header lines like "Notice:", "Dear Students", "WhatsApp Announcement"
-            if (lower in listOf("notice", "important notice", "dear students", "batch announcement", "attention students", "circular") ||
-                lower.startsWith("dear all") || (lower.startsWith("batch 20") && lower.length < 15)) {
+            // Check if this line is a pure header setting category context
+            if (lower.contains("upcoming assessment") || lower.contains("internal assessment") || lower.contains("assessment notice") || lower.contains("test schedule") || lower.contains("exam notice") || lower.contains("exam routine")) {
+                activeContextCategory = "Assessment"
+                continue
+            }
+            if (lower.contains("assignment notice") || lower.contains("homework") || lower.contains("record submission") || lower.contains("logbook submission")) {
+                activeContextCategory = "Assignment"
+                continue
+            }
+            if (lower in listOf("notice", "important notice", "dear students", "batch announcement", "attention students", "circular", "batch notification", "dear all") ||
+                (lower.startsWith("batch 20") && lower.length < 16) ||
+                lower.startsWith("all students must") || lower.startsWith("regards") || lower.startsWith("thank you") || lower.startsWith("dean office") || lower.startsWith("hod office")) {
                 continue
             }
 
-            // Detect Category
+            // Detect Category (inherits activeContextCategory if line doesn't explicitly name another category)
             val category = when {
                 lower.contains("cancel") || lower.contains("postpone") || lower.contains("no class") || lower.contains("will not be taken") -> {
                     detectedOverride = true
@@ -527,14 +553,15 @@ class GeminiParserService {
                 lower.contains("posting") || lower.contains("ward") || lower.contains("clinical") -> {
                     "Clinical Posting"
                 }
+                activeContextCategory != null -> activeContextCategory!!
                 else -> "General Notice"
             }
 
             // Detect Subject
             val subject = when {
                 lower.contains("biochem") || lower.contains("tryptophan") || lower.contains("metabolism") || lower.contains("enzyme") || lower.contains("amino acid") || lower.contains("carbohydrate") || lower.contains("lipid") || lower.contains("protein") || lower.contains("glycolysis") -> "Biochemistry"
-                lower.contains("physio") || lower.contains("hypothalamic") || lower.contains("pituitary") || lower.contains("hormone") || lower.contains("endocrine") || lower.contains("cns") || lower.contains("reflex") || lower.contains("cardiovascular") || lower.contains("renal") || lower.contains("respiratory") || lower.contains("nerve") || lower.contains("muscle") -> "Physiology"
-                lower.contains("anatomy") || lower.contains("dissection") || lower.contains("histology") || lower.contains("embryology") || lower.contains("osteology") || lower.contains("gross") || lower.contains("cadaver") || lower.contains("thorax") || lower.contains("abdomen") -> "Anatomy"
+                lower.contains("physio") || lower.contains("hypothalamic") || lower.contains("pituitary") || lower.contains("hormone") || lower.contains("endocrine") || lower.contains("cns") || lower.contains("reflex") || lower.contains("cardiovascular") || lower.contains("renal") || lower.contains("respiratory") || lower.contains("nerve") || lower.contains("muscle") || lower.contains("cvs") -> "Physiology"
+                lower.contains("anatomy") || lower.contains("dissection") || lower.contains("histology") || lower.contains("embryology") || lower.contains("osteology") || lower.contains("gross") || lower.contains("cadaver") || lower.contains("thorax") || lower.contains("abdomen") || lower.contains("upper limb") || lower.contains("lower limb") -> "Anatomy"
                 lower.contains("organon") || lower.contains("aphorism") || lower.contains("vital force") || lower.contains("miasm") -> "Organon of Medicine"
                 lower.contains("materia medica") || lower.contains("materia") -> "Materia Medica"
                 lower.contains("repertory") || lower.contains("rubric") -> "Repertory"
@@ -551,30 +578,19 @@ class GeminiParserService {
                 else -> "General"
             }
 
-            // Detect Due / Effective Date & Time Range
-            val dayMatch = Regex("\\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\\b", RegexOption.IGNORE_CASE).find(lower)
-            val dayName = dayMatch?.value?.replaceFirstChar { it.uppercase() }
-
-            val timeMatch = Regex("(\\d{1,2}(?:[\\.:]\\d{2})?)\\s*(?:to|-)\\s*(\\d{1,2}(?:[\\.:]\\d{2})?)\\s*([ap]m)?", RegexOption.IGNORE_CASE).find(lower)
-            val dueDate = if (dayName != null && timeMatch != null) {
-                var t1 = timeMatch.groupValues[1].replace('.', ':')
-                var t2 = timeMatch.groupValues[2].replace('.', ':')
-                if (!t1.contains(':')) t1 += ":00"
-                if (!t2.contains(':')) t2 += ":00"
-                val h1 = t1.substringBefore(':').toIntOrNull() ?: 12
-                val h2 = t2.substringBefore(':').toIntOrNull() ?: 12
-                val m1 = t1.substringAfter(':')
-                val m2 = t2.substringAfter(':')
-                val p1 = if (h1 in 1..7 || lower.contains("pm")) "PM" else "AM"
-                val p2 = if (h2 in 1..7 || lower.contains("pm")) "PM" else "AM"
-                val formatted = String.format(Locale.ENGLISH, "%s (%02d:%s %s - %02d:%s %s)", dayName, h1, m1, p1, h2, m2, p2)
-                if (overrideDate == null && detectedOverride) overrideDate = dayName
-                formatted
-            } else if (dayName != null) {
-                if (overrideDate == null && detectedOverride) overrideDate = dayName
-                if (lower.contains("next $dayName", ignoreCase = true)) "Next $dayName" else dayName
+            // High-Precision Date & Time extraction using AcademicDateParser
+            val parsedDate = AcademicDateParser.parse(clean)
+            val dueDate = if (parsedDate.hasExplicitDate) {
+                if (parsedDate.hasExplicitTime) "${parsedDate.dateString} ${parsedDate.timeString}"
+                else "${parsedDate.dateString} 09:30 AM"
+            } else if (parsedDate.hasExplicitTime) {
+                "Today at ${parsedDate.timeString}"
             } else {
                 "Upcoming"
+            }
+
+            if (detectedOverride && overrideDate == null && parsedDate.hasExplicitDate) {
+                overrideDate = parsedDate.dateString
             }
 
             // Priority
@@ -584,7 +600,7 @@ class GeminiParserService {
                 "Medium"
             }
 
-            // Clean Title
+            // Clean Title & Details
             val title = when (category) {
                 "Class Cancellation" -> {
                     if (subject != "General") "$subject Class Cancelled" else "Class Cancelled"
@@ -604,7 +620,14 @@ class GeminiParserService {
                 "Assessment" -> {
                     val topicMatch = Regex("^(.*?)(?:\\s+assessment|\\s+test|\\s+exam|\\s+viva|\\s+quiz)", RegexOption.IGNORE_CASE).find(clean)
                     val rawTopic = topicMatch?.groupValues?.get(1)?.trim()
-                    if (!rawTopic.isNullOrBlank() && rawTopic.length > 3 && !rawTopic.contains("upcoming", ignoreCase = true)) {
+                    val testType = when {
+                        lower.contains("viva") -> "Viva"
+                        lower.contains("quiz") -> "Quiz"
+                        lower.contains("internal") -> "Internal Assessment"
+                        lower.contains("exam") -> "Exam"
+                        else -> "Assessment"
+                    }
+                    if (!rawTopic.isNullOrBlank() && rawTopic.length > 3 && !rawTopic.contains("upcoming", ignoreCase = true) && !rawTopic.contains("internal", ignoreCase = true)) {
                         val formattedTopic = rawTopic
                             .replace(Regex("\\bpost\\.\\s*pituitary\\b", RegexOption.IGNORE_CASE), "Post. Pituitary")
                             .split(" ")
@@ -613,12 +636,11 @@ class GeminiParserService {
                                 if (word.equals("and", ignoreCase = true) || word.equals("&", ignoreCase = true)) "&"
                                 else word.replaceFirstChar { it.uppercase() }
                             }
-                        "$formattedTopic Assessment"
+                        "$formattedTopic $testType"
                     } else if (subject != "General") {
-                        val testType = if (lower.contains("viva")) "Viva" else if (lower.contains("quiz")) "Quiz" else if (lower.contains("internal")) "Internal Assessment" else "Assessment"
                         "$subject $testType"
                     } else {
-                        clean.take(45)
+                        testType
                     }
                 }
                 "Assignment" -> {
@@ -627,7 +649,12 @@ class GeminiParserService {
                         val topic = colonSplit[1].trim().split(" ").filter { it.isNotBlank() }.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
                         if (subject != "General") "$subject: $topic" else "$topic Assignment"
                     } else if (subject != "General") {
-                        val assignType = if (lower.contains("record")) "Record Submission" else if (lower.contains("journal")) "Journal Submission" else if (lower.contains("logbook")) "Logbook Submission" else "Assignment"
+                        val assignType = when {
+                            lower.contains("record") -> "Record Submission"
+                            lower.contains("journal") -> "Journal Submission"
+                            lower.contains("logbook") -> "Logbook Submission"
+                            else -> "Assignment"
+                        }
                         "$subject $assignType"
                     } else {
                         clean.take(45)
@@ -636,8 +663,12 @@ class GeminiParserService {
                 "Holiday" -> {
                     "College Holiday ($dueDate)"
                 }
-                else -> clean.take(55)
+                else -> clean.take(45)
             }
+
+            // Extract syllabus topics inside parentheses or after hyphen/colon
+            val parenMatch = Regex("\\(([^)]+)\\)").find(clean)
+            val details = parenMatch?.groupValues?.get(1)?.trim() ?: clean
 
             items.add(
                 ParsedItem(
@@ -646,7 +677,7 @@ class GeminiParserService {
                     title = title,
                     due_date_description = dueDate,
                     priority = priority,
-                    details = clean
+                    details = details
                 )
             )
         }

@@ -33,6 +33,8 @@ import com.example.network.AppUpdateResult
 import com.example.ui.components.OptionalUpdateDialog
 import com.example.ui.components.ForceUpdateScreen
 import com.example.ui.components.DuplicateContributionDialog
+import com.example.ui.components.TendonFloatingButton
+import com.example.ui.components.TendonRobotModal
 import com.example.ui.screens.*
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.AuthState
@@ -217,6 +219,8 @@ fun MainAppLayout(
     viewModel: PlannerViewModel,
     currentScreen: Screen
 ) {
+    val isTendonVisible by viewModel.isTendonVisible.collectAsStateWithLifecycle()
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isWideScreen = maxWidth >= 600.dp
         val isCompactWidth = maxWidth < 380.dp
@@ -241,6 +245,16 @@ fun MainAppLayout(
                             .fillMaxSize()
                             .widthIn(max = 840.dp)
                     )
+
+                    if (currentScreen != Screen.AIChat) {
+                        TendonFloatingButton(
+                            viewModel = viewModel,
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 20.dp, bottom = 24.dp)
+                                .zIndex(10f)
+                        )
+                    }
                 }
             }
         } else {
@@ -269,8 +283,25 @@ fun MainAppLayout(
                             .fillMaxSize()
                             .widthIn(max = 600.dp)
                     )
+
+                    if (currentScreen != Screen.AIChat) {
+                        TendonFloatingButton(
+                            viewModel = viewModel,
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 16.dp, bottom = 84.dp)
+                                .zIndex(10f)
+                        )
+                    }
                 }
             }
+        }
+
+        if (isTendonVisible) {
+            TendonRobotModal(
+                viewModel = viewModel,
+                onDismiss = { viewModel.closeTendonRobot() }
+            )
         }
     }
 }

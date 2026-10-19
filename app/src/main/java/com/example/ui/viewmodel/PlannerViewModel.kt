@@ -27,6 +27,7 @@ import com.example.data.sync.SharedBatchNotice
 import com.example.util.AcademicNotificationManager
 import com.example.util.*
 import com.example.util.GoogleCalendarSyncManager
+import com.example.domain.ai.AIAppActionController
 import com.example.network.GeminiParserService
 import com.example.network.RetrofitClient
 import com.example.network.UpdateService
@@ -450,6 +451,36 @@ class PlannerViewModel(
     }
 
     private val geminiService = GeminiParserService()
+    private val aiActionController by lazy { AIAppActionController(repository, getApplication()) }
+    val tendonVoiceManager = TendonVoiceManager(getApplication())
+
+    private val _isTendonVisible = MutableStateFlow(false)
+    val isTendonVisible: StateFlow<Boolean> = _isTendonVisible.asStateFlow()
+
+    private val _tendonLastUserSpeech = MutableStateFlow("")
+    val tendonLastUserSpeech: StateFlow<String> = _tendonLastUserSpeech.asStateFlow()
+
+    private val _tendonLastReply = MutableStateFlow(
+        "Hello! I am Tendon, your medical AI robot. You can talk to me to schedule assessments, classes, or assignments on any date, mark attendance, or ask about your schedule!"
+    )
+    val tendonLastReply: StateFlow<String> = _tendonLastReply.asStateFlow()
+
+    fun openTendonRobot() {
+        _isTendonVisible.value = true
+    }
+
+    fun closeTendonRobot() {
+        tendonVoiceManager.stopListening()
+        tendonVoiceManager.stopSpeaking()
+        _isTendonVisible.value = false
+    }
+
+    fun sendVoiceCommandToTendon(spokenText: String) {
+        val clean = spokenText.trim()
+        if (clean.isBlank()) return
+        _tendonLastUserSpeech.value = clean
+        sendChatMessage(clean)
+    }
 
     private val _selectedGeminiModel = MutableStateFlow(GeminiModelOption.DEFAULT)
     val selectedGeminiModel: StateFlow<GeminiModelOption> = _selectedGeminiModel.asStateFlow()
@@ -1362,6 +1393,27 @@ class PlannerViewModel(
         
         viewModelScope.launch {
             try {
+                // 1. Direct AI Command / Prompt Execution (Attendance, Timetable, Syllabus, Single Tasks, Queries)
+                if (!textInput.isNullOrBlank() && imageBytes == null) {
+                    val actionResult = aiActionController.executeActionIfCommand(
+                        prompt = textInput,
+                        currentCourse = selectedCourse.value ?: MedicalCourse.MBBS,
+                        studentName = _studentName.value,
+                        currentYear = _selectedSyllabusYear.value.ifBlank { "1st Year" }
+                    )
+                    if (actionResult.isHandled) {
+                        _activeParsedDrafts.value = emptyList()
+                        _tendonLastReply.value = actionResult.feedbackMessage
+                        repository.addChatMessage(
+                            ChatMessage(sender = "ai", message = actionResult.feedbackMessage)
+                        )
+                        tendonVoiceManager.speak(actionResult.feedbackMessage)
+                        _isParsingMessage.value = false
+                        syncDataToFirebase()
+                        return@launch
+                    }
+                }
+
                 val currentScheduleSummary = timetable.value.let { list ->
                     if (list.isEmpty()) "No classes configured yet."
                     else {
@@ -1381,13 +1433,6 @@ class PlannerViewModel(
                     currentScheduleSummary,
                     _selectedGeminiModel.value
                 )
-                if (response.extracted_timetable.isEmpty() && response.extracted_items.isEmpty()) {
-                    _activeUnifiedResponse.value = null
-                    _activeParsedDrafts.value = emptyList()
-                } else {
-                    _activeUnifiedResponse.value = response
-                    _activeParsedDrafts.value = response.extracted_items
-                }
 
                 val docName = when {
                     imageBytes != null -> "Uploaded Image Document"
@@ -1395,11 +1440,21 @@ class PlannerViewModel(
                     else -> "Uploaded PDF Document"
                 }
 
-                // If user text message was sent, do not add duplicate user message since it's already added in UI
+                // If user uploaded an image, add user upload marker
                 if (imageBytes != null) {
                     val userMsg = ChatMessage(sender = "user", message = "Uploaded document: $docName")
                     repository.addChatMessage(userMsg)
                 }
+
+                if (response.extracted_timetable.isNotEmpty()) {
+                    _activeUnifiedResponse.value = response
+                    _activeParsedDrafts.value = emptyList()
+                } else {
+                    _activeUnifiedResponse.value = null
+                    _activeParsedDrafts.value = emptyList()
+                }
+
+                val course = selectedCourse.value ?: MedicalCourse.MBBS
 
                 val aiResponseText = if (!response.conversational_response.isNullOrEmpty()) {
                     response.conversational_response
@@ -1415,26 +1470,126 @@ class PlannerViewModel(
                             "✓ $teachersCount Teachers\n" +
                             "✓ $practicalsCount Practical Sessions\n\n" +
                             "Please review the schedule preview below and tap **Replace Current Timetable** to apply it."
-                } else if (response.is_temporary_override && response.extracted_items.isNotEmpty()) {
-                    val total = response.extracted_items.size
-                    val categories = response.extracted_items.map { it.category }.distinct().joinToString(", ")
-                    "I detected a **Schedule Adjustment / Override** ($categories):\n\n" +
-                            "This adjustment is proposed for **${response.override_date ?: "Tomorrow"}**. It will adjust specific classes rather than replacing your whole timetable.\n\n" +
-                            "✓ $total Schedule adjustment${if (total > 1) "s" else ""} found.\n\n" +
-                            "Review details below and tap **Import Selected** to apply."
                 } else if (response.extracted_items.isNotEmpty()) {
-                    val assignments = response.extracted_items.count { it.category.contains("Assignment", ignoreCase = true) || it.category.contains("Homework", ignoreCase = true) }
-                    val assessments = response.extracted_items.count { it.category.contains("Assessment", ignoreCase = true) || it.category.contains("Exam", ignoreCase = true) || it.category.contains("Viva", ignoreCase = true) || it.category.contains("Test", ignoreCase = true) }
-                    val holidays = response.extracted_items.count { it.category.contains("Holiday", ignoreCase = true) }
-                    val other = response.extracted_items.size - assignments - assessments - holidays
+                    // AUTO-SCHEDULE ALL EXTRACTED ITEMS (ASSESSMENTS, ASSIGNMENTS, OVERRIDES) ON THEIR EXACT DATES!
+                    val scheduledSummaries = mutableListOf<String>()
+                    val existingAsms = repository.getAssessments(course.code).firstOrNull() ?: emptyList()
+
+                    for (item in response.extracted_items) {
+                        val parsedDate = AcademicDateParser.parse(item.due_date_description)
+                        val itemTimestamp = parsedDate.timeInMillis
+                        val dateStr = parsedDate.dateString
+
+                        val catLower = item.category.lowercase()
+                        when {
+                            catLower.contains("assessment") || catLower.contains("exam") || catLower.contains("viva") || catLower.contains("test") -> {
+                                val type = if (catLower.contains("viva")) "Viva" else if (catLower.contains("exam")) "University Exam" else "Internal Assessment"
+                                val isDup = existingAsms.any {
+                                    it.subject.equals(item.subject, ignoreCase = true) && Math.abs(it.date - itemTimestamp) < 12 * 3600 * 1000L
+                                }
+                                val asm = Assessment(
+                                    courseCode = course.code,
+                                    subject = item.subject,
+                                    title = item.title,
+                                    date = itemTimestamp,
+                                    type = type,
+                                    status = "Upcoming",
+                                    syllabus = item.details
+                                )
+                                val asmId = if (!isDup) repository.addAssessment(asm) else -1L
+                                repository.addPlannerTask(
+                                    PlannerTask(
+                                        courseCode = course.code,
+                                        title = "Prepare for ${item.title}",
+                                        date = itemTimestamp,
+                                        category = "Assessment"
+                                    )
+                                )
+                                batchSyncManager.postSharedAssessment(
+                                    assessment = asm.copy(id = asmId.toInt()),
+                                    college = _studentCollege.value,
+                                    course = course.code,
+                                    admissionYear = _studentAdmissionYear.value,
+                                    batch = _studentBatch.value,
+                                    authorName = _studentName.value.ifBlank { "Classmate" },
+                                    customBatchCode = _customBatchCode.value
+                                )
+                                addNotificationWithDuplicateCheck(
+                                    InAppNotification(
+                                        title = "Assessment Scheduled",
+                                        message = "${item.title} on ${parsedDate.readableDate} at ${parsedDate.timeString}.",
+                                        type = "exam"
+                                    )
+                                )
+                                scheduledSummaries.add("📅 **${item.title}** (${item.subject})\n   • Date: **${parsedDate.readableDate}** at **${parsedDate.timeString}**${if (!item.details.isNullOrBlank()) "\n   • Syllabus: ${item.details}" else ""}")
+                            }
+                            catLower.contains("assignment") || catLower.contains("homework") || catLower.contains("record") || catLower.contains("logbook") -> {
+                                val asg = Assignment(
+                                    courseCode = course.code,
+                                    subject = item.subject,
+                                    title = item.title,
+                                    dueDate = itemTimestamp,
+                                    type = "Record Submission",
+                                    priority = item.priority,
+                                    status = "Pending"
+                                )
+                                val asgId = repository.addAssignment(asg)
+                                repository.addPlannerTask(
+                                    PlannerTask(
+                                        courseCode = course.code,
+                                        title = item.title,
+                                        date = itemTimestamp,
+                                        category = "Assignment"
+                                    )
+                                )
+                                scheduledSummaries.add("📝 **${item.title}** (${item.subject})\n   • Due: **${parsedDate.readableDate}** at **${parsedDate.timeString}**")
+                            }
+                            catLower.contains("cancellation") || catLower.contains("room change") || catLower.contains("teacher change") || catLower.contains("schedule change") || catLower.contains("override") -> {
+                                val isCancelled = catLower.contains("cancellation")
+                                repository.addOverride(
+                                    ScheduleOverride(
+                                        courseCode = course.code,
+                                        dateString = dateStr,
+                                        subject = item.subject,
+                                        startTime = parsedDate.timeString.ifBlank { "09:00 AM" },
+                                        endTime = "10:00 AM",
+                                        room = if (catLower.contains("room")) item.details?.substringAfter("to ")?.substringBefore(" ")?.trim() ?: "Lecture Hall B" else "Lecture Hall",
+                                        teacherName = if (catLower.contains("teacher")) item.details?.substringAfter("Dr. ")?.substringBefore(" ")?.trim()?.let { "Dr. $it" } else null,
+                                        isCancelled = isCancelled
+                                    )
+                                )
+                                repository.addPlannerTask(
+                                    PlannerTask(
+                                        courseCode = course.code,
+                                        title = "${item.category}: ${item.title}",
+                                        date = itemTimestamp,
+                                        category = "Schedule Override"
+                                    )
+                                )
+                                scheduledSummaries.add("⚡ **${item.category}**: ${item.title} on **${parsedDate.readableDate}**")
+                            }
+                            else -> {
+                                repository.addPlannerTask(
+                                    PlannerTask(
+                                        courseCode = course.code,
+                                        title = item.title,
+                                        date = itemTimestamp,
+                                        category = item.category
+                                    )
+                                )
+                                scheduledSummaries.add("📌 **${item.title}** (${item.subject}) on **${parsedDate.readableDate}**")
+                            }
+                        }
+                    }
+
+                    syncDataToFirebase()
 
                     buildString {
-                        append("I analyzed the announcement and classified the following:\n\n")
-                        if (assignments > 0) append("✓ $assignments Assignment${if (assignments > 1) "s" else ""}\n")
-                        if (assessments > 0) append("✓ $assessments Assessment${if (assessments > 1) "s" else ""} / Exam${if (assessments > 1) "s" else ""}\n")
-                        if (holidays > 0) append("✓ $holidays Holiday${if (holidays > 1) "s" else ""}\n")
-                        if (other > 0) append("✓ $other General Notice${if (other > 1) "s" else ""}\n")
-                        append("\nReview the proposed items below and tap **Import Selected** to schedule them.")
+                        append("✅ **Parsed and Scheduled ${response.extracted_items.size} item${if (response.extracted_items.size > 1) "s" else ""} directly on the mentioned dates:**\n\n")
+                        scheduledSummaries.forEachIndexed { i, summary ->
+                            append("${i + 1}. $summary\n\n")
+                        }
+                        append("📌 All items have been saved to your **Calendar** and **Planner**. You can visit the Calendar tab on those dates to see them.")
                     }
                 } else {
                     if (imageBytes != null) {
@@ -1444,17 +1599,22 @@ class PlannerViewModel(
                     }
                 }
 
+                _tendonLastReply.value = aiResponseText
                 val aiMsg = ChatMessage(
                     sender = "ai",
                     message = aiResponseText
                 )
                 repository.addChatMessage(aiMsg)
+                tendonVoiceManager.speak(aiResponseText)
 
             } catch (e: Exception) {
                 Log.e("PlannerVM", "Error parsing input document", e)
+                val errMsg = "Sorry, I ran into an error parsing the input. Please try again."
+                _tendonLastReply.value = errMsg
                 repository.addChatMessage(
-                    ChatMessage(sender = "ai", message = "Sorry, I ran into an error parsing the input. Please try again.")
+                    ChatMessage(sender = "ai", message = errMsg)
                 )
+                tendonVoiceManager.speak(errMsg)
             } finally {
                 _isParsingMessage.value = false
             }
@@ -1631,34 +1791,11 @@ class PlannerViewModel(
     fun approveAndImportDrafts(approvedList: List<ParsedItem>) {
         val course = selectedCourse.value ?: return
         viewModelScope.launch {
-            val calendar = Calendar.getInstance()
-            val formatDays = mapOf(
-                "tomorrow" to 1,
-                "monday" to calculateDaysToDayOfWeek(Calendar.MONDAY),
-                "tuesday" to calculateDaysToDayOfWeek(Calendar.TUESDAY),
-                "wednesday" to calculateDaysToDayOfWeek(Calendar.WEDNESDAY),
-                "thursday" to calculateDaysToDayOfWeek(Calendar.THURSDAY),
-                "friday" to calculateDaysToDayOfWeek(Calendar.FRIDAY),
-                "saturday" to calculateDaysToDayOfWeek(Calendar.SATURDAY),
-                "sunday" to calculateDaysToDayOfWeek(Calendar.SUNDAY)
-            )
-
             for (item in approvedList) {
-                // Determine timestamps
-                val itemCal = Calendar.getInstance()
-                val desc = item.due_date_description.lowercase().trim()
-                var daysOffset = 0
-                for ((key, offset) in formatDays) {
-                    if (desc.contains(key)) {
-                        daysOffset = offset
-                        break
-                    }
-                }
-                itemCal.add(Calendar.DAY_OF_YEAR, daysOffset)
-                val itemTimestamp = itemCal.timeInMillis
-                
-                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-                val dateStr = sdf.format(itemCal.time)
+                // Determine timestamps accurately via AcademicDateParser
+                val parsedDate = AcademicDateParser.parse(item.due_date_description)
+                val itemTimestamp = parsedDate.timeInMillis
+                val dateStr = parsedDate.dateString
 
                 // Add Teachers and Rooms if found
                 item.details?.let { details ->
@@ -4323,6 +4460,7 @@ class PlannerViewModel(
     override fun onCleared() {
         super.onCleared()
         batchSyncManager.stopListening()
+        tendonVoiceManager.shutdown()
     }
 
 }

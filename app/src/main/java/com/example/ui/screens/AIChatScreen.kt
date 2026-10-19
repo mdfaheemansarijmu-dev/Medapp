@@ -125,7 +125,8 @@ fun AIChatScreen(
             val spokenText: String? =
                 result.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.get(0)
             if (!spokenText.isNullOrBlank()) {
-                textInput = spokenText
+                // Immediately execute spoken instruction through Tendon without needing to type or press Send!
+                viewModel.sendVoiceCommandToTendon(spokenText)
             }
         }
     }
@@ -212,7 +213,7 @@ fun AIChatScreen(
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "MedPulse AI",
+                                text = "Tendon AI",
                                 style = MaterialTheme.typography.titleMedium.copy(
                                     fontWeight = FontWeight.Bold,
                                     letterSpacing = (-0.3).sp
@@ -260,22 +261,49 @@ fun AIChatScreen(
                             }
                         }
                         Text(
-                            text = "${selectedModel.displayName} • ${selectedModel.latencyLabel}",
+                            text = "Voice & Text Medical Robot • ${selectedModel.displayName}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
 
-                IconButton(
-                    onClick = { viewModel.clearChatHistory() },
-                    modifier = Modifier.testTag("clear_chat_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.DeleteSweep,
-                        contentDescription = "Clear Chat History",
-                        tint = MaterialTheme.colorScheme.outline
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Surface(
+                        onClick = { viewModel.openTendonRobot() },
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color(0xFF4F46E5),
+                        modifier = Modifier.testTag("open_tendon_voice_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.RecordVoiceOver,
+                                contentDescription = "Talk to Tendon",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "Talk",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    IconButton(
+                        onClick = { viewModel.clearChatHistory() },
+                        modifier = Modifier.testTag("clear_chat_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteSweep,
+                            contentDescription = "Clear Chat History",
+                            tint = MaterialTheme.colorScheme.outline
+                        )
+                    }
                 }
             }
 
@@ -293,8 +321,9 @@ fun AIChatScreen(
                         AIChatWelcomeCard(
                             selectedModel = selectedModel,
                             onSwitchModelClick = { showModelPickerSheet = true },
+                            onTalkToTendonClick = { viewModel.openTendonRobot() },
                             onSuggestionClick = { suggestion ->
-                                textInput = suggestion
+                                viewModel.sendVoiceCommandToTendon(suggestion)
                             },
                             onAttachClick = {
                                 showAttachmentSheet = true
@@ -303,7 +332,13 @@ fun AIChatScreen(
                     }
                 } else {
                     items(chatMessages) { chat ->
-                        ChatBubbleRow(chat)
+                        ChatBubbleRow(
+                            chat = chat,
+                            onSpeakClick = { msg ->
+                                viewModel.tendonVoiceManager.setVoiceReplyEnabled(true)
+                                viewModel.tendonVoiceManager.speak(msg)
+                            }
+                        )
                     }
                 }
 
@@ -536,17 +571,17 @@ fun AIChatScreen(
                                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface)
                             )
 
-                            // Mic Button
+                            // Mic Button -> Opens Tendon Voice Robot for hands-free talking
                             IconButton(
-                                onClick = { triggerSpeechRecognition() },
+                                onClick = { viewModel.openTendonRobot() },
                                 modifier = Modifier
                                     .size(38.dp)
                                     .testTag("mic_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Mic,
-                                    contentDescription = "Voice input",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    contentDescription = "Talk to Tendon",
+                                    tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -656,6 +691,7 @@ fun AIChatScreen(
 fun AIChatWelcomeCard(
     selectedModel: GeminiModelOption,
     onSwitchModelClick: () -> Unit,
+    onTalkToTendonClick: () -> Unit = {},
     onSuggestionClick: (String) -> Unit,
     onAttachClick: () -> Unit
 ) {
@@ -669,12 +705,13 @@ fun AIChatWelcomeCard(
             modifier = Modifier
                 .size(56.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                .background(MaterialTheme.colorScheme.primaryContainer)
+                .clickable { onTalkToTendonClick() },
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = Icons.Default.AutoAwesome,
-                contentDescription = null,
+                imageVector = Icons.Default.SmartToy,
+                contentDescription = "Tendon Robot",
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(28.dp)
             )
@@ -683,7 +720,7 @@ fun AIChatWelcomeCard(
         Spacer(modifier = Modifier.height(14.dp))
 
         Text(
-            text = "What can I help you plan?",
+            text = "Hi, I'm Tendon Robot",
             style = MaterialTheme.typography.headlineSmall.copy(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = (-0.3).sp
@@ -695,7 +732,7 @@ fun AIChatWelcomeCard(
         Spacer(modifier = Modifier.height(6.dp))
 
         Text(
-            text = "Ask questions, schedule duties, or attach photos, PDF files, and WhatsApp timetable notes.",
+            text = "Talk to me with your voice to schedule assessments, events, or attendance—and I will reply in voice form!",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -746,47 +783,55 @@ fun AIChatWelcomeCard(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // ChatGPT-style Quick Starter Prompts
+        // Quick Starter Prompts for Full App Control by Voice or Tap
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             ChatSuggestionCard(
-                icon = Icons.Default.DateRange,
-                iconTint = Color(0xFF3B82F6),
-                title = "Import Medical Timetable",
-                subtitle = "Take photo or upload PDF of your routine",
-                onClick = onAttachClick
+                icon = Icons.Default.Mic,
+                iconTint = Color(0xFFEC4899),
+                title = "Talk to Tendon Robot (Hands-Free Voice)",
+                subtitle = "Speak any assessment date or question & get a voice reply",
+                onClick = onTalkToTendonClick
             )
 
             ChatSuggestionCard(
                 icon = Icons.Default.Chat,
                 iconTint = Color(0xFFF59E0B),
-                title = "Parse WhatsApp Announcement",
-                subtitle = "Extract assignments, tests, and room changes from class group",
+                title = "Schedule 3 Upcoming Assessments",
+                subtitle = "Auto-schedules each test on its exact date & speaks confirmation",
                 onClick = {
-                    onSuggestionClick("Notice for 1st Year Batch:\n1. Anatomy assignment on Embryology due next Monday.\n2. Physiology internal assessment test on Friday at 09:00 AM.\n3. Tomorrow's 10:30 AM Histology class shifted to Lecture Hall B.")
+                    onSuggestionClick("Upcoming Internal Assessments:\n1. Anatomy - 24/10/2026 at 10:00 AM (Upper Limb & General Anatomy)\n2. Physiology - 28/10/2026 at 11:30 AM (General Physiology & Nerve Muscle)\n3. Biochemistry - 02/11/2026 at 02:00 PM (Carbohydrate Metabolism)")
+                }
+            )
+
+            ChatSuggestionCard(
+                icon = Icons.Default.CheckCircle,
+                iconTint = Color(0xFF10B981),
+                title = "Mark Attendance by Prompt",
+                subtitle = "Mark present/absent for today's classes or any specific date",
+                onClick = {
+                    onSuggestionClick("Mark me present for all classes today")
                 }
             )
 
             ChatSuggestionCard(
                 icon = Icons.Default.MenuBook,
-                iconTint = Color(0xFF10B981),
-                title = "Study & Revision Schedule",
-                subtitle = "Create high-yield study plan for upcoming university exams",
+                iconTint = Color(0xFF6366F1),
+                title = "Mark Syllabus Chapter Covered",
+                subtitle = "Log chapters directly into your Finished tab progress",
                 onClick = {
-                    onSuggestionClick("Create a focused study and revision plan for 1st Year Anatomy and Physiology for upcoming university exams.")
+                    onSuggestionClick("Mark Upper Limb finished in Anatomy")
                 }
             )
 
             ChatSuggestionCard(
-                icon = Icons.Default.LocalHospital,
-                iconTint = Color(0xFFEF4444),
-                title = "Clinical Posting Schedule",
-                subtitle = "Log ward rotations and clinical duty timings",
-                onClick = {
-                    onSuggestionClick("Hospital Posting Notice: General Medicine ward posting from 9:00 AM to 12:00 PM for Batch A starting Monday.")
-                }
+                icon = Icons.Default.DateRange,
+                iconTint = Color(0xFF3B82F6),
+                title = "Import Routine / Timetable",
+                subtitle = "Upload image or photo of official college routine",
+                onClick = onAttachClick
             )
         }
     }
@@ -849,7 +894,10 @@ fun ChatSuggestionCard(
 }
 
 @Composable
-fun ChatBubbleRow(chat: ChatMessage) {
+fun ChatBubbleRow(
+    chat: ChatMessage,
+    onSpeakClick: (String) -> Unit = {}
+) {
     val isAI = chat.sender == "ai"
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -864,8 +912,8 @@ fun ChatBubbleRow(chat: ChatMessage) {
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.AutoAwesome,
-                    contentDescription = "AI Logo",
+                    imageVector = Icons.Default.SmartToy,
+                    contentDescription = "Tendon Robot",
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(18.dp)
                 )
@@ -874,7 +922,7 @@ fun ChatBubbleRow(chat: ChatMessage) {
         }
 
         Surface(
-            color = if (isAI) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            color = if (isAI) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
             else MaterialTheme.colorScheme.primary,
             shape = RoundedCornerShape(
                 topStart = 16.dp,
@@ -882,15 +930,39 @@ fun ChatBubbleRow(chat: ChatMessage) {
                 bottomStart = if (isAI) 4.dp else 16.dp,
                 bottomEnd = if (isAI) 16.dp else 4.dp
             ),
-            modifier = Modifier.widthIn(max = 280.dp)
+            modifier = Modifier.fillMaxWidth(if (isAI) 0.90f else 0.82f)
         ) {
-            Text(
-                text = chat.message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isAI) MaterialTheme.colorScheme.onSurfaceVariant
-                else MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.padding(12.dp)
-            )
+            Column(modifier = Modifier.padding(14.dp)) {
+                Text(
+                    text = chat.message,
+                    style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp),
+                    color = if (isAI) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onPrimary
+                )
+                if (isAI) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onSpeakClick(chat.message) }
+                            .padding(vertical = 2.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VolumeUp,
+                            contentDescription = "Listen to Tendon",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = "Speak Aloud",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
         }
     }
 }
