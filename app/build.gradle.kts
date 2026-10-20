@@ -11,6 +11,18 @@ plugins {
 }
 
 android {
+  // Automatically remove any legacy .webp launcher icons if .png versions exist in the same mipmap folder
+  // to prevent AAPT2 "Duplicate resources" errors on CI/GitHub builds.
+  listOf("mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi").forEach { density ->
+    val mipmapDir = file("src/main/res/mipmap-$density")
+    if (File(mipmapDir, "ic_launcher.png").exists()) {
+      File(mipmapDir, "ic_launcher.webp").delete()
+    }
+    if (File(mipmapDir, "ic_launcher_round.png").exists()) {
+      File(mipmapDir, "ic_launcher_round.webp").delete()
+    }
+  }
+
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
