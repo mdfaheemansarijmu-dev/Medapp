@@ -4,6 +4,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -31,8 +32,11 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import com.example.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -977,78 +981,17 @@ fun OnboardingAuthChoiceScreen(
  */
 @Composable
 fun MedPulseBrandLogo(modifier: Modifier = Modifier) {
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val cx = w / 2f
-        val cy = h / 2f
-
-        // Soft circular backdrop
-        drawCircle(
-            color = containerColor,
-            radius = w * 0.46f,
-            center = Offset(cx, cy)
-        )
-
-        // Draw stylized heart outline
-        val heartPath = Path().apply {
-            moveTo(cx, cy + h * 0.28f)
-            cubicTo(
-                cx - w * 0.42f, cy - h * 0.05f,
-                cx - w * 0.36f, cy - h * 0.32f,
-                cx, cy - h * 0.12f
-            )
-            cubicTo(
-                cx + w * 0.36f, cy - h * 0.32f,
-                cx + w * 0.42f, cy - h * 0.05f,
-                cx, cy + h * 0.28f
-            )
-            close()
-        }
-
-        drawPath(
-            path = heartPath,
-            color = primaryColor,
-            style = Stroke(width = w * 0.045f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        )
-
-        // Draw horizontal ECG pulse wave crossing the heart
-        val ecgPath = Path().apply {
-            moveTo(cx - w * 0.30f, cy + h * 0.02f)
-            lineTo(cx - w * 0.12f, cy + h * 0.02f)
-            lineTo(cx - w * 0.06f, cy - h * 0.15f)
-            lineTo(cx + w * 0.04f, cy + h * 0.15f)
-            lineTo(cx + w * 0.10f, cy - h * 0.05f)
-            lineTo(cx + w * 0.14f, cy + h * 0.02f)
-            lineTo(cx + w * 0.30f, cy + h * 0.02f)
-        }
-
-        drawPath(
-            path = ecgPath,
-            color = primaryColor,
-            style = Stroke(width = w * 0.045f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        )
-
-        // Medical plus sign near top-right
-        val plusX = cx + w * 0.22f
-        val plusY = cy - h * 0.22f
-        val arm = w * 0.07f
-        drawLine(
-            color = primaryColor,
-            start = Offset(plusX - arm, plusY),
-            end = Offset(plusX + arm, plusY),
-            strokeWidth = w * 0.04f,
-            cap = StrokeCap.Round
-        )
-        drawLine(
-            color = primaryColor,
-            start = Offset(plusX, plusY - arm),
-            end = Offset(plusX, plusY + arm),
-            strokeWidth = w * 0.04f,
-            cap = StrokeCap.Round
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        Image(
+            painter = painterResource(id = R.drawable.medpulse_logo_badge),
+            contentDescription = "MedPulse Logo",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxSize(0.88f)
+                .clip(RoundedCornerShape(24))
         )
     }
 }

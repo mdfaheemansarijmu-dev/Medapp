@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -28,9 +29,11 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -405,8 +408,15 @@ private fun AuthSplashScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Brand Accent Dots
-            MedPulseBrandDots(dotSize = 14.dp, spacing = 8.dp)
+            // Official MedPulse Brand Logo Badge
+            Image(
+                painter = painterResource(id = R.drawable.medpulse_logo_badge),
+                contentDescription = "MedPulse Logo",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .size(88.dp)
+                    .clip(RoundedCornerShape(22.dp))
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -1315,7 +1325,14 @@ fun MedPulseBrandHeader(modifier: Modifier = Modifier) {
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        MedPulseBrandDots(dotSize = 10.dp, spacing = 6.dp)
+        Image(
+            painter = painterResource(id = R.drawable.medpulse_logo_badge),
+            contentDescription = "MedPulse Logo",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(14.dp))
+        )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = "MedPulse",
@@ -1323,7 +1340,7 @@ fun MedPulseBrandHeader(modifier: Modifier = Modifier) {
                 fontWeight = FontWeight.Bold,
                 letterSpacing = (-0.5).sp
             ),
-            color = Color(0xFF1E293B)
+            color = MaterialTheme.colorScheme.onBackground
         )
     }
 }

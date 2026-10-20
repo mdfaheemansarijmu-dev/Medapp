@@ -12,14 +12,17 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -30,19 +33,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -54,8 +59,8 @@ import java.util.Locale
 import kotlin.math.sin
 
 /**
- * Floating "Tendon" Robot button that can be tapped from anywhere in the app
- * to talk with the Tendon medical AI voice robot.
+ * Floating "Tendon" Robot button rendered in a sleek transparent glassmorphic style
+ * with the white & glowing-cyan 3D robot avatar.
  */
 @Composable
 fun TendonFloatingButton(
@@ -68,84 +73,58 @@ fun TendonFloatingButton(
     val infiniteTransition = rememberInfiniteTransition(label = "tendon_fab_pulse")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1f,
-        targetValue = if (isSpeaking || isListening) 1.12f else 1.04f,
+        targetValue = if (isSpeaking || isListening) 1.10f else 1.04f,
         animationSpec = infiniteRepeatable(
-            animation = tween(if (isSpeaking || isListening) 550 else 1400, easing = FastOutSlowInEasing),
+            animation = tween(if (isSpeaking || isListening) 550 else 1500, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "pulse_scale"
     )
 
-    Surface(
-        onClick = { viewModel.openTendonRobot() },
+    val glowColor = when {
+        isListening -> Color(0xFF00F0FF)
+        isSpeaking -> Color(0xFF38BDF8)
+        else -> Color(0xFF3B82F6)
+    }
+
+    Box(
         modifier = modifier
             .scale(pulseScale)
-            .shadow(12.dp, RoundedCornerShape(28.dp))
-            .testTag("tendon_floating_button"),
-        shape = RoundedCornerShape(28.dp),
-        color = Color.Transparent
-    ) {
-        Row(
-            modifier = Modifier
-                .background(
-                    Brush.horizontalGradient(
-                        colors = if (isListening) {
-                            listOf(Color(0xFF06B6D4), Color(0xFF3B82F6))
-                        } else if (isSpeaking) {
-                            listOf(Color(0xFF10B981), Color(0xFF059669))
-                        } else {
-                            listOf(Color(0xFF4F46E5), Color(0xFF7C3AED))
-                        }
+            .clip(CircleShape)
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFF0F294A).copy(alpha = 0.72f),
+                        Color(0xFF071326).copy(alpha = 0.55f)
                     )
                 )
-                .border(
-                    width = 1.5.dp,
-                    color = Color.White.copy(alpha = 0.35f),
-                    shape = RoundedCornerShape(28.dp)
-                )
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // Mini Tendon Robot Head Icon
-            TendonMiniAvatar(
-                isSpeaking = isSpeaking,
-                isListening = isListening,
-                modifier = Modifier.size(28.dp)
             )
-
-            Column {
-                Text(
-                    text = "Tendon AI",
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 0.3.sp
-                    ),
-                    color = Color.White
-                )
-                Text(
-                    text = when {
-                        isListening -> "Listening..."
-                        isSpeaking -> "Speaking..."
-                        else -> "Tap to Talk"
-                    },
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                    color = Color.White.copy(alpha = 0.88f)
-                )
-            }
-
-            Icon(
-                imageVector = Icons.Default.Mic,
-                contentDescription = "Talk to Tendon",
-                tint = Color.White,
-                modifier = Modifier.size(18.dp)
+            .border(
+                width = 1.5.dp,
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        glowColor.copy(alpha = 0.95f),
+                        Color(0xFF60A5FA).copy(alpha = 0.35f),
+                        glowColor.copy(alpha = 0.85f)
+                    )
+                ),
+                shape = CircleShape
             )
-        }
+            .clickable { viewModel.openTendonRobot() }
+            .padding(10.dp)
+            .testTag("tendon_floating_button"),
+        contentAlignment = Alignment.Center
+    ) {
+        TendonMiniAvatar(
+            isSpeaking = isSpeaking,
+            isListening = isListening,
+            modifier = Modifier.size(42.dp)
+        )
     }
 }
 
 /**
- * Mini Canvas Robot Avatar for the floating button and headers.
+ * Mini 3D White & Glowing Cyan Robot Avatar for the floating button and chat headers.
  */
 @Composable
 fun TendonMiniAvatar(
@@ -153,72 +132,104 @@ fun TendonMiniAvatar(
     isListening: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val eyeColor = when {
-        isListening -> Color(0xFF38BDF8)
-        isSpeaking -> Color(0xFF34D399)
-        else -> Color(0xFFA5B4FC)
+    val cyanGlow = when {
+        isListening -> Color(0xFF00F5FF)
+        isSpeaking -> Color(0xFF38BDF8)
+        else -> Color(0xFF00D2FF)
     }
 
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
 
-        // Antenna
+        // Subtle outer cyan halo
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(cyanGlow.copy(alpha = 0.35f), Color.Transparent),
+                center = Offset(w * 0.5f, h * 0.52f),
+                radius = w * 0.5f
+            ),
+            radius = w * 0.5f,
+            center = Offset(w * 0.5f, h * 0.52f)
+        )
+
+        // Antenna stem
         drawLine(
-            color = Color.White,
-            start = Offset(w * 0.5f, h * 0.05f),
-            end = Offset(w * 0.5f, h * 0.22f),
-            strokeWidth = w * 0.08f,
-            cap = StrokeCap.Round
-        )
-        drawCircle(
-            color = eyeColor,
-            radius = w * 0.1f,
-            center = Offset(w * 0.5f, h * 0.07f)
-        )
-
-        // Robot Head Shell
-        drawRoundRect(
-            color = Color(0xFF0F172A),
-            topLeft = Offset(w * 0.12f, h * 0.22f),
-            size = Size(w * 0.76f, h * 0.68f),
-            cornerRadius = CornerRadius(w * 0.22f, w * 0.22f)
-        )
-        drawRoundRect(
-            color = Color.White.copy(alpha = 0.85f),
-            topLeft = Offset(w * 0.12f, h * 0.22f),
-            size = Size(w * 0.76f, h * 0.68f),
-            cornerRadius = CornerRadius(w * 0.22f, w * 0.22f),
-            style = Stroke(width = w * 0.06f)
-        )
-
-        // Glowing Eyes
-        drawCircle(
-            color = eyeColor,
-            radius = w * 0.09f,
-            center = Offset(w * 0.35f, h * 0.48f)
-        )
-        drawCircle(
-            color = eyeColor,
-            radius = w * 0.09f,
-            center = Offset(w * 0.65f, h * 0.48f)
-        )
-
-        // Smile / Voice Bar
-        drawLine(
-            color = eyeColor,
-            start = Offset(w * 0.35f, h * 0.70f),
-            end = Offset(w * 0.65f, h * 0.70f),
+            color = Color(0xFFE2E8F0),
+            start = Offset(w * 0.5f, h * 0.08f),
+            end = Offset(w * 0.5f, h * 0.24f),
             strokeWidth = w * 0.07f,
             cap = StrokeCap.Round
+        )
+        // Glowing Antenna Orb
+        drawCircle(
+            color = cyanGlow,
+            radius = w * 0.09f,
+            center = Offset(w * 0.5f, h * 0.08f)
+        )
+
+        // Side Ear Pods
+        drawRoundRect(
+            color = Color(0xFFCBD5E1),
+            topLeft = Offset(w * 0.06f, h * 0.40f),
+            size = Size(w * 0.09f, h * 0.24f),
+            cornerRadius = CornerRadius(w * 0.04f, w * 0.04f)
+        )
+        drawRoundRect(
+            color = Color(0xFFCBD5E1),
+            topLeft = Offset(w * 0.85f, h * 0.40f),
+            size = Size(w * 0.09f, h * 0.24f),
+            cornerRadius = CornerRadius(w * 0.04f, w * 0.04f)
+        )
+
+        // Glossy 3D White Helmet Shell
+        drawRoundRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(Color(0xFFFFFFFF), Color(0xFFDBEAFE), Color(0xFF93C5FD))
+            ),
+            topLeft = Offset(w * 0.13f, h * 0.22f),
+            size = Size(w * 0.74f, h * 0.64f),
+            cornerRadius = CornerRadius(w * 0.28f, w * 0.28f)
+        )
+
+        // Dark Visor Screen
+        drawRoundRect(
+            color = Color(0xFF061021),
+            topLeft = Offset(w * 0.21f, h * 0.31f),
+            size = Size(w * 0.58f, h * 0.44f),
+            cornerRadius = CornerRadius(w * 0.18f, w * 0.18f)
+        )
+
+        // Glowing Cyan Eyes
+        drawCircle(
+            color = cyanGlow,
+            radius = w * 0.075f,
+            center = Offset(w * 0.37f, h * 0.49f)
+        )
+        drawCircle(
+            color = cyanGlow,
+            radius = w * 0.075f,
+            center = Offset(w * 0.63f, h * 0.49f)
+        )
+
+        // Cute Cyan Smile Curve
+        val smilePath = Path().apply {
+            moveTo(w * 0.42f, h * 0.61f)
+            quadraticTo(w * 0.50f, h * 0.69f, w * 0.58f, h * 0.61f)
+        }
+        drawPath(
+            path = smilePath,
+            color = cyanGlow,
+            style = Stroke(width = w * 0.055f, cap = StrokeCap.Round)
         )
     }
 }
 
 /**
- * Full Interactive Voice Assistant Modal for the "Tendon" Robot.
- * Students can speak naturally to schedule assessments, events, attendance, or ask questions,
- * and Tendon replies in voice form.
+ * Transparent Callout-Style Voice Assistant Overlay for the "Tendon" Robot.
+ * Opens with a transparent backdrop, the floating 3D White & Cyan AI Robot,
+ * and ONLY the text of what Tendon is telling the user inside a transparent
+ * glassmorphic callout graphic (speech bubble with pointer tail).
  */
 @Composable
 fun TendonRobotModal(
@@ -229,8 +240,6 @@ fun TendonRobotModal(
     val isSpeaking by viewModel.tendonVoiceManager.isSpeaking.collectAsStateWithLifecycle()
     val isListening by viewModel.tendonVoiceManager.isListening.collectAsStateWithLifecycle()
     val partialTranscript by viewModel.tendonVoiceManager.partialTranscript.collectAsStateWithLifecycle()
-    val isVoiceEnabled by viewModel.tendonVoiceManager.isVoiceReplyEnabled.collectAsStateWithLifecycle()
-    val statusText by viewModel.tendonVoiceManager.statusText.collectAsStateWithLifecycle()
     val isParsing by viewModel.isParsingMessage.collectAsStateWithLifecycle()
 
     val lastUserSpeech by viewModel.tendonLastUserSpeech.collectAsStateWithLifecycle()
@@ -256,13 +265,13 @@ fun TendonRobotModal(
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-                putExtra(RecognizerIntent.EXTRA_PROMPT, "Talk to Tendon (e.g. 'We have Anatomy assessment on 24 Oct')")
+                putExtra(RecognizerIntent.EXTRA_PROMPT, "Talk to Tendon (e.g. 'What is today's running assignment?')")
             }
             intentSpeechLauncher.launch(intent)
         } catch (e: Exception) {
             Toast.makeText(
                 context,
-                "Voice input not supported on this device. Tap any voice command below to test Tendon!",
+                "Voice input not supported on this device.",
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -309,365 +318,102 @@ fun TendonRobotModal(
     LaunchedEffect(Unit) {
         if (!isSpeaking && lastUserSpeech.isBlank()) {
             viewModel.tendonVoiceManager.speak(
-                "Hi! I am Tendon, your medical AI robot. Tap the mic and tell me any assessment date, class change, or question!"
+                "Hello! I'm Tendon AI. Ask me anything about your classes, assignments, or assessments!"
             )
         }
     }
 
+    // Determine the single text that Tendon is currently telling (or hearing)
+    val rawDisplayedText = when {
+        isListening && partialTranscript.isNotBlank() -> partialTranscript
+        isListening -> "Listening... Speak now"
+        isParsing -> "Checking your schedule..."
+        lastReply.isNotBlank() -> lastReply
+        else -> "Hello! 👋\nI'm Tendon AI.\nAsk me anything — classes, running assignments, assessments, or schedule an event by voice."
+    }
+
+    val cleanDisplayedText = remember(rawDisplayedText) {
+        rawDisplayedText
+            .replace("**", "")
+            .replace("*", "")
+            .trim()
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
     ) {
-        Surface(
+        // Pure transparent full-screen overlay; tapping outside dismisses
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.94f)
-                .wrapContentHeight()
-                .heightIn(max = 680.dp)
+                .fillMaxSize()
+                .background(Color(0xFF020817).copy(alpha = 0.32f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss
+                )
                 .testTag("tendon_robot_modal"),
-            shape = RoundedCornerShape(28.dp),
-            color = Color(0xFF0F172A),
-            tonalElevation = 16.dp
+            contentAlignment = Alignment.Center
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .fillMaxWidth(0.88f)
+                    .widthIn(max = 420.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {} // Consume clicks on the callout/robot so they don't dismiss
+                    ),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                // Top Bar: Badge + Mute Toggle + Close
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    when {
-                                        isListening -> Color(0xFF38BDF8)
-                                        isSpeaking -> Color(0xFF10B981)
-                                        isParsing -> Color(0xFFF59E0B)
-                                        else -> Color(0xFF818CF8)
-                                    }
-                                )
-                        )
-                        Text(
-                            text = "TENDON • VOICE AI ROBOT",
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = 1.sp
-                            ),
-                            color = Color(0xFF94A3B8)
-                        )
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        IconButton(
-                            onClick = { viewModel.tendonVoiceManager.toggleVoiceReply() },
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF1E293B))
-                                .testTag("tendon_mute_toggle")
-                        ) {
-                            Icon(
-                                imageVector = if (isVoiceEnabled) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
-                                contentDescription = if (isVoiceEnabled) "Mute Tendon Voice" else "Unmute Tendon Voice",
-                                tint = if (isVoiceEnabled) Color(0xFF34D399) else Color(0xFF64748B),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-
-                        IconButton(
-                            onClick = onDismiss,
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF1E293B))
-                                .testTag("tendon_close_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close Tendon",
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Animated Tendon Robot Avatar
-                AnimatedTendonRobotCharacter(
-                    isListening = isListening,
-                    isSpeaking = isSpeaking,
-                    isThinking = isParsing,
-                    modifier = Modifier
-                        .size(150.dp)
-                        .clickable { handleMicButtonClick() }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Status Pill
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = when {
-                        isListening -> Color(0xFF0284C7).copy(alpha = 0.25f)
-                        isSpeaking -> Color(0xFF059669).copy(alpha = 0.25f)
-                        isParsing -> Color(0xFFD97706).copy(alpha = 0.25f)
-                        else -> Color(0xFF1E293B)
-                    }
-                ) {
-                    Text(
-                        text = if (isParsing) "Tendon is scheduling..." else statusText,
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = when {
-                            isListening -> Color(0xFF38BDF8)
-                            isSpeaking -> Color(0xFF34D399)
-                            isParsing -> Color(0xFFFBBF24)
-                            else -> Color(0xFFCBD5E1)
-                        },
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Student Spoken Transcript Bubble
-                val activeSpeech = if (partialTranscript.isNotBlank()) partialTranscript else lastUserSpeech
+                // 1. TRANSPARENT GLASSMORPHIC CALLOUT GRAPHIC (Only the text what it is telling!)
                 AnimatedVisibility(
-                    visible = activeSpeech.isNotBlank(),
-                    enter = fadeIn(),
-                    exit = fadeOut()
+                    visible = cleanDisplayedText.isNotBlank(),
+                    enter = fadeIn() + scaleIn(initialScale = 0.92f),
+                    exit = fadeOut() + scaleOut(targetScale = 0.92f)
                 ) {
-                    Surface(
+                    TransparentCalloutBubble(
+                        text = cleanDisplayedText,
+                        isSpeaking = isSpeaking,
+                        isListening = isListening,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 10.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        color = Color(0xFF1E293B)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.RecordVoiceOver,
-                                contentDescription = null,
-                                tint = Color(0xFF38BDF8),
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = if (partialTranscript.isNotBlank()) "Listening..." else "You told Tendon:",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFF38BDF8)
-                                )
-                                Text(
-                                    text = "\"$activeSpeech\"",
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                    color = Color.White
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Tendon's Voice & Text Reply Card
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    color = Color(0xFF1E293B).copy(alpha = 0.85f),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        if (isSpeaking) Color(0xFF10B981).copy(alpha = 0.6f) else Color(0xFF334155)
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.SmartToy,
-                                    contentDescription = null,
-                                    tint = Color(0xFF34D399),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Text(
-                                    text = "Tendon's Voice Response",
-                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = Color(0xFF34D399)
-                                )
-                            }
-
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            .clickable {
                                 if (isSpeaking) {
-                                    TextButton(
-                                        onClick = { viewModel.tendonVoiceManager.stopSpeaking() },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Stop,
-                                            contentDescription = "Stop speaking",
-                                            tint = Color(0xFFF87171),
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Stop", fontSize = 11.sp, color = Color(0xFFF87171))
-                                    }
+                                    viewModel.tendonVoiceManager.stopSpeaking()
                                 } else {
-                                    TextButton(
-                                        onClick = {
-                                            viewModel.tendonVoiceManager.setVoiceReplyEnabled(true)
-                                            viewModel.tendonVoiceManager.speak(lastReply)
-                                        },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Replay,
-                                            contentDescription = "Speak again",
-                                            tint = Color(0xFF38BDF8),
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Speak Aloud", fontSize = 11.sp, color = Color(0xFF38BDF8))
-                                    }
+                                    viewModel.tendonVoiceManager.setVoiceReplyEnabled(true)
+                                    viewModel.tendonVoiceManager.speak(cleanDisplayedText)
                                 }
                             }
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            text = lastReply.replace("**", ""),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color(0xFFE2E8F0),
-                            lineHeight = 20.sp
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // Big Pulsing Microphone Button
-                val micScale by rememberInfiniteTransition(label = "mic_pulse").animateFloat(
-                    initialValue = 1f,
-                    targetValue = if (isListening) 1.15f else 1f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(600, easing = FastOutSlowInEasing),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "mic_scale"
-                )
-
-                Box(contentAlignment = Alignment.Center) {
-                    if (isListening) {
-                        Box(
-                            modifier = Modifier
-                                .size(92.dp)
-                                .scale(micScale)
-                                .clip(CircleShape)
-                                .background(Color(0xFF06B6D4).copy(alpha = 0.25f))
-                        )
-                    }
-
-                    Button(
-                        onClick = { handleMicButtonClick() },
-                        modifier = Modifier
-                            .size(72.dp)
-                            .testTag("tendon_mic_button"),
-                        shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isListening) Color(0xFFEF4444) else Color(0xFF4F46E5)
-                        ),
-                        contentPadding = PaddingValues(0.dp),
-                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isListening) Icons.Default.MicOff else Icons.Default.Mic,
-                            contentDescription = if (isListening) "Stop Listening" else "Talk to Tendon",
-                            tint = Color.White,
-                            modifier = Modifier.size(34.dp)
-                        )
-                    }
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                Text(
-                    text = if (isListening) "Listening... Tap to stop" else "Tap Microphone & Speak to Tendon",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color(0xFF94A3B8)
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Quick Voice Command Starters (1-Tap to simulate or trigger voice instructions)
-                Text(
-                    text = "Or tap a voice instruction to talk to Tendon:",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF64748B),
-                    modifier = Modifier.align(Alignment.Start)
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                val voicePresets = listOf(
-                    "🎙️ \"What is today's running assignment?\"" to
-                            "What is today's running assignment?",
-                    "🎙️ \"What assessments do I have?\"" to
-                            "What assessments do I have?",
-                    "🗑️ \"Undo last mistaken assessment\"" to
-                            "Delete assessment scheduled by mistake",
-                    "🎙️ \"What classes do I have today?\"" to
-                            "What classes do I have today?",
-                    "🎙️ \"We have Anatomy assessment on 24th October at 10 AM\"" to
-                            "We have Anatomy assessment on 24th October at 10:00 AM",
-                    "🎙️ \"Mark me present for all classes today\"" to
-                            "Mark me present for all classes today"
-                )
-
-                Row(
+                // 2. FLOATING 3D WHITE & CYAN ROBOT CHARACTER (Tap robot to talk / listen)
+                Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .size(230.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { handleMicButtonClick() }
+                        )
+                        .testTag("tendon_mic_button")
                 ) {
-                    voicePresets.forEach { (label, command) ->
-                        Surface(
-                            onClick = { viewModel.sendVoiceCommandToTendon(command) },
-                            shape = RoundedCornerShape(14.dp),
-                            color = Color(0xFF1E293B),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
-                        ) {
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
-                                color = Color(0xFFCBD5E1),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                            )
-                        }
-                    }
+                    AnimatedTendonRobotCharacter(
+                        isListening = isListening,
+                        isSpeaking = isSpeaking,
+                        isThinking = isParsing,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             }
         }
@@ -675,7 +421,102 @@ fun TendonRobotModal(
 }
 
 /**
- * Animated Robot Avatar for Tendon with glowing eyes, antenna, and live audio waveform.
+ * Transparent glassmorphic speech callout graphic with a bottom pointer tail pointing to the robot.
+ * Displays ONLY the text that Tendon is telling the user.
+ */
+@Composable
+fun TransparentCalloutBubble(
+    text: String,
+    isSpeaking: Boolean,
+    isListening: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val tailWidthPx = with(density) { 22.dp.toPx() }
+    val tailHeightPx = with(density) { 14.dp.toPx() }
+    val cornerRadiusPx = with(density) { 22.dp.toPx() }
+
+    val calloutShape = remember(tailWidthPx, tailHeightPx, cornerRadiusPx) {
+        GenericShape { size, _ ->
+            val rectHeight = (size.height - tailHeightPx).coerceAtLeast(0f)
+            val roundRect = RoundRect(
+                rect = Rect(0f, 0f, size.width, rectHeight),
+                cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx)
+            )
+            addRoundRect(roundRect)
+
+            // Pointer triangle tail centered at the bottom pointing down at the robot
+            val centerX = size.width * 0.5f
+            moveTo(centerX - tailWidthPx / 2f, rectHeight - 1f)
+            lineTo(centerX, size.height)
+            lineTo(centerX + tailWidthPx / 2f, rectHeight - 1f)
+            close()
+        }
+    }
+
+    val borderCyan = when {
+        isListening -> Color(0xFF00F5FF)
+        isSpeaking -> Color(0xFF38BDF8)
+        else -> Color(0xFF60A5FA)
+    }
+
+    Box(
+        modifier = modifier
+            .clip(calloutShape)
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF0F294A).copy(alpha = 0.56f),
+                        Color(0xFF08172E).copy(alpha = 0.48f)
+                    )
+                ),
+                shape = calloutShape
+            )
+            .border(
+                width = 1.5.dp,
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        borderCyan.copy(alpha = 0.92f),
+                        Color(0xFF93C5FD).copy(alpha = 0.38f),
+                        borderCyan.copy(alpha = 0.85f)
+                    )
+                ),
+                shape = calloutShape
+            )
+            .padding(
+                start = 20.dp,
+                end = 20.dp,
+                top = 16.dp,
+                bottom = 16.dp + 14.dp // extra bottom padding for tail height
+            )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 240.dp)
+                .verticalScroll(rememberScrollState()),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontWeight = FontWeight.Medium,
+                    lineHeight = 23.sp,
+                    letterSpacing = 0.1.sp
+                ),
+                color = Color(0xFFF8FAFC),
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+/**
+ * 3D-Styled Floating White & Glowing Cyan Robot Character matching the MedPulse AI reference design:
+ * - Concentric glowing blue/cyan energy rings behind the robot
+ * - Glossy white 3D rounded helmet with side ear pods and top glowing cyan antenna
+ * - Deep dark visor with two glowing cyan circular eyes and a cute cyan curved smile
+ * - Floating white 3D torso with rounded arms and a glowing cyan "AI" badge on the chest
  */
 @Composable
 fun AnimatedTendonRobotCharacter(
@@ -697,20 +538,30 @@ fun AnimatedTendonRobotCharacter(
     )
 
     val floatOffset by infiniteTransition.animateFloat(
-        initialValue = -4f,
-        targetValue = 4f,
+        initialValue = -6f,
+        targetValue = 6f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1600, easing = FastOutSlowInEasing),
+            animation = tween(1800, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "float_offset"
     )
 
-    val primaryColor = when {
-        isListening -> Color(0xFF38BDF8) // Cyan when listening
-        isSpeaking -> Color(0xFF34D399)  // Emerald when speaking
-        isThinking -> Color(0xFFFBBF24)  // Amber when thinking
-        else -> Color(0xFF818CF8)        // Indigo idle
+    val ringPulse by infiniteTransition.animateFloat(
+        initialValue = 0.94f,
+        targetValue = 1.06f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "ring_pulse"
+    )
+
+    val cyanAccent = when {
+        isListening -> Color(0xFF00F5FF)
+        isSpeaking -> Color(0xFF38BDF8)
+        isThinking -> Color(0xFF60A5FA)
+        else -> Color(0xFF00D2FF)
     }
 
     Canvas(modifier = modifier) {
@@ -718,116 +569,238 @@ fun AnimatedTendonRobotCharacter(
         val h = size.height
         val dy = floatOffset
 
-        // Outer Ambient Halo
+        val centerX = w * 0.5f
+        val centerY = h * 0.48f + dy
+
+        // 1. Outer Ambient Blue/Cyan Halo & Concentric Energy Rings (like reference image)
         drawCircle(
             brush = Brush.radialGradient(
-                colors = listOf(primaryColor.copy(alpha = 0.28f), Color.Transparent),
-                center = Offset(w * 0.5f, h * 0.5f + dy),
-                radius = w * 0.48f
+                colors = listOf(
+                    cyanAccent.copy(alpha = 0.28f),
+                    Color(0xFF1D4ED8).copy(alpha = 0.10f),
+                    Color.Transparent
+                ),
+                center = Offset(centerX, centerY),
+                radius = w * 0.48f * ringPulse
             ),
-            radius = w * 0.48f,
-            center = Offset(w * 0.5f, h * 0.5f + dy)
+            radius = w * 0.48f * ringPulse,
+            center = Offset(centerX, centerY)
         )
 
-        // Antenna Stem & Glowing Orb
+        drawCircle(
+            color = cyanAccent.copy(alpha = 0.30f),
+            radius = w * 0.42f * ringPulse,
+            center = Offset(centerX, centerY),
+            style = Stroke(width = w * 0.008f)
+        )
+
+        drawCircle(
+            color = cyanAccent.copy(alpha = 0.45f),
+            radius = w * 0.34f / ringPulse,
+            center = Offset(centerX, centerY),
+            style = Stroke(width = w * 0.010f)
+        )
+
+        // 2. Top Antenna Stem & Glowing Cyan Orb
         drawLine(
-            color = Color(0xFF94A3B8),
-            start = Offset(w * 0.5f, h * 0.10f + dy),
-            end = Offset(w * 0.5f, h * 0.24f + dy),
-            strokeWidth = w * 0.035f,
+            brush = Brush.verticalGradient(
+                colors = listOf(Color.White, Color(0xFF93C5FD))
+            ),
+            start = Offset(centerX, h * 0.11f + dy),
+            end = Offset(centerX, h * 0.22f + dy),
+            strokeWidth = w * 0.032f,
             cap = StrokeCap.Round
         )
+        // Base ring of antenna
+        drawOval(
+            color = Color(0xFFDBEAFE),
+            topLeft = Offset(centerX - w * 0.045f, h * 0.205f + dy),
+            size = Size(w * 0.09f, h * 0.03f)
+        )
+        // Glowing orb on antenna tip
         drawCircle(
-            color = primaryColor,
-            radius = w * 0.055f,
-            center = Offset(w * 0.5f, h * 0.09f + dy)
-        )
-
-        // Side Ears / Audio Receivers
-        drawRoundRect(
-            color = primaryColor.copy(alpha = 0.85f),
-            topLeft = Offset(w * 0.11f, h * 0.42f + dy),
-            size = Size(w * 0.07f, h * 0.22f),
-            cornerRadius = CornerRadius(w * 0.03f, w * 0.03f)
-        )
-        drawRoundRect(
-            color = primaryColor.copy(alpha = 0.85f),
-            topLeft = Offset(w * 0.82f, h * 0.42f + dy),
-            size = Size(w * 0.07f, h * 0.22f),
-            cornerRadius = CornerRadius(w * 0.03f, w * 0.03f)
-        )
-
-        // Main Robot Head Chassis
-        drawRoundRect(
-            color = Color(0xFF1E293B),
-            topLeft = Offset(w * 0.17f, h * 0.24f + dy),
-            size = Size(w * 0.66f, h * 0.56f),
-            cornerRadius = CornerRadius(w * 0.18f, w * 0.18f)
-        )
-        drawRoundRect(
-            color = primaryColor.copy(alpha = 0.8f),
-            topLeft = Offset(w * 0.17f, h * 0.24f + dy),
-            size = Size(w * 0.66f, h * 0.56f),
-            cornerRadius = CornerRadius(w * 0.18f, w * 0.18f),
-            style = Stroke(width = w * 0.025f)
-        )
-
-        // Inner Visor Screen
-        drawRoundRect(
-            color = Color(0xFF090D16),
-            topLeft = Offset(w * 0.23f, h * 0.31f + dy),
-            size = Size(w * 0.54f, h * 0.42f),
-            cornerRadius = CornerRadius(w * 0.12f, w * 0.12f)
-        )
-
-        // Robot Eyes
-        val eyeRadius = w * 0.06f
-        drawCircle(
-            color = primaryColor,
-            radius = eyeRadius,
-            center = Offset(w * 0.37f, h * 0.45f + dy)
-        )
-        drawCircle(
-            color = primaryColor,
-            radius = eyeRadius,
-            center = Offset(w * 0.63f, h * 0.45f + dy)
-        )
-
-        // Eye Specular Highlights
-        drawCircle(
-            color = Color.White,
-            radius = eyeRadius * 0.35f,
-            center = Offset(w * 0.35f, h * 0.43f + dy)
+            brush = Brush.radialGradient(
+                colors = listOf(Color.White, cyanAccent, cyanAccent.copy(alpha = 0f)),
+                center = Offset(centerX, h * 0.095f + dy),
+                radius = w * 0.065f
+            ),
+            radius = w * 0.065f,
+            center = Offset(centerX, h * 0.095f + dy)
         )
         drawCircle(
             color = Color.White,
-            radius = eyeRadius * 0.35f,
-            center = Offset(w * 0.61f, h * 0.43f + dy)
+            radius = w * 0.032f,
+            center = Offset(centerX, h * 0.095f + dy)
         )
 
-        // Animated Soundwave Mouth inside Visor
-        val barCount = 7
-        val startX = w * 0.33f
-        val endX = w * 0.67f
-        val stepX = (endX - startX) / (barCount - 1)
-        val centerY = h * 0.61f + dy
+        // 3. Floating Left & Right Arms (3D glossy white)
+        val armBrush = Brush.verticalGradient(
+            colors = listOf(Color.White, Color(0xFFDBEAFE), Color(0xFF60A5FA))
+        )
+        // Left Arm
+        drawRoundRect(
+            brush = armBrush,
+            topLeft = Offset(w * 0.21f, h * 0.62f + dy),
+            size = Size(w * 0.085f, h * 0.20f),
+            cornerRadius = CornerRadius(w * 0.05f, w * 0.05f)
+        )
+        // Right Arm
+        drawRoundRect(
+            brush = armBrush,
+            topLeft = Offset(w * 0.705f, h * 0.62f + dy),
+            size = Size(w * 0.085f, h * 0.20f),
+            cornerRadius = CornerRadius(w * 0.05f, w * 0.05f)
+        )
 
-        for (i in 0 until barCount) {
-            val x = startX + i * stepX
-            val activeAmplitude = if (isSpeaking || isListening) {
-                val wave = sin(wavePhase + i * 0.9f)
-                (h * 0.02f) + kotlin.math.abs(wave) * (h * 0.055f)
-            } else {
-                h * 0.012f
-            }
-
-            drawLine(
-                color = primaryColor,
-                start = Offset(x, centerY - activeAmplitude),
-                end = Offset(x, centerY + activeAmplitude),
-                strokeWidth = w * 0.024f,
-                cap = StrokeCap.Round
-            )
+        // 4. Floating 3D White Torso with Cyan "AI" Core
+        val torsoPath = Path().apply {
+            moveTo(w * 0.31f, h * 0.61f + dy)
+            lineTo(w * 0.69f, h * 0.61f + dy)
+            quadraticTo(w * 0.68f, h * 0.87f + dy, centerX, h * 0.90f + dy)
+            quadraticTo(w * 0.32f, h * 0.87f + dy, w * 0.31f, h * 0.61f + dy)
+            close()
         }
+        drawPath(
+            path = torsoPath,
+            brush = Brush.verticalGradient(
+                colors = listOf(Color(0xFFFFFFFF), Color(0xFFEFF6FF), Color(0xFF93C5FD))
+            )
+        )
+        drawPath(
+            path = torsoPath,
+            color = cyanAccent.copy(alpha = 0.55f),
+            style = Stroke(width = w * 0.012f)
+        )
+
+        // Chest Glowing Cyan "AI" Core Circle
+        val chestCenter = Offset(centerX, h * 0.73f + dy)
+        drawCircle(
+            color = cyanAccent,
+            radius = w * 0.082f,
+            center = chestCenter
+        )
+        drawCircle(
+            color = Color(0xFF061021),
+            radius = w * 0.068f,
+            center = chestCenter
+        )
+        // Subtle inner pulse inside chest core when listening/speaking
+        val corePulse = if (isListening || isSpeaking) (0.045f + 0.015f * sin(wavePhase)) else 0.04f
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(cyanAccent, Color.Transparent),
+                center = chestCenter,
+                radius = w * corePulse * 1.6f
+            ),
+            radius = w * corePulse * 1.6f,
+            center = chestCenter
+        )
+
+        // 5. Side Ear Pods on Head
+        drawRoundRect(
+            brush = armBrush,
+            topLeft = Offset(w * 0.16f, h * 0.34f + dy),
+            size = Size(w * 0.06f, h * 0.16f),
+            cornerRadius = CornerRadius(w * 0.03f, w * 0.03f)
+        )
+        drawRoundRect(
+            brush = armBrush,
+            topLeft = Offset(w * 0.78f, h * 0.34f + dy),
+            size = Size(w * 0.06f, h * 0.16f),
+            cornerRadius = CornerRadius(w * 0.03f, w * 0.03f)
+        )
+
+        // 6. Main 3D Glossy White Helmet Head
+        drawRoundRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color(0xFFFFFFFF),
+                    Color(0xFFF1F5F9),
+                    Color(0xFFBFDBFE)
+                )
+            ),
+            topLeft = Offset(w * 0.20f, h * 0.22f + dy),
+            size = Size(w * 0.60f, h * 0.37f),
+            cornerRadius = CornerRadius(w * 0.20f, w * 0.20f)
+        )
+        drawRoundRect(
+            color = cyanAccent.copy(alpha = 0.65f),
+            topLeft = Offset(w * 0.20f, h * 0.22f + dy),
+            size = Size(w * 0.60f, h * 0.37f),
+            cornerRadius = CornerRadius(w * 0.20f, w * 0.20f),
+            style = Stroke(width = w * 0.012f)
+        )
+
+        // 7. Dark Rounded Visor Face Screen
+        drawRoundRect(
+            color = Color(0xFF050D1A),
+            topLeft = Offset(w * 0.26f, h * 0.275f + dy),
+            size = Size(w * 0.48f, h * 0.26f),
+            cornerRadius = CornerRadius(w * 0.13f, w * 0.13f)
+        )
+
+        // 8. Glowing Cyan Circular Eyes
+        val eyeRadius = w * 0.048f
+        val leftEyeCenter = Offset(w * 0.39f, h * 0.385f + dy)
+        val rightEyeCenter = Offset(w * 0.61f, h * 0.385f + dy)
+
+        // Eye outer glow
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(cyanAccent.copy(alpha = 0.8f), Color.Transparent),
+                center = leftEyeCenter,
+                radius = eyeRadius * 1.9f
+            ),
+            radius = eyeRadius * 1.9f,
+            center = leftEyeCenter
+        )
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(cyanAccent.copy(alpha = 0.8f), Color.Transparent),
+                center = rightEyeCenter,
+                radius = eyeRadius * 1.9f
+            ),
+            radius = eyeRadius * 1.9f,
+            center = rightEyeCenter
+        )
+
+        // Eye cores
+        drawCircle(
+            color = cyanAccent,
+            radius = eyeRadius,
+            center = leftEyeCenter
+        )
+        drawCircle(
+            color = cyanAccent,
+            radius = eyeRadius,
+            center = rightEyeCenter
+        )
+        // Specular highlight
+        drawCircle(
+            color = Color.White,
+            radius = eyeRadius * 0.38f,
+            center = Offset(leftEyeCenter.x - eyeRadius * 0.25f, leftEyeCenter.y - eyeRadius * 0.25f)
+        )
+        drawCircle(
+            color = Color.White,
+            radius = eyeRadius * 0.38f,
+            center = Offset(rightEyeCenter.x - eyeRadius * 0.25f, rightEyeCenter.y - eyeRadius * 0.25f)
+        )
+
+        // 9. Cute Glowing Cyan Smile Arc (animates gently when speaking/listening)
+        val smileDepth = if (isSpeaking || isListening) {
+            h * (0.485f + 0.018f * kotlin.math.abs(sin(wavePhase)))
+        } else {
+            h * 0.48f
+        }
+        val smilePath = Path().apply {
+            moveTo(w * 0.455f, h * 0.445f + dy)
+            quadraticTo(centerX, smileDepth + dy, w * 0.545f, h * 0.445f + dy)
+        }
+        drawPath(
+            path = smilePath,
+            color = cyanAccent,
+            style = Stroke(width = w * 0.022f, cap = StrokeCap.Round)
+        )
     }
 }

@@ -410,7 +410,17 @@ fun AppNavigationRail(
             .windowInsetsPadding(WindowInsets.statusBars)
             .windowInsetsPadding(WindowInsets.navigationBars)
             .testTag("app_nav_rail"),
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = MaterialTheme.colorScheme.surface,
+        header = {
+            androidx.compose.foundation.Image(
+                painter = androidx.compose.ui.res.painterResource(id = R.drawable.medpulse_logo_badge),
+                contentDescription = "MedPulse Logo",
+                modifier = Modifier
+                    .padding(top = 12.dp, bottom = 4.dp)
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(10.dp))
+            )
+        }
     ) {
         val navItems = listOf(
             Triple(Screen.Dashboard, "Home", Pair(Icons.Default.Home, Icons.Outlined.Home)),

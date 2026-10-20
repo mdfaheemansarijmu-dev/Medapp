@@ -22,6 +22,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -35,6 +36,9 @@ import com.example.data.model.ParsedItem
 import com.example.data.model.UnifiedParserResponse
 import com.example.data.model.ParsedTimetableClass
 import com.example.data.model.GeminiModelOption
+import com.example.ui.components.AnimatedTendonRobotCharacter
+import com.example.ui.components.TendonMiniAvatar
+import com.example.ui.components.TransparentCalloutBubble
 import com.example.ui.viewmodel.PlannerViewModel
 import kotlinx.coroutines.launch
 
